@@ -334,7 +334,7 @@ while the panel shows and once when it shows again (its page returns or the pane
 back on screen) unless it read in the last 15 seconds. A minute keeps a panel left open
 current within a glance's patience for a handful of small reads, and a hidden panel
 reads nothing. Such a read never lands in the middle of something: while a step runs or
-a charge waits, a sheet, Shortcuts, More or the machine list is open, a row is being
+a charge waits, a sheet, Shortcuts, a question, More or the machine list is open, a row is being
 scrubbed, a text field is in use, an account change is saving, or within four seconds
 of a key or a press in the panel, it waits and happens once that is over. An edit left
 unsaved holds it however long it is left, focused or not: a changed generator row until
@@ -379,7 +379,8 @@ routing or usage is hidden, **Show routing** and **Show usage** stand in this he
   family someone has signed in for but the model list has no model of keeps its lead,
   struck, with "No <family> models in your model list";
   pressing it checks the models (through the check's own gate, spending nothing before
-  Approve unless the person approved checks) and the readout says it finds the models the
+  its charge's question is approved, unless the person approved checks) and the readout
+  says it finds the models the
   accounts reach.
 - **Model** is the capability tier (fast, normal, smart, elite), each tier read as the
   model alias its `default` role would lead on in the profile that choosing it forms,
@@ -470,9 +471,9 @@ launch row; click, or `w`, opens it with focus in the list. `↑` `↓`, `Home`,
 `↵` or `Space` choose; `Esc`, `Tab` or a press outside closes it and returns focus to
 the dropdown. While open the list owns its keys, so the panel's keys do nothing.
 Choosing goes through the edit-machine gate: while a step runs or a charge waits the
-dropdown refuses with the gate's reason and leaves the Tab order, so Approve is
-the next Tab stop after the launch. An offline or access-revoked machine is struck and
-refuses with its reason, and so is a machine OMP is not installed on ("no OMP here"),
+dropdown refuses with the gate's reason, as a locked row does. An offline or
+access-revoked machine is struck and refuses with its reason, and so is a machine OMP
+is not installed on ("no OMP here"),
 which can run nothing. Code checks every online machine for OMP, and a browser starts
 on the destination it saved in the tab if OMP answers there, else on the first online
 machine where it does; with none, the saved one or the first online machine stays
@@ -482,10 +483,11 @@ every online machine has answered. The readout says what the pointed machine is
 the team, and is not recorded in recent profiles.
 
 **The verb.** The launch is one control whose `data-state` is `ready`, `busy`,
-`waiting` (a check's charge waits on its own Approve) or `refused`. It is `aria-disabled`
+`waiting` (a check's charge waits on its dialog) or `refused`. It is `aria-disabled`
 rather than disabled and stays focusable, so a step changing its state never drops
 focus, and a launch-line control that leaves once pressed hands focus to the launch;
-pressing a refused one shakes it, says the reason in the readout and announces it. A
+pressing a refused one asks its question (below), and pressing it while a step runs
+shakes it, says why in the readout and announces it. A
 read-only workspace (no `containers:write`) is stated in neutral grey, "Read-only
 workspace" (its readout adds "changes stay a local preview"). Write access is the caps
 alone: without a canvas beside the panel, checking models, saving and account edits still
@@ -503,21 +505,48 @@ revision is observed (only **Save** where no canvas can place a terminal).
 **One press.** A launch reviews the saved team's session on the destination immediately
 before it starts it, in the same press (**launching…** throughout), and starts it when
 the review shows what the panel showed: the same lead for every role and the same
-providers in the account pool. A review that differs stops the press and is held: the
-line says "What will run differs" and what differs (roles' leads, providers that joined
-or left the pool, or that the accounts were not known before), with "launch again to run
-it, or change a setting first"; while the launch is pointed the readout says where it
-runs and its pool ("runs on <machine>: GPT 2"). The next press launches the held review
-while the press's own inputs hold (team, options, machine, the saved profile and
+providers in the account pool. A review that differs stops the press and is held, and its
+question asks "What will run differs" with what differs (roles' leads, providers that
+joined or left the pool, or that the accounts were not known before), **Launch it** and
+**Not now**; while the launch is pointed the readout says where it runs and its pool
+("runs on <machine>: GPT 2"). **Launch it** is the launch's own press and launches the held
+review while the press's own inputs hold (team, options, machine, the saved profile and
 authority), a selected skill catalog's revision is the one it was made with, the reads it
-rests on succeed and its launch is still the step (the list in use serves it); the first
-of them that fails drops it for good, and the press after that reviews again. Accounts
-or OMP defaults that moved after it are refused by the launch's own check (below). A press
+rests on succeed and its launch is still the step (the list in use serves it); **Not now**,
+a moment when the launch cannot go on (a machine gone offline, a check writing the model
+list), or the first of them that fails drops it for good, and the press after that reviews again.
+Accounts or OMP defaults that moved after it are refused by the launch's own check (below). A press
 stands on the same inputs: a change of one of them while it runs stops it, while an
 observation that moves meanwhile does not, since the launch reads the accounts and
 OMP's defaults again itself and refuses when they moved under its review. Choosing a
 saved session does not stop a launch. Outcome and refusal lines clear whenever the team,
 machine or account pool changes.
+
+**Questions and notices.** Whatever a press waits on the person for is asked in a modal
+dialog over the whole page rather than said beside the launch, so it cannot be missed: a
+check's charge (from the launch, Models or a struck lane), a review that differs, a check
+that changed the profile, and a refused Launch press. Each question says what it waits on
+and, where it can, why in a sentence, what it is about one fact per line, then its choices
+as words, the next action first in the accent, and a way out last (**Cancel**, **Not now**
+or **Close**), which never spends or launches. A refused press's question names the
+refusal (as the launch line's head below, an account read's failure in its sentence), says
+why it applies ("Launch opens a terminal on a machine. Choose one that is online.") and
+offers the fixes the line offers for that refusal before **Close**; a fix runs and closes
+it, and a refusal that lifts or changes, even to another reason of its kind, closes it too.
+A check that changed the profile is asked when it happens or never: a launch that cannot go
+on then drops it for good, as a held review is dropped. A question opens with focus on its
+title, never on a choice, since a charge or a review comes back while the person may be
+typing elsewhere: `Tab` reaches the choices, the next action first. No press answers it in
+the 400 ms after it opens or its question changes, and a key answers with a choice only once
+that choice has held focus for 300 ms, so `Tab` then `↵` in one burst answers nothing;
+neither does the second click of a double click or a held key. `Esc`, a press that starts
+and ends on the backdrop, and a close the browser forces take the way out at any time.
+Closing gives focus back to what had it. Reads on their own wait while a question is open.
+How a press ended is also posted to Manifold's one notice stack, which shows it at the foot
+of the page, each outcome replacing the last: "Launched on <machine>. Type your task in its
+terminal.", "Resumed on <machine>.", a save, a failed step in its words, and a check the
+person started that stopped. A check cancelled by the person, or run by the panel on its
+own, posts nothing.
 
 **Live dials.** An agent launch (see the workflow below) ends "Launched on <machine> ·
 **dials**", the fix opening Sessions (`e`); a launch the reviewed session carried ends
@@ -529,15 +558,15 @@ says the same ("live dials in Sessions" or the reason). Setup's sessions row, an
 
 **The launch line** sits beside the launch, or under it where there is no room beside
 it, and keeps to facts and one-press fixes, each
-a button; its asides ("changes stay a local preview", "asked once: later checks run on
-their own", "checking models in the background", and, while a staged model list waits
-beside the active one, "a staged model list waits in Models") are said in the readout
-while the launch is pointed or pressed. It is written in this
-precedence: a check the person started (or one the launch waits on) running or its
-charge, a step in flight, the verb's refusal with its fix, a staged model list the verb
-opens, a held review that differs from what the panel showed or a check that changed the
-profile, a failure, the last outcome, and roles with no route with the one change that
-routes them (said once no check precedes the launch). A model list that
+a button; its asides ("changes stay a local preview", "checking models in the
+background", and, while a staged model list waits beside the active one, "a staged model
+list waits in Models") are said in the readout while the launch is pointed or pressed. It
+is written in this precedence: a check the person started (or one the launch waits on)
+running, or "Waiting for your approval" while its charge's question is open, a step in
+flight, the verb's refusal with its fix, a staged model list the verb opens, a failure,
+the last outcome, and roles with no route with the one change that routes them (said
+once no check precedes the launch). What a press waits on the person for is asked in its
+question, never in the line. A model list that
 cannot be read joins the line from the verb's refusal on, with its Retry and Models.
 The line names what failed rather than a general refusal:
 
@@ -579,23 +608,27 @@ accounts can use.", "Accounts changed since the models were checked; Launch chec
 again first." or "OMP no longer lists a model this profile uses; Launch checks the models
 again first." The press reads **checking models…**: it puts the person's own newer
 check of the pool in use when they keep one, spending nothing, or runs OMP's inventory
-("Checking which models your accounts can use") and states the charge: "Checking models
-spends N tiny requests", per provider. A charge the person's standing approval covers
-(up to twice the largest charge they approved) is spent at once; any other waits with
-**approve** and cancel, the aside saying it is asked once. A charge of nothing says
-"Nothing to check through these accounts" and cannot be approved. Approve is a Tab
-stop after the launch, is never focused for the person, and spends only the very charge
-it showed: never one of zero requests, never before the press has stayed in its
-checking state for 700 ms, and only on a deliberate single press, never the second
-click of a double-click or a held key. It records the standing approval (the larger of
-the one held and this charge) before spending; one that cannot be recorded still spends
-this charge, and the next check asks again. Progress reads "Checking models with your
-accounts · N of M requests". When the check is done the press goes on to the launch,
-which reviews and starts the saved team as above, unless the check narrowed a setting of
-the profile it was pressed on, which stops the press with "The model check changed the
-profile" and the settings it moved, as a choice. A check that stopped or was cancelled
-says so ("Model check stopped while <step>: <reason>", "Model check cancelled") until
-the next one starts; the launch is its retry.
+("Checking which models your accounts can use") and answers the charge. A charge the
+person's standing approval covers (up to twice the largest charge they approved) is spent
+at once; any other is asked: "Check your models first" (from Models, "Check your models"),
+why ("Launch needs to know which models your accounts can use, so Code sends each one a
+tiny request."), the charge ("29 tiny requests: GPT 8 · Claude 19 · DeepSeek 2", in the
+panel's family order), and, for a person who keeps checks, "You approve this once. Later
+checks run on their own."; then **Approve and launch** (**Approve** from Models) and
+**Cancel**. A charge of nothing asks "Nothing to check" with **Show accounts** and
+**Close**, and cannot be approved; every way out of a charge cancels the check, spending
+nothing. Approve is never focused for the person, and spends only the very charge it
+showed: never one of zero requests, never before the press has stayed in its checking
+state for 700 ms, and only on a deliberate single press, never the second click of a
+double-click or a held key. It records the standing approval (the larger of the one held
+and this charge) before spending; one that cannot be recorded still spends this charge,
+and the next check asks again. Progress reads "Checking models with your accounts · N of
+M requests". When the check is done the press goes on to the launch, which reviews and
+starts the saved team as above, unless the check narrowed a setting of the profile it was
+pressed on, which stops the press and asks "The model check changed your profile" with the
+settings it moved, **Launch** and **Not now**. A check that stopped or was cancelled says
+so ("Model check stopped while <step>: <reason>", "Model check cancelled") until the next
+one starts; the launch is its retry.
 
 **Background checks.** The panel starts a check on its own when the workspace has been
 set up, the list in use no longer holds, no staged list waits, the list in use is not an
@@ -829,8 +862,10 @@ space include · m manage · esc generator`, in the management `esc accounts`, i
 sessions `esc generator`, preceded by `↑↓ move · 1–N recall` when recent profiles exist.
 Words are not buttons, since every action is a control elsewhere. For a coarse pointer,
 which has no keys, the key line is hidden, and every button, tab and radio is at least
-44 px. One polite live region announces outcomes, failures, the charge, recalls and the
-reason a pressed refused control gave.
+44 px. One polite live region announces outcomes, failures, recalls, commits and the
+reason a pressed control gave, whatever the notice stack also shows, since a notice row
+that arrives with its words is not reliably read out; a question announces itself as a
+dialog.
 
 The layout answers the panel's own measured size, never the window's, since Code
 shares the window with its canvas. From 760 px the generator and routing stand side by
@@ -900,9 +935,9 @@ prices, speeds, thinking ranges and reasons
 appear only in the readout line while a cell, a provider or a left-out model is pointed
 or focused.
 One next action sits where the launch sits and follows the step: **check models**,
-**checking models…** (drawn with the checking hold the charge keeps), **approve**
-(a single deliberate press of the exact charge shown, as in the launch line, recording
-the standing approval), **checking…** with the requests measured, then **back to code**
+**checking models…** (drawn with the checking hold the charge keeps; while the charge's
+question is open over the sheet it reads "waiting for your approval" beside it),
+**checking…** with the requests measured, then **back to code**
 with **check again** beside it, the same check a list that holds can always renew, which
 spends without asking within the standing approval; a check again that stopped, one the
 panel ran on its own included, reads **check stopped** beside it, with its

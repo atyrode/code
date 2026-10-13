@@ -62,9 +62,11 @@ export type ProfileState = "conflict" | "local" | "saved";
 /**
  * A session review a Launch press stopped on because it shows something other than what the panel
  * showed (statement-model.ts `reviewMatches`), with what the panel showed: the roles' leads and the
- * providers its pool served, null when that pool was not known. It stands while the press's own
- * inputs hold (`pressEpoch`, the press scope it was made in) and with the pins `heldCurrent` names,
- * and the next press launches it; any change of those drops it, and the press after that reviews again.
+ * providers its pool served, null when that pool was not known. Its dialog asks whether to launch it
+ * (decision-model.ts `differsDecision`). It stands while the press's own inputs hold (`pressEpoch`,
+ * the press scope it was made in) and with the pins `heldCurrent` names, and the dialog's Launch it,
+ * the launch's own press, launches it; Not now or any change of those drops it, and the press after
+ * that reviews again.
  */
 export type HeldReview = { readonly review: SessionReview; readonly projected: Review; readonly providers: readonly string[] | null; readonly pressEpoch: number };
 export type WorkbenchInput = { host: HostServices; target: Target | null; machine: MachineSummary | null; rosterError: string | null; available: boolean };
@@ -88,6 +90,8 @@ export type WorkbenchActions = {
   save: () => Promise<void>;
   /** Spend the verification charge the control showed (model-verification.ts `confirm`). */
   confirmCharge: (activation: ConfirmActivation, shown: ChargeReview) => void;
+  /** Leave a held review unlaunched (its dialog's Not now): the next press reviews again. */
+  dropHeld: () => void;
   /** Resume the selected saved session, optionally replacing its model choices with this saved team. */
   resume: (withTeam: boolean) => Promise<void>;
   /**
@@ -528,8 +532,8 @@ export function useWorkbench({ host, target, machine, rosterError, available }: 
    * reviewed session, the line saying why it has no dials. The workbench opens interactive sessions: the task is typed in
    * the session itself, so the composition carries no prompt. The review is the press's own, made immediately before the
    * launch, and it goes on to the launch only when it shows what the panel showed: the same lead for every role and the
-   * same providers in the pool (`reviewMatches`). One that differs is held and the press stops there, for the person to see
-   * what differs; the next press launches the held review while it stands. Nothing reviews without a press.
+   * same providers in the pool (`reviewMatches`). One that differs is held and the press stops there, its dialog saying what
+   * differs; Launch it there launches the held review while it stands. Nothing reviews without a press.
    */
   async function launch() {
     const projected = shownReview, providers = served ? [...served].sort() : null, taken = standing?.review ?? null;
@@ -720,7 +724,7 @@ export function useWorkbench({ host, target, machine, rosterError, available }: 
     skillChoice, setSkillChoice: changeSkillChoice, skillProblems,
     automation, setAutomation: changeAutomation,
     savedSessionId, setSavedSessionId,
-    actions: { updateSelection, recallTeam, discardChanges, next, verify, save, confirmCharge, resume, changeAccounts: edit => void changeAccounts(edit),
+    actions: { updateSelection, recallTeam, discardChanges, next, verify, save, confirmCharge, dropHeld: () => setHeld(null), resume, changeAccounts: edit => void changeAccounts(edit),
       writingCatalog: setWritingCatalog, catalogWritten, refresh, readUsage: reading.refresh },
     verification, recentTeams, agentRuns,
     launchDials: standing ? dialsFor(standing.review) ?? "run" : null,

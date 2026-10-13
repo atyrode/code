@@ -256,20 +256,10 @@ export function ModelsSheet({ host, model, machine, onBack, backRef, onPlace }: 
     switch (phase) {
       case "inventory": return { label: "checking models…", busy: true, parts: [[`on ${where}`, null]], fixes: [cancel],
         said: { value: "checking models", text: "OMP reads the models your accounts reach; nothing is spent" }, press: busy };
-      case "charge": {
-        const charge = verification.charge, standing = verification.keepsChecks !== false;
-        return { label: "approve", disabled: !verification.canConfirm, parts: [[count(charged, "tiny request"), "strong"], ...standing ? [["asked once", null] as const] : []],
-          fixes: [cancel],
-          said: { value: "approve", text: `${count(charged, "request")}, one per model your accounts offer${standing ? "; later checks within it run on their own" : ""}` },
-          press: detail => {
-            const gate = model.gate("confirm");
-            if (!charge || !gate.open) return gate.open ? "Nothing to approve yet." : gate.refusal.text;
-            // Only a deliberate single press spends (verification.ts `confirmsCharge`): never the second click of a double click.
-            if (detail > 1) return "A double press approves nothing; press once.";
-            model.actions.confirmCharge({ detail, repeat: false }, charge);
-            return null;
-          } };
-      }
+      // A charge waits only on a check the person started, whose dialog is then open over this sheet (decision-dialog.tsx): here
+      // it only waits behind that dialog, still rather than breathing, since nothing runs while the person decides.
+      case "charge": return { label: "checking models…", disabled: true, parts: [[count(charged, "tiny request"), "strong"], ["waiting for your approval", null]], fixes: [],
+        said: { value: "checking models", text: "waiting for your approval" }, press: () => "Approve or cancel the check in its question." };
       case "benchmark": return { label: "checking…", busy: true, parts: [["measuring models", null], [`${measured} of ${measuring}`, "strong"]], fixes: [cancel],
         said: { value: "checking", text: "cancel stops the probe; what it measured so far stays in OMP's history" }, press: busy };
       case "finishing": return { label: "checking…", busy: true, parts: [["putting the model list in use", null]], fixes: [],

@@ -493,7 +493,7 @@ export type VerbFacts = {
 };
 export type VerbView = {
   readonly label: string;
-  /** `ready`: a press runs it. `busy`: a step runs. `waiting`: a check's charge waits on its own Approve. `refused`: the gate says no. */
+  /** `ready`: a press runs it. `busy`: a step runs. `waiting`: a check's charge waits on its dialog. `refused`: the gate says no. */
   readonly state: "ready" | "busy" | "waiting" | "refused";
   readonly refusal: GateRefusal | null;
   /** A press saves the workspace team first. */
@@ -664,9 +664,8 @@ export type StatusFix =
   | { readonly kind: "open"; readonly place: "models" | "setup" | "options" | "accounts" | "sessions"; readonly family?: string }
   | { readonly kind: "refresh" }
   | { readonly kind: "discard" };
+// A check's cancel and a fix. A waiting charge is approved only in its dialog (decision-model.ts `chargeDecision`).
 export type StatusAction =
-  // `standing`: approving also lets later checks within it run without asking, which only a person who keeps checks gets.
-  | { readonly kind: "confirm"; readonly requests: number; readonly standing: boolean }
   | { readonly kind: "cancel" }
   | { readonly kind: "fix"; readonly key: string; readonly label: string; readonly fix: StatusFix };
 export type StatusLine = { readonly parts: readonly StatusPart[]; readonly actions: readonly StatusAction[] };
@@ -686,9 +685,8 @@ export type StatusFacts = {
   readonly mode: VerificationMode | null;
   /** Benchmark requests done and in all, while verifying. */
   readonly progress: { readonly done: number; readonly total: number } | null;
-  readonly charge: { readonly requests: number; readonly providers: readonly { readonly provider: string; readonly requests: number }[] } | null;
-  /** The person keeps checks and their approval (`readChecks().keeps`): only then does approving once spare later checks the asking. */
-  readonly keepsChecks: boolean;
+  /** The charge a check the person started waits on, in requests; its dialog asks for the approval. */
+  readonly charge: { readonly requests: number } | null;
   readonly inFlight: VerbFacts["inFlight"];
   readonly busy: boolean;
   readonly chaining: boolean;
@@ -712,10 +710,6 @@ export type StatusFacts = {
   readonly outcome: { readonly kind: "launched"; readonly machine: string; readonly dials: "run" | AgentLaunchBlocker } | { readonly kind: "resumed"; readonly machine: string } | null;
   readonly stop: Standstill | null;
   readonly fix: FixView | null;
-  /** A Launch press stopped on a review unlike what the panel showed: what differs, in the statement's words. */
-  readonly differs: readonly string[] | null;
-  /** A Launch press whose check narrowed the profile to what answered stopped before launching: the settings it moved. */
-  readonly narrowed: readonly string[] | null;
   /** For an unserved lead: the nearest lane the accounts serve. */
   readonly laneFix: SlotOption | null;
   /** No included account serves anything (the pool is known and empty). */
@@ -755,53 +749,86 @@ export function quotaParts(note: QuotaNote | null, vocab: Vocabulary): StatusPar
   return [part(`${outWord(pool, vocab)}: ${roleList(roles)} fall back`, "warn")];
 }
 
-/** A refused verb: the reason, in neutral grey for read-only and placement and in the attention colour otherwise, and its one-press fix. */
-function refusalLines(refusal: GateRefusal, facts: StatusFacts, vocab: Vocabulary): [StatusLine, StatusLine] {
-  const fix = (label: string, value: StatusFix, key = label): StatusAction => ({ kind: "fix", key, label, fix: value });
-  const attention = (text: string, actions: readonly StatusAction[] = [], aside?: string): [StatusLine, StatusLine] =>
-    [line([part(text, "attention")]), line(aside ? [part(aside, "meta")] : [], actions)];
+/**
+ * A refused verb as the launch line and the refusal dialog both say it: what stops it (`head`, in
+ * neutral grey for read-only and placement and in the attention colour otherwise), the dialog's
+ * title where it is shorter than the head, why it applies in one plain sentence, the line's aside,
+ * and its one-press fixes.
+ */
+export type RefusalView = {
+  readonly head: string;
+  readonly tone: "attention" | "neutral";
+  readonly title: string;
+  readonly why: string;
+  readonly aside: string | null;
+  readonly fixes: readonly Extract<StatusAction, { kind: "fix" }>[];
+};
+export function refusalView(refusal: GateRefusal, facts: StatusFacts, vocab: Vocabulary): RefusalView {
+  const fix = (label: string, value: StatusFix, key = label): Extract<StatusAction, { kind: "fix" }> => ({ kind: "fix", key, label, fix: value });
+  const view = (head: string, why: string, fixes: RefusalView["fixes"] = [], more: Partial<Pick<RefusalView, "tone" | "title" | "aside">> = {}): RefusalView =>
+    ({ head, tone: "attention", title: head, why, aside: null, fixes, ...more });
   const where = facts.machine?.name ?? "this machine";
   const use = facts.otherMachine ? [fix(`Use ${facts.otherMachine.name}`, { kind: "machine", machineId: facts.otherMachine.id }, "machine")] : [];
+  const showAccounts = fix("Show accounts", { kind: "open", place: "accounts" }, "accounts");
   // OMP missing from the destination explains every step that needs it; "unknown" is kept for reads that really failed.
   if (facts.ompMissing && (refusal.code === "verify-status" || refusal.code === "verify-permissions" || refusal.code === "sessions" || refusal.code === "permissions")) {
-    return attention(`OMP isn't on ${where}`, use);
+    return view(`OMP isn't on ${where}`, `Code starts OMP sessions, and OMP isn't installed on ${where}.`, use);
   }
   switch (refusal.code) {
-    case "read-only": return [line([part("Read-only workspace", "neutral")]), line([part("changes stay a local preview", "meta")])];
-    case "placement": return [line([part("Open Code beside the workspace canvas to launch", "neutral")]), line([part("the profile and accounts still save from here", "meta")])];
+    case "read-only": return view("Read-only workspace", "You can try settings here, but saving and launching need edit access to this workspace.", [],
+      { tone: "neutral", aside: "changes stay a local preview" });
+    case "placement": return view("Open Code beside the workspace canvas to launch", "Launch opens the session's terminal in the workspace canvas, so Code has to be open beside it.", [],
+      { tone: "neutral", aside: "the profile and accounts still save from here" });
     case "unavailable": {
       // A failed read says nothing current about any machine: neither offline nor another to use.
-      if (facts.rosterUnread) return attention("Machine list unreadable", [fix("Retry", { kind: "refresh" }, "roster")]);
-      if (!facts.machine) return attention(facts.machineChosen ? "The chosen machine is not in your machine list" : "No machine chosen", use);
+      if (facts.rosterUnread) return view("Machine list unreadable", "Code couldn't read your machines, so it can't tell where to launch.", [fix("Retry", { kind: "refresh" }, "roster")]);
+      if (!facts.machine) {
+        return facts.machineChosen ? view("The chosen machine is not in your machine list", "It may have been removed. Choose another machine.", use)
+          : view("No machine chosen", "Launch opens a terminal on a machine. Choose one that is online.", use);
+      }
       const { name, online, revoked } = facts.machine;
-      return attention(revoked ? `${name}: access revoked` : online ? `${name} is unavailable` : `${name} is offline`, use);
+      if (revoked) return view(`${name}: access revoked`, `This workspace can no longer use ${name}. Choose another machine.`, use);
+      return online ? view(`${name} is unavailable`, `${name} can't take sessions right now. Choose another machine or try again later.`, use)
+        : view(`${name} is offline`, `Launch needs ${name} connected. Choose another machine or reconnect it.`, use);
     }
     case "accounts": {
       const problem = facts.accountsProblem;
-      if (problem?.kind === "choices") return attention("Saved account choices no longer match your accounts", [fix("Show accounts", { kind: "open", place: "accounts" }, "accounts")]);
-      if (problem?.kind === "stale") return attention("Account list not current", [fix("Refresh", { kind: "refresh" }, "accounts-read")]);
-      return attention(problem?.kind === "failed" ? `Accounts unreadable: ${problem.text.replace(/\.$/, "")}` : "Accounts unreadable", [fix("Retry", { kind: "refresh" }, "accounts-read")]);
+      if (problem?.kind === "choices") return view("Saved account choices no longer match your accounts", "An account this workspace chose was removed or signed out.", [showAccounts]);
+      if (problem?.kind === "stale") return view("Account list not current", "Code needs a fresh list of your accounts before it launches.", [fix("Refresh", { kind: "refresh" }, "accounts-read")]);
+      const retry = [fix("Retry", { kind: "refresh" }, "accounts-read")];
+      if (problem?.kind !== "failed") return view("Accounts unreadable", "Code couldn't read your accounts.", retry);
+      const detail = problem.text.replace(/\.$/, "");
+      return view(`Accounts unreadable: ${detail}`, `Code couldn't read your accounts: ${detail}.`, retry, { title: "Accounts unreadable" });
     }
-    case "no-accounts": return attention("No account is included", [fix("Show accounts", { kind: "open", place: "accounts" }, "accounts")]);
+    case "no-accounts": return view("No account is included", "Sessions run on your accounts. Include at least one for this workspace.", [showAccounts]);
     case "no-account": {
-      if (facts.nobodyServes || !refusal.gap) return attention("No account is included", [fix("Show accounts", { kind: "open", place: "accounts" }, "accounts")]);
+      if (facts.nobodyServes || !refusal.gap) return view("No account is included", "Sessions run on your accounts. Include at least one for this workspace.", [showAccounts]);
       const word = vocab.family(refusal.gap.family);
       const lane = facts.laneFix?.selection
         ? [fix(`Use ${facts.laneFix.label}`, { kind: "team", selection: facts.laneFix.selection, review: facts.laneFix.review }, "lane")] : [];
-      return attention(`No ${word} account included`, [...lane, fix(`Show ${word} accounts`, { kind: "open", place: "accounts", family: refusal.gap.family }, "accounts")]);
+      return view(`No ${word} account included`, `This profile leads with ${word}, so it needs a ${word} account.`,
+        [...lane, fix(`Show ${word} accounts`, { kind: "open", place: "accounts", family: refusal.gap.family }, "accounts")]);
     }
-    case "configuration": return attention(facts.configurationFailed ? "Workspace profile unreadable" : "The workspace profile needs a fresh read", [fix("Retry", { kind: "refresh" }, "configuration")]);
-    case "staged": return attention("A staged model list waits in Models", [fix("Review in Models", { kind: "open", place: "models" }, "staged")]);
-    case "unsaved": return attention("No model list in use", [fix("Open Models", { kind: "open", place: "models" }, "unsaved")]);
-    case "conflict": return attention("The workspace profile changed elsewhere", [fix("Use theirs", { kind: "discard" }, "conflict")]);
-    case "models": return attention("These choices need a model review", [fix("Open Models", { kind: "open", place: "models" }, "models")]);
-    case "verify-status": return attention(`Model checks unknown on ${where}`, [fix("Retry", { kind: "refresh" }, "verify-status")]);
-    case "verify-permissions": return attention("Discovery is not enabled", [fix("Enable in Setup", { kind: "open", place: "setup" }, "verify-permissions")], "checking models needs it");
-    case "sessions": return attention(`Sessions unavailable on ${where}`, [fix("Open Setup", { kind: "open", place: "setup" }, "sessions")]);
-    case "permissions": return attention(`Sessions not enabled on ${where}`, [fix("Enable in Setup", { kind: "open", place: "setup" }, "permissions")]);
-    case "skills": return attention("Skill choices need attention", [fix("Open options", { kind: "open", place: "options" }, "skills")]);
-    default: return attention(refusal.text.replace(/\.$/, ""));
+    case "configuration": return facts.configurationFailed
+      ? view("Workspace profile unreadable", "Code couldn't read this workspace's saved profile.", [fix("Retry", { kind: "refresh" }, "configuration")])
+      : view("The workspace profile needs a fresh read", "The saved profile changed since Code last read it.", [fix("Retry", { kind: "refresh" }, "configuration")]);
+    case "staged": return view("A staged model list waits in Models", "A new model list waits for your review before anything launches.", [fix("Review in Models", { kind: "open", place: "models" }, "staged")]);
+    case "unsaved": return view("No model list in use", "This workspace has no model list in use yet.", [fix("Open Models", { kind: "open", place: "models" }, "unsaved")]);
+    case "conflict": return view("The workspace profile changed elsewhere", "Someone saved another profile for this workspace after you started editing.", [fix("Use theirs", { kind: "discard" }, "conflict")]);
+    case "models": return view("These choices need a model review", "Some of these choices use models that need reviewing first.", [fix("Open Models", { kind: "open", place: "models" }, "models")]);
+    case "verify-status": return view(`Model checks unknown on ${where}`, `Code couldn't tell whether models can be checked on ${where}.`, [fix("Retry", { kind: "refresh" }, "verify-status")]);
+    case "verify-permissions": return view("Discovery is not enabled", `Checking models needs model discovery turned on for ${where}.`,
+      [fix("Enable in Setup", { kind: "open", place: "setup" }, "verify-permissions")], { aside: "checking models needs it" });
+    case "sessions": return view(`Sessions unavailable on ${where}`, `Code couldn't tell whether sessions can start on ${where}.`, [fix("Open Setup", { kind: "open", place: "setup" }, "sessions")]);
+    case "permissions": return view(`Sessions not enabled on ${where}`, `Sessions need to be turned on for ${where} before Code can launch there.`,
+      [fix("Enable in Setup", { kind: "open", place: "setup" }, "permissions")]);
+    case "skills": return view("Skill choices need attention", "A skill chosen for this launch can't be used as it is.", [fix("Open options", { kind: "open", place: "options" }, "skills")]);
+    default: return view(refusal.text.replace(/\.$/, ""), "");
   }
+}
+function refusalLines(refusal: GateRefusal, facts: StatusFacts, vocab: Vocabulary): [StatusLine, StatusLine] {
+  const view = refusalView(refusal, facts, vocab);
+  return [line([part(view.head, view.tone)]), line(view.aside ? [part(view.aside, "meta")] : [], view.fixes)];
 }
 
 /**
@@ -820,12 +847,14 @@ function withListFailure([first, second]: [StatusLine, StatusLine], failure: Lis
 }
 
 /**
- * The line beside the launch, in precedence: a verification running or its charge (never written
- * over), a step in flight, the verb's refusal with its fix, a staged model list the verb opens, a
- * held review unlike what the panel showed, a failure, the outcome of the last step, and roles with
- * no route with the fix that routes them. From the verb's refusal on, a failed model list joins it
- * with its own fixes. Otherwise the line is null: the verb's label, the routing and the usage say
- * the rest, and the readout says the verb's status while the launch is pointed.
+ * The line beside the launch, in precedence: a verification running or waiting on its charge's
+ * dialog (never written over), a step in flight, the verb's refusal with its fix, a staged model
+ * list the verb opens, a failure, the outcome of the last step, and roles with no route with the fix
+ * that routes them. From the verb's refusal on, a failed model list joins it with its own fixes.
+ * What a press waits on the person for (a charge, a review that differs, a check that changed the
+ * profile) is asked in its dialog (decision-model.ts), so the line only says that it waits.
+ * Otherwise the line is null: the verb's label, the routing and the usage say the rest, and the
+ * readout says the verb's status while the launch is pointed.
  */
 export function launchLine(facts: StatusFacts, vocab: Vocabulary): StatusLine | null {
   const lines = pressLines(facts, vocab);
@@ -841,13 +870,7 @@ function pressLines(facts: StatusFacts, vocab: Vocabulary): [StatusLine, StatusL
   const shown = facts.mode !== null && (facts.mode !== "background" || facts.verb.refusal?.code === "verifying");
   if (shown && facts.phase === "inventory") return [line([part("Checking which models your accounts can use", "busy")]), line([], [cancel])];
   if (shown && facts.phase === "charge" && facts.charge) {
-    const { requests, providers } = facts.charge;
-    if (requests === 0) return [line([part("Nothing to check through these accounts")]), line([], [cancel])];
-    const spend = providers.filter(entry => entry.requests > 0)
-      .map(entry => `${vocab.family(providerPolicy(entry.provider).family)} ${entry.requests}`).join(" · ");
-    return [line([part(`Checking models spends ${requests} tiny ${requests === 1 ? "request" : "requests"}`), part(spend)]),
-      line(facts.keepsChecks ? [part("asked once: later checks run on their own", "meta")] : [],
-        [{ kind: "confirm", requests, standing: facts.keepsChecks }, cancel])];
+    return [line([part(facts.charge.requests === 0 ? "Nothing to check through these accounts" : "Waiting for your approval", "busy")]), EMPTY];
   }
   if (shown && facts.phase === "benchmark") {
     const progress = facts.progress ? [part(`${facts.progress.done} of ${facts.progress.total} requests`, "meta")] : [];
@@ -868,11 +891,6 @@ function baseLines(facts: StatusFacts, vocab: Vocabulary): [StatusLine, StatusLi
   const { verb } = facts;
   if (verb.state === "refused" && verb.refusal) return refusalLines(verb.refusal, facts, vocab);
   if (verb.opens === "models") return [line([part("A staged model list waits in Models")]), line([part(`${verb.label.toLowerCase()} opens it; the profile stays as it is`, "meta")])];
-  // A stop is a choice, not a failure: what would run instead, or what the check moved, and both ways on.
-  if (facts.differs) return [line([part("What will run differs", "warn"), ...facts.differs.map(text => part(text))]),
-    line([part("launch again to run it, or change a setting first", "meta")])];
-  if (facts.narrowed) return [line([part("The model check changed the profile", "warn"), ...facts.narrowed.map(text => part(text))]),
-    line([part("launch to go on with it, or change a setting first", "meta")])];
   if (facts.message?.failed) return [line([part(facts.message.text, "attention")]), EMPTY];
   if (facts.outcome?.kind === "resumed") return [line([part(`Resumed on ${facts.outcome.machine}`, "done")]), EMPTY];
   if (facts.outcome) {

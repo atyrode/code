@@ -71,8 +71,6 @@ export type ModelVerification = VerificationState & {
   /** Discovery and benchmark are ready on the destination. */
   ready: boolean;
   canPrepare: boolean;
-  /** A charge of at least one request waits for the person's approval. */
-  canConfirm: boolean;
   /** The largest charge, in requests, the person approved checks to spend without asking: 0 when every check asks, null until read. */
   approvedRequests: number | null;
   /** The person keeps checks and their approval at all (`readChecks().keeps`); null until read. */
@@ -340,7 +338,7 @@ export function useModelVerification(input: ModelVerificationInput): ModelVerifi
   }
   return {
     ...state, held: held.status, passed: provenance !== null, phase: run?.phase ?? null, progress: run?.progress ?? null, charge: run?.charge ?? null,
-    mode: run?.mode ?? null, writing, exclusions, provenance, failure, ready, canPrepare, canConfirm: run?.phase === "charge" && (run.charge?.requests ?? 0) > 0,
+    mode: run?.mode ?? null, writing, exclusions, provenance, failure, ready, canPrepare,
     approvedRequests, keepsChecks: kept.data?.keeps ?? null, prepare, confirm, cancel, withdraw,
   };
 }
