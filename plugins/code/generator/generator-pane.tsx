@@ -1,5 +1,4 @@
 import { useEffect, useId, useLayoutEffect, useMemo, useRef, useState, type CSSProperties, type ReactNode, type RefObject } from "react";
-import { createPortal } from "react-dom";
 import type { MachineSummary } from "@manifold/protocol";
 import { useNotice } from "@manifold/plugin/hooks";
 import type { OmpPresence } from "../machine-web.ts";
@@ -118,8 +117,6 @@ export type GeneratorPaneProps = {
   /** Hears the profile switches kept outside the rows (the session options sheet draws them) whenever they change. */
   readonly onExtras: (extras: readonly SlotOption[]) => void;
   readonly controls: RefObject<GeneratorControls | null>;
-  /** Where the dialog a press waits on mounts: outside the stage and the sheets, so it shows whichever of them is shown. */
-  readonly decisionHost: HTMLElement | null;
 };
 
 /** What the readout says: a value in bold, then what it means or does, warm when it refuses or strains. */
@@ -142,7 +139,7 @@ type Scrub = { readonly row: RowId; readonly origin: Review | null; readonly cat
  * is pointed, pressed or scrubbed in the readout.
  */
 export function GeneratorPane(props: GeneratorPaneProps) {
-  const { model, pools, machines, presence, selectMachine, recents, connected, ledger, shown, profile, hidden, listFailure, reveal, announce, onOpen, onRefresh, onLaunchState, onExtras, controls, decisionHost } = props;
+  const { model, pools, machines, presence, selectMachine, recents, connected, ledger, shown, profile, hidden, listFailure, reveal, announce, onOpen, onRefresh, onLaunchState, onExtras, controls } = props;
   const id = useId();
   const root = useRef<HTMLElement>(null);
   const launchButton = useRef<HTMLButtonElement>(null);
@@ -602,7 +599,7 @@ export function GeneratorPane(props: GeneratorPaneProps) {
         </span>
       </div>
     </div>
-    {decisionHost && createPortal(<DecisionDialog decision={decision} onChoose={decide} />, decisionHost)}
+    <DecisionDialog decision={decision} onChoose={decide} />
   </section>;
 }
 

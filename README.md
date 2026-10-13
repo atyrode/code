@@ -34,9 +34,10 @@ quota preservation and Code-owned upstream fallback repair are not planned.
 
 - **Code workbench:** one main view under a top bar of tabs (Generator, Accounts,
   Sessions) and one **More** menu (Models, Setup, Options, Shortcuts, Tutorial); the panel
-  reads its inputs again on its own. A person's first open offers a short tutorial
-  that points at the real controls one at a time, once per person and replayable
-  from More. The **generator** is five rows of plain
+  reads its inputs again on its own. Everything it shows over itself (questions, Shortcuts,
+  the tutorial) stays inside the panel. A person's first open offers a short tutorial
+  that dims the panel around one real control at a time, in the order Code is used,
+  once per person and replayable from More. The **generator** is five rows of plain
   words (lane, model, thinking, advisor, fallbacks) changed in place by pointer, keys
   or wheel, each model shown by its short alias per tier, with **Defaults** and
   **Revert** in its head and a readout line that says what a pointed word does,

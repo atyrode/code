@@ -1,4 +1,5 @@
 import { Fragment, useCallback, useEffect, useLayoutEffect, useMemo, useRef, useState, type ComponentType, type CSSProperties, type KeyboardEvent, type ReactElement, type ReactNode, type RefObject } from "react";
+import { createPortal } from "react-dom";
 import type { HostServices, PanelProps } from "@manifold/plugin";
 import type { MachineSummary } from "@manifold/protocol";
 import { prefersReducedMotion, ScrollRegion } from "@manifold/ui";
@@ -24,13 +25,12 @@ import { SetupSheet } from "./setup-sheet.tsx";
 import { teamWords, type SlotOption } from "./statement-model.ts";
 import { UsagePane, useUsageCadence } from "./usage-pane.tsx";
 import { readHeld } from "./auto-read.ts";
-import { DecisionDialog } from "./decision-dialog.tsx";
-import { tutorialOffer } from "./decision-model.ts";
+import { PanelDialog, PanelLayer, panelHeld } from "./panel-layer.tsx";
 import { MoreMenu, type MenuCommand } from "./more-menu.tsx";
 import { usePanelReads, usePanelShown } from "./read-clock.ts";
 import { useWorkbench } from "./workbench-model.ts";
 import { tabMark } from "./runs-model.ts";
-import { TutorialCard, tutorialShown, tutorialTarget, useTutorialSeen } from "./tutorial.tsx";
+import { TutorialLayer, tutorialParts, tutorialShown, useTutorialSeen, type TourPhase } from "./tutorial.tsx";
 import { nextTutorialStep, previousTutorialStep, TUTORIAL_STEPS } from "./tutorial-model.ts";
 
 /** Generator-panel class prefix; every part hangs from the generator root (styles.css). */
@@ -50,11 +50,11 @@ type Panel = { readonly mode: Mode; readonly width: number; readonly height: num
 /** How far the stacked arrangement may run past the panel's height before it gives way, so rounding never flips it back and forth. */
 const STACKED_GRACE_PX = 4;
 
-/** One polite live region, mounted empty; an identical message is announced again because its node is replaced. */
+/** One polite live region, mounted empty; an identical message is announced again because its node is replaced. It stays out of the layer's hold (`data-live`), so it speaks while a question is open. */
 function useAnnouncer(): { region: ReactElement; announce: (text: string) => void } {
   const [message, setMessage] = useState({ text: "", serial: 0 });
   const announce = useCallback((text: string) => setMessage(previous => ({ text, serial: previous.serial + 1 })), []);
-  const region = <div className="plugin-atyrode_code__sr" role="status" aria-live="polite" aria-atomic="true">
+  const region = <div className="plugin-atyrode_code__sr" role="status" aria-live="polite" aria-atomic="true" data-live="">
     <span key={message.serial}>{message.text}</span>
   </div>;
   return { region, announce };
@@ -238,19 +238,19 @@ const SHORTCUTS: readonly { readonly title: string; readonly keys: readonly (rea
   { title: "Anywhere", keys: [["r", "Refresh now: read everything again at once, as the panel also does on its own"], ["?", "These shortcuts"]] },
 ];
 
-/** The keyboard shortcuts, in a native modal dialog: Esc or its Close button closes it, and it owns its keys while open. */
-function ShortcutsDialog({ dialog, narrow }: { dialog: RefObject<HTMLDialogElement | null>; narrow: boolean }) {
-  return <dialog ref={dialog} className={`${G}shortcuts`} aria-labelledby="code-shortcuts-title" data-narrow={narrow || undefined}
-    onClick={event => { if (event.target === event.currentTarget) event.currentTarget.close(); }}>
+/** The keyboard shortcuts, in a dialog over the dimmed panel: Esc, a press on the dim or its Close button closes it, and it owns its keys while open. */
+function ShortcutsDialog({ open, narrow, onClose }: { open: boolean; narrow: boolean; onClose: () => void }) {
+  return <PanelDialog open={open} className={`${G}shortcuts`} labelledBy="code-shortcuts-title" data={{ "data-narrow": narrow ? "" : undefined }}
+    focus={dialog => dialog.querySelector("button")} onDismiss={onClose}>
     <div className={`${G}shortcuts-head`}>
       <h2 id="code-shortcuts-title" className={`${G}title`}>Keyboard shortcuts</h2>
-      <Button autoFocus onClick={() => dialog.current?.close()}>Close</Button>
+      <Button onClick={onClose}>Close</Button>
     </div>
     {SHORTCUTS.map(group => <section key={group.title} className={`${G}shortcuts-group`} aria-label={group.title}>
       <h3 className={`${G}shortcuts-title`}>{group.title}</h3>
       <dl className={`${G}shortcuts-list`}>{group.keys.map(([key, does]) => <Fragment key={key + does}><dt><kbd>{key}</kbd></dt><dd>{does}</dd></Fragment>)}</dl>
     </section>)}
-  </dialog>;
+  </PanelDialog>;
 }
 
 type WorkbenchProps = {
@@ -283,7 +283,7 @@ function Workbench({ host, target, machine, machines, rosterError, available, se
   viewRef.current = view;
   const [hidden, setHidden] = useState({ routing: false, usage: false });
   const [chains, setChains] = useState(false);
-  const shortcuts = useRef<HTMLDialogElement>(null);
+  const [shortcuts, setShortcuts] = useState(false);
   // The launch as the generator names it, for the key line and the accounts view's foot.
   const [launch, setLaunch] = useState<LaunchState>({ label: "", ready: false, reason: null });
   // The profile switches the generator keeps outside its rows, which the session options sheet draws.
@@ -299,9 +299,7 @@ function Workbench({ host, target, machine, machines, rosterError, available, se
   const backButtons = useRef<Partial<Record<PanelSheet, HTMLButtonElement | null>>>({});
   const returnFocus = useRef<HTMLElement | null>(null);
   const stageScroll = useRef(0);
-  // Where the question a press waits on mounts (decision-dialog.tsx): beside the stage and the sheets, so it shows over either.
-  const [decisionHost, setDecisionHost] = useState<HTMLDivElement | null>(null);
-  // The panel's root, which the tutorial's card is laid over (tutorial.tsx), once mounted.
+  // The panel's root, which everything Code shows over itself stands in (panel-layer.tsx), once mounted.
   const [panelRoot, setPanelRoot] = useState<HTMLElement | null>(null);
   useLayoutEffect(() => { setPanelRoot(app.current?.closest<HTMLElement>(PANEL_ROOT) ?? null); }, []);
   // The tutorial: whether the person has seen it, the walk (the step it stands at and the steps it keeps to; null when it is
@@ -336,6 +334,7 @@ function Workbench({ host, target, machine, machines, rosterError, available, se
   const listFailure = modelListFailure(Boolean(metadata.error || starterError), record?.active ?? null, model.document !== null);
   const lane = selection?.lane;
   const accent = !lane || lane.kind === "mixed" ? "var(--tui-mixed)" : `var(--code-${hueOf(lane.family)})`;
+  const layer = useMemo(() => panelRoot ? { panel: panelRoot, accent } : null, [panelRoot, accent]);
 
   // ------------------------------------------------------------ views and sheets
   const arrangement = useStacked(app, panel, still, { main: view === "main" && sheet === null, routes: ledger?.length ?? 0, hidden: hidden.routing }, keepFocus);
@@ -428,16 +427,17 @@ function Workbench({ host, target, machine, machines, rosterError, available, se
   const inputAt = useRef(0);
   /**
    * Whether the person is in the middle of something a read on its own must not interrupt: a step
-   * that runs or a charge that waits, a sheet, the shortcuts, a question a press waits on or a popup
-   * (the More menu, the machine list) open, a row being scrubbed, a text field in use, an account
-   * change saving, a profile edit or a saved pool draft left unsaved, or a press a moment ago. Asked
-   * when a read comes due, so it reads the latest render and the DOM.
+   * that runs or a charge that waits, a sheet, a popup (the More menu, the machine list) or anything
+   * that holds the panel (a question a press waits on, Shortcuts, Models' import, the tutorial's
+   * welcome: panel-layer.tsx) open, a row being scrubbed, a text field in use, an account change
+   * saving, a profile edit or a saved pool draft left unsaved, or a press a moment ago. Asked when a
+   * read comes due, so it reads the latest render and the DOM.
    */
   const held = () => {
     const node = app.current, focused = node?.ownerDocument.activeElement ?? null;
     return readHeld({
       step: !teamGate.open,
-      open: sheet !== null || shortcuts.current?.open === true || node?.querySelector("[data-popover]") != null || decisionHost?.querySelector("dialog[open]") != null,
+      open: sheet !== null || node?.querySelector("[data-popover]") != null || panelRoot?.querySelector(":scope > [data-holds]") != null,
       editing: node?.querySelector("[data-dragging]") != null || usage.accounts?.pending === true
         || (focused !== null && node?.contains(focused) === true && focused.matches("textarea, input, select, [contenteditable]")),
       unsaved: model.edited || presetDraft.current,
@@ -471,8 +471,8 @@ function Workbench({ host, target, machine, machines, rosterError, available, se
    * A key or a key-line word that changes what shows keeps focus in the panel: a view that took no
    * focus of its own on arrival (the accounts view focuses its first switch) is focused itself, and
    * the main view hands focus to the row the keyboard was last on. Focus left on a hidden control
-   * would drop to the page, where the panel's keys no longer reach. The tutorial's card keeps the
-   * focus it took: a view its step opened is the walk's to go on from.
+   * would drop to the page, where the panel's keys no longer reach. The tour's card keeps the focus
+   * it took: a view its step opened is the walk's to go on from.
    */
   function keepFocus() {
     requestAnimationFrame(() => {
@@ -480,7 +480,7 @@ function Workbench({ host, target, machine, machines, rosterError, available, se
       // A sheet opened within the frame (Esc, then a sheet's key) owns focus and gives it back itself.
       if (!node || currentSheet.current) return;
       const active = node.ownerDocument.activeElement;
-      if (active?.closest(`.${G}tutorial`)) return;
+      if (active?.closest(`.${G}tour`)) return;
       const pane = node.querySelector<HTMLElement>(`[data-pane="${shown === "main" ? "generator" : shown}"]`);
       if (active && pane?.contains(active) && (active as HTMLElement).offsetParent !== null) return;
       if (shown === "main") generator.current?.focusRows();
@@ -505,7 +505,7 @@ function Workbench({ host, target, machine, machines, rosterError, available, se
       case "back": changeView("main"); return true;
       case "refresh": cadence.now(); return true;
       case "machine": generator.current?.machines(); return true;
-      case "shortcuts": shortcuts.current?.showModal(); return true;
+      case "shortcuts": setShortcuts(true); return true;
       case "sheet": openSheet(action.sheet); return true;
       case "recall": generator.current?.recall(action.index); return true;
       case "enter":
@@ -518,6 +518,9 @@ function Workbench({ host, target, machine, machines, rosterError, available, se
   keys.current = event => {
     const target = event.target instanceof HTMLElement ? event.target : null;
     const panel = app.current?.closest<HTMLElement>(PANEL_ROOT) ?? null;
+    // While a layer holds the panel or the tour walks it, the panel's own keys answer nothing, wherever focus has fallen: the
+    // layer's card has its own.
+    if (!panel || panelHeld(panel) || walk !== null || starting) return;
     const onRoot = target !== null && target === panel;
     const action = panelKey({
       key: event.key, mod: event.ctrlKey || event.metaKey, alt: event.altKey, repeat: event.repeat, defaultPrevented: event.defaultPrevented,
@@ -579,7 +582,7 @@ function Workbench({ host, target, machine, machines, rosterError, available, se
     if (walk === null || !panelRoot) return;
     const to = forward ? nextTutorialStep(walk.shown, walk.step) : previousTutorialStep(walk.shown, walk.step);
     if (to === null) { if (forward) endWalk(); return; }
-    if (view !== "main" && !tutorialTarget(panelRoot, TUTORIAL_STEPS[to]!)) changeView("main");
+    if (view !== "main" && tutorialParts(panelRoot, TUTORIAL_STEPS[to]!).length === 0) changeView("main");
     setWalk({ step: to, shown: walk.shown });
   }
   // A step the person can try goes on by itself once they did: a profile word chosen since it began, or the accounts opened
@@ -595,13 +598,13 @@ function Workbench({ host, target, machine, machines, rosterError, available, se
     }
   });
   // The offer: once per person, to a person and not an agent or a service, opened on the generator at rest with its profile
-  // shown, nothing running, no charge waiting and no other question open; once open it stands until it is answered either
-  // way, since nothing behind it can be pressed meanwhile, so a check writing on its own never closes and reopens it.
+  // shown, nothing running, no charge waiting and no question open; once open it stands until it is answered either way,
+  // since nothing behind it can be pressed meanwhile, so a check writing on its own never closes and reopens it.
   const offerDue = tutorial.seen === false && host.principal.kind === "human" && walk === null && !starting && view === "main" && sheet === null
-    && selection !== null && teamGate.open && !busy && decisionHost?.querySelector('dialog[open]:not([data-decision="tutorial"])') == null;
+    && selection !== null && teamGate.open && !busy && panelRoot?.querySelector(":scope > [data-layer] dialog[open]") == null;
   const [offering, setOffering] = useState(false);
   useEffect(() => { if (offerDue) setOffering(true); }, [offerDue]);
-  const offer = offering && tutorial.seen === false && walk === null && !starting ? tutorialOffer() : null;
+  const tour: TourPhase | null = walk !== null ? "walk" : starting ? "starting" : offering && tutorial.seen === false ? "welcome" : null;
 
   // ------------------------------------------------------------ the bar, the pane heads and the key line: every action a control, keys its accelerators
   // A control names its key only where the panel's key rules give that key its action in the shown view (panel-keys.ts).
@@ -675,7 +678,7 @@ function Workbench({ host, target, machine, machines, rosterError, available, se
     <main className={`${G}stage`}>
       <GeneratorPane model={model} pools={pools} machines={roster} presence={presence} selectMachine={select} recents={recents} connected={connected} ledger={ledger} shown={shown}
         profile={!showRouting} hidden={view !== "main"} listFailure={listFailure} announce={announce} onOpen={open}
-        onRefresh={refresh} onLaunchState={setLaunch} onExtras={setExtras} controls={generator} decisionHost={decisionHost}
+        onRefresh={refresh} onLaunchState={setLaunch} onExtras={setExtras} controls={generator}
         reveal={withGenerator && (hidden.routing || hidden.usage) ? <>
           {hidden.routing && <Button aria-keyshortcuts="p" title="Show routing (p)" data-reveal="" onClick={() => run({ kind: "toggle", pane: "routing" })}>Show routing</Button>}
           {hidden.usage && <Button aria-keyshortcuts="s" title="Show usage (s)" data-reveal="" onClick={() => run({ kind: "toggle", pane: "usage" })}>Show usage</Button>}
@@ -712,7 +715,6 @@ function Workbench({ host, target, machine, machines, rosterError, available, se
     <footer className={`${G}keys`} aria-label="keys">
       <span className={`${G}keys-line`}>{keyLine}</span>
     </footer>
-    <ShortcutsDialog dialog={shortcuts} narrow={narrow} />
   </div>;
 
   // A visited sheet stays mounted, so what it holds survives leaving it; each carries the lane's accent as the stage does.
@@ -720,14 +722,13 @@ function Workbench({ host, target, machine, machines, rosterError, available, se
     onKeyDown={sheetKeys} style={{ "--tui-acc": accent } as CSSProperties}>{body}</div>;
   const backRef = (name: PanelSheet) => (element: HTMLButtonElement | null) => { backButtons.current[name] = element; };
 
-  return <>
-    {region}
+  return <PanelLayer.Provider value={layer}>
+    {panelRoot && createPortal(region, panelRoot)}
     {tui}
-    <div ref={setDecisionHost} className={`${G}decision-host`} style={{ "--tui-acc": accent } as CSSProperties}>
-      <DecisionDialog decision={offer} onChoose={choice => { tutorial.see(); if (choice.does.kind === "tour") startWalk(); }} />
-    </div>
-    {walk !== null && panelRoot && <TutorialCard panel={panelRoot} step={walk.step} shown={walk.shown} accent={accent}
-      onNext={() => stepWalk(true)} onBack={() => stepWalk(false)} onEnd={endWalk} />}
+    <ShortcutsDialog open={shortcuts} narrow={narrow} onClose={() => setShortcuts(false)} />
+    <TutorialLayer phase={tour} step={walk?.step ?? 0} shown={walk?.shown ?? []}
+      onTake={() => { tutorial.see(); startWalk(); }} onSkip={tutorial.see}
+      onNext={() => stepWalk(true)} onBack={() => stepWalk(false)} onEnd={endWalk} />
     {sheetHost("models", <ModelsSheet host={host} model={model} machine={machine} onBack={closeSheet} backRef={backRef("models")} onPlace={open} />)}
     {sheetHost("setup", <SetupSheet host={host} model={model} target={target} machine={machine} machines={roster} rosterError={rosterError} presence={presence}
       select={select} refreshMachines={refreshMachines} onBack={closeSheet} backRef={backRef("setup")} onPlace={open} open={sheet === "setup"} />)}
@@ -746,7 +747,7 @@ function Workbench({ host, target, machine, machines, rosterError, available, se
       <OptionalSkills catalog={skillCatalog.data} error={skillCatalog.error} choice={model.skillChoice} restricted={model.automation?.mode === "restricted"}
         reviewed={launchReview ? launchReview.native.skills : null} refusal={optionsRefusal} refresh={skillCatalog.refresh} change={model.setSkillChoice} />
     </div></SheetFrame>)}
-  </>;
+  </PanelLayer.Provider>;
 }
 
 function Launcher({ host }: PanelProps) {

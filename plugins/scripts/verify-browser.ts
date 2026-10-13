@@ -22,8 +22,8 @@ import { readStoredDraft, storedDraftKey, type StoredDraft } from "../code/gener
 import { recentTeamsKey } from "../code/generator/recent-teams.ts";
 import { keptAnswersKey } from "../code/generator/run-dials.ts";
 import { EDIT_QUIET_MS, HOLD_RECHECK_MS, SHOWN_AGAIN_MS } from "../code/generator/auto-read.ts";
-// Type-only: the dialog renders React, which this process does not load; its settle time is pinned by type below.
-import type * as DecisionDialogModule from "../code/generator/decision-dialog.tsx";
+// Type-only: the layer renders React, which this process does not load; its settle time is pinned by type below.
+import type * as PanelLayerModule from "../code/generator/panel-layer.tsx";
 import {
   BENCHMARK_OPERATION_ID, GATEWAY_OPERATION_ID, INVENTORY_OPERATION_ID, LAUNCH_OPERATION_ID, ModelCatalogSnapshotSchema, OMP_VERSION, OmpHarnessProfileSchema,
   PREPARE_WORKSPACE_OPERATION_ID, ResumeSessionInputSchema, VALIDATE_WORKSPACE_OPERATION_ID, actionSchemas as ompActionSchemas,
@@ -354,11 +354,11 @@ const lineFixes = `[...document.querySelectorAll(${JSON.stringify(`${generator} 
 /**
  * How long the question ignores any press but Esc once it opens or its words change (one that lands this soon was aimed at
  * what stood there before), and how long a choice must have held focus before a key answers with it (Tab then ↵ in one
- * burst is typing meant for somewhere else). Typed as decision-dialog.tsx's own `DECISION_SETTLE_MS` and
+ * burst is typing meant for somewhere else). Typed as panel-layer.tsx's own `DECISION_SETTLE_MS` and
  * `DECISION_FOCUS_MS`, so this stops compiling if either changes.
  */
-const DECISION_SETTLE_MS: typeof DecisionDialogModule.DECISION_SETTLE_MS = 400;
-const DECISION_FOCUS_MS: typeof DecisionDialogModule.DECISION_FOCUS_MS = 300;
+const DECISION_SETTLE_MS: typeof PanelLayerModule.DECISION_SETTLE_MS = 400;
+const DECISION_FOCUS_MS: typeof PanelLayerModule.DECISION_FOCUS_MS = 300;
 /** A wait after which ↵ on the choice just focused is a deliberate press: the question has settled and the choice has held focus. */
 const DELIBERATE_MS = Math.max(DECISION_SETTLE_MS, DECISION_FOCUS_MS);
 /** Manifold's notice stack (notice.tsx): its rows on show, newest first. A press's outcome takes one row, each new one in the last one's place. */
