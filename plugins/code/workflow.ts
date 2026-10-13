@@ -823,6 +823,8 @@ export function createCodeWorkflowClient(transport: Dispatch) {
     readStarterCatalog, verifyModels, observeVerification,
     readChecks: () => code("readChecks", {}),
     approveChecks: (expectedRevision: number, requests: number) => code("approveChecks", { expectedRevision, requests }),
+    readTutorial: () => code("readTutorial", {}),
+    seeTutorial: () => code("seeTutorial", {}),
     readSkillCatalog: (target: Target) => omp("readSkillCatalog", target),
     listSessions, runningSession,
     async resumeSession(ref: OmpSessionRef, options: ResumeSessionOptions = {}, isCurrent: () => boolean = () => true): Promise<ResumeSessionResult> {

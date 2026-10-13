@@ -24,10 +24,14 @@ import { SetupSheet } from "./setup-sheet.tsx";
 import { teamWords, type SlotOption } from "./statement-model.ts";
 import { UsagePane, useUsageCadence } from "./usage-pane.tsx";
 import { readHeld } from "./auto-read.ts";
+import { DecisionDialog } from "./decision-dialog.tsx";
+import { tutorialOffer } from "./decision-model.ts";
 import { MoreMenu, type MenuCommand } from "./more-menu.tsx";
 import { usePanelReads, usePanelShown } from "./read-clock.ts";
 import { useWorkbench } from "./workbench-model.ts";
 import { tabMark } from "./runs-model.ts";
+import { TutorialCard, tutorialShown, useTutorialSeen } from "./tutorial.tsx";
+import { nextTutorialStep, previousTutorialStep, TUTORIAL_STEPS } from "./tutorial-model.ts";
 
 /** Generator-panel class prefix; every part hangs from the generator root (styles.css). */
 const G = "plugin-atyrode_code_generator__";
@@ -296,6 +300,14 @@ function Workbench({ host, target, machine, machines, rosterError, available, se
   const stageScroll = useRef(0);
   // Where the question a press waits on mounts (decision-dialog.tsx): beside the stage and the sheets, so it shows over either.
   const [decisionHost, setDecisionHost] = useState<HTMLDivElement | null>(null);
+  // The panel's root, which the tutorial's card is laid over (tutorial.tsx), once mounted.
+  const [panelRoot, setPanelRoot] = useState<HTMLElement | null>(null);
+  useLayoutEffect(() => { setPanelRoot(app.current?.closest<HTMLElement>(PANEL_ROOT) ?? null); }, []);
+  // The tutorial: whether the person has seen it, the step it stands at (null when it is not walked), and a start waiting for
+  // the generator to show.
+  const tutorial = useTutorialSeen(host);
+  const [walk, setWalk] = useState<number | null>(null);
+  const [starting, setStarting] = useState(false);
   const currentSheet = useRef(sheet);
   currentSheet.current = sheet;
   // The roster is polled; what reads it is recomputed only when it really changes.
@@ -532,6 +544,47 @@ function Workbench({ host, target, machine, machines, rosterError, available, se
     };
   }, []);
 
+  // ------------------------------------------------------------ the tutorial: offered once per person, walked over the real controls
+  /**
+   * A walk starts on the generator: a sheet closes and the view goes back to it, then the first step
+   * the panel shows is taken once that has rendered, so a walk replayed from another view never
+   * begins past the generator's steps.
+   */
+  function startWalk() {
+    if (currentSheet.current) closeSheet();
+    changeView("main");
+    setStarting(true);
+  }
+  useLayoutEffect(() => {
+    if (!starting || !panelRoot || view !== "main" || sheet !== null) return;
+    setStarting(false);
+    setWalk(nextTutorialStep(tutorialShown(panelRoot), -1));
+  });
+  /** The walk ends, finished or skipped: it counts as seen, and focus comes back into the panel from the card that goes. */
+  function endWalk() {
+    setWalk(null);
+    tutorial.see();
+    keepFocus();
+  }
+  function stepWalk(forward: boolean) {
+    if (walk === null || !panelRoot) return;
+    const shown = tutorialShown(panelRoot);
+    const to = forward ? nextTutorialStep(shown, walk) : previousTutorialStep(shown, walk);
+    if (to !== null) setWalk(to);
+    else if (forward) endWalk();
+  }
+  // A step the person can try goes on by itself once they did: a profile word chosen since it began, or the accounts opened.
+  const selectionKey = JSON.stringify(selection);
+  const walkBegan = useRef<{ readonly step: number; readonly selection: string } | null>(null);
+  useEffect(() => {
+    if (walk === null) { walkBegan.current = null; return; }
+    if (walkBegan.current?.step !== walk) { walkBegan.current = { step: walk, selection: selectionKey }; return; }
+    const tries = TUTORIAL_STEPS[walk]?.tries;
+    if ((tries === "word" && selectionKey !== walkBegan.current.selection) || (tries === "accounts" && view === "accounts")) stepWalk(true);
+  });
+  // The offer: once per person, on the generator at rest with its profile shown, until they answer it either way.
+  const offer = tutorial.seen === false && walk === null && !starting && view === "main" && sheet === null && selection !== null ? tutorialOffer() : null;
+
   // ------------------------------------------------------------ the bar, the pane heads and the key line: every action a control, keys its accelerators
   // A control names its key only where the panel's key rules give that key its action in the shown view (panel-keys.ts).
   const keyed = (title: string, keys: readonly string[], does: (action: PanelAction) => boolean) => {
@@ -568,6 +621,7 @@ function Workbench({ host, target, machine, machines, rosterError, available, se
       onSelect: () => run({ kind: "sheet", sheet: "options" }) },
     { id: "shortcuts", label: "Shortcuts", aside: null, accelerator: menuKey(["?"], action => action.kind === "shortcuts"), title: "Keyboard shortcuts", dialog: true,
       onSelect: () => run({ kind: "shortcuts" }) },
+    { id: "tutorial", label: "Tutorial", aside: null, accelerator: null, title: "Tutorial: a short tour of Code", onSelect: startWalk },
   ];
   const bar = <nav className={`${G}bar`} aria-label="Code">
     <div className={`${G}tabs`} role="tablist" aria-label="views" onKeyDown={tabKeys}>
@@ -651,7 +705,10 @@ function Workbench({ host, target, machine, machines, rosterError, available, se
   return <>
     {region}
     {tui}
-    <div ref={setDecisionHost} className={`${G}decision-host`} style={{ "--tui-acc": accent } as CSSProperties} />
+    <div ref={setDecisionHost} className={`${G}decision-host`} style={{ "--tui-acc": accent } as CSSProperties}>
+      <DecisionDialog decision={offer} onChoose={choice => { tutorial.see(); if (choice.does.kind === "tour") startWalk(); }} />
+    </div>
+    {walk !== null && panelRoot && <TutorialCard panel={panelRoot} step={walk} accent={accent} onNext={() => stepWalk(true)} onBack={() => stepWalk(false)} onEnd={endWalk} />}
     {sheetHost("models", <ModelsSheet host={host} model={model} machine={machine} onBack={closeSheet} backRef={backRef("models")} onPlace={open} />)}
     {sheetHost("setup", <SetupSheet host={host} model={model} target={target} machine={machine} machines={roster} rosterError={rosterError} presence={presence}
       select={select} refreshMachines={refreshMachines} onBack={closeSheet} backRef={backRef("setup")} onPlace={open} open={sheet === "setup"} />)}

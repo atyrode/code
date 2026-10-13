@@ -16,16 +16,18 @@ import { catalogReview, commitConfiguration, configurationMigration, expectRevis
 import { cancelSession, composeSession, followSession, listProfiles, readSession, runSession } from "./session.ts";
 import { configureServices, currentSuggestionService, readServiceConfiguration, reviewServices } from "./service-setup.ts";
 import { adoptCheck, approveChecks, readChecks, recordCheck } from "./checks.ts";
+import { readTutorial, seeTutorial } from "./tutorial.ts";
 
 const mutating: Partial<Record<RootAction, true>> = {
   initializeConfiguration: true, stageCatalog: true, promoteCatalog: true, discardCatalog: true, select: true, adoptCheck: true, changeAccounts: true,
   configureServices: true, runSession: true, cancelSession: true,
 };
 const pure: Partial<Record<RootAction, true>> = { draftInventory: true, deriveCatalog: true };
-// A person's own checks and approval: no container is involved, so no container capability is
-// asked. They are container-graded so that a token confined to one container reaches them and is
-// answered as keeping none, rather than refused in a way a caller could not tell from a failure.
-const personal: Partial<Record<RootAction, true>> = { readChecks: true, approveChecks: true };
+// A person's own records, their checks, approval and tutorial: no container is involved, so no
+// container capability is asked. They are container-graded so that a token confined to one container
+// reaches them and is answered as keeping none, rather than refused in a way a caller could not tell
+// from a failure.
+const personal: Partial<Record<RootAction, true>> = { readChecks: true, approveChecks: true, readTutorial: true, seeTutorial: true };
 // Only Code's external suggestion policy needs native authority. Policy
 // composition never delegates OMP execution, jobs, accounts or terminals.
 const actionDelegates: Partial<Record<RootAction, readonly Cap[]>> = {
@@ -92,6 +94,8 @@ const productHandlers: ProductHandlers = {
   },
   readChecks,
   approveChecks,
+  readTutorial,
+  seeTutorial,
   adoptCheck,
   async changeAccounts(ctx, args) {
     const previous = await readConfiguration(ctx, args, true); expectRevision(previous, args.expectedRevision);

@@ -33,8 +33,10 @@ quota preservation and Code-owned upstream fallback repair are not planned.
 ## Native workflows
 
 - **Code workbench:** one main view under a top bar of tabs (Generator, Accounts,
-  Sessions) and one **More** menu (Models, Setup, Options, Shortcuts); the panel
-  reads its inputs again on its own. The **generator** is five rows of plain
+  Sessions) and one **More** menu (Models, Setup, Options, Shortcuts, Tutorial); the panel
+  reads its inputs again on its own. A person's first open offers a short tutorial
+  that points at the real controls one at a time, once per person and replayable
+  from More. The **generator** is five rows of plain
   words (lane, model, thinking, advisor, fallbacks) changed in place by pointer, keys
   or wheel, each model shown by its short alias per tier, with **Defaults** and
   **Revert** in its head and a readout line that says what a pointed word does,

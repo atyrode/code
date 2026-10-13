@@ -568,6 +568,26 @@ test("stored checks and approvals are bound to their principal: a record naming 
   await expect(f.workflow.approveChecks(1, 5)).rejects.toThrow("code_checks_confined");
 });
 
+test("the tutorial is seen once per person: recorded when first seen, kept as it was, and never another person's", async () => {
+  const f = verificationFixture();
+  expect(await f.workflow.readTutorial()).toEqual({ keeps: true, seenAt: null });
+  expect(await f.workflow.seeTutorial()).toEqual({ keeps: true, seenAt: 10_000 });
+  // A second mark, from another tab or device, leaves the first record as it was.
+  const key = [...f.store.keys()].find(entry => entry.startsWith("tutorial/"))!;
+  f.store.set(key, JSON.stringify({ ...JSON.parse(f.store.get(key)!), seenAt: 5_000 }));
+  expect(await f.workflow.seeTutorial()).toEqual({ keeps: true, seenAt: 5_000 });
+  // Another person has not seen it; an agent and a confined sign-in keep no record, so their browser keeps it instead.
+  f.caller.principal = { id: "reader", kind: "human", name: "Reader", color: "#abcdef" };
+  expect(await f.workflow.readTutorial()).toEqual({ keeps: true, seenAt: null });
+  f.caller.principal = { id: "agent-1", kind: "agent", name: "Agent", color: "#654321" };
+  expect(await f.workflow.seeTutorial()).toEqual({ keeps: false, seenAt: null });
+  f.caller.principal = { id: "reader", kind: "human", name: "Reader", color: "#abcdef" };
+  f.caller.containerScope = target.containerId;
+  expect(await f.workflow.seeTutorial()).toEqual({ keeps: false, seenAt: null });
+  f.caller.containerScope = null;
+  expect(await f.workflow.readTutorial()).toEqual({ keeps: true, seenAt: null });
+});
+
 test("a check derived under another budget is never adopted: the workspace checks for itself", async () => {
   const f = verificationFixture();
   await (await prepared(f, 0)).confirm(preview);
