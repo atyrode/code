@@ -749,7 +749,7 @@
   .plugin-atyrode_code_generator .plugin-atyrode_code_generator__decision-go { transition: none; }
 }
 @media (pointer: coarse) {
-  .plugin-atyrode_code_generator .plugin-atyrode_code_generator__decision-choices button { min-height: 44px; }
+  .plugin-atyrode_code_generator .plugin-atyrode_code_generator__decision-choices button { min-width: 44px; min-height: 44px; }
 }
 @media (max-width: 300px) {
   .plugin-atyrode_code_generator .plugin-atyrode_code_generator__decision-body { padding: 14px 12px 12px; }
