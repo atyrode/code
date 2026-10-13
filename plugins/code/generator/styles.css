@@ -726,8 +726,8 @@
 /*
  * The question a press waits on (decision-dialog.tsx), in the sheet dialog's grammar: its title in
  * the accent, why in grey, what it is about in the foreground, then its choices as words, the next
- * action first and in the accent. The box draws no padding of its own, so a press inside it is never
- * taken for one on the backdrop. Its host lays nothing out: the dialog stands in the top layer.
+ * action first and in the accent. Its body carries the padding, so the box is only its content and
+ * its rule. Its host lays nothing out: the dialog stands in the top layer.
  */
 .plugin-atyrode_code_generator .plugin-atyrode_code_generator__decision-host { display: contents; }
 .plugin-atyrode_code_generator .plugin-atyrode_code_generator__decision { width: min(420px, calc(100vw - 24px)); padding: 0; }

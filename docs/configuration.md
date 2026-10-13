@@ -487,7 +487,7 @@ the team, and is not recorded in recent profiles.
 rather than disabled and stays focusable, so a step changing its state never drops
 focus, and a launch-line control that leaves once pressed hands focus to the launch;
 pressing a refused one asks its question (below), and pressing it while a step runs
-shakes it and says why in the readout. A
+shakes it, says why in the readout and announces it. A
 read-only workspace (no `containers:write`) is stated in neutral grey, "Read-only
 workspace" (its readout adds "changes stay a local preview"). Write access is the caps
 alone: without a canvas beside the panel, checking models, saving and account edits still
@@ -525,22 +525,27 @@ machine or account pool changes.
 dialog over the whole page rather than said beside the launch, so it cannot be missed: a
 check's charge (from the launch, Models or a struck lane), a review that differs, a check
 that changed the profile, and a refused Launch press. Each question says what it waits on
-and why in a sentence, what it is about one fact per line, then its choices as words, the
-next action first in the accent, and a way out last (**Cancel**, **Not now** or **Close**),
-which `Esc` and a press on the backdrop take and which never spends or launches. A refused
-press's question names the refusal (as the launch line's head below, an account read's
-failure in its sentence), says why it applies ("Launch opens a terminal on a machine.
-Choose one that is online.") and offers the launch line's own fixes before **Close**; a
-fix runs and closes it, and a refusal that lifts or changes closes it too. A question
-opens with focus on its title, never on a choice, since a charge or a review comes back
-while the person may be typing elsewhere: `Tab` reaches the choices, the next action
-first. The second click of a double click, a held key and a pointer press in the first
-400 ms after it opens answer nothing; closing gives focus back to what had it. Reads on
-their own wait while a question is open. How a press ended is also posted to Manifold's
-one notice stack, which shows it at the foot of the page and announces it, each outcome
-replacing the last: "Launched on <machine>. Type your task in its terminal.", "Resumed on
-<machine>.", a save, a failed step in its words, and a check the person started that
-stopped. A check cancelled by the person, or run by the panel on its own, posts nothing.
+and, where it can, why in a sentence, what it is about one fact per line, then its choices
+as words, the next action first in the accent, and a way out last (**Cancel**, **Not now**
+or **Close**), which never spends or launches. A refused press's question names the
+refusal (as the launch line's head below, an account read's failure in its sentence), says
+why it applies ("Launch opens a terminal on a machine. Choose one that is online.") and
+offers the fixes the line offers for that refusal before **Close**; a fix runs and closes
+it, and a refusal that lifts or changes, even to another reason of its kind, closes it too.
+A check that changed the profile is asked when it happens or never: a launch that cannot go
+on then drops it for good, as a held review is dropped. A question opens with focus on its
+title, never on a choice, since a charge or a review comes back while the person may be
+typing elsewhere: `Tab` reaches the choices, the next action first. No press answers it in
+the 400 ms after it opens or its question changes, and a key answers with a choice only once
+that choice has held focus for 300 ms, so `Tab` then `↵` in one burst answers nothing;
+neither does the second click of a double click or a held key. `Esc`, a press that starts
+and ends on the backdrop, and a close the browser forces take the way out at any time.
+Closing gives focus back to what had it. Reads on their own wait while a question is open.
+How a press ended is also posted to Manifold's one notice stack, which shows it at the foot
+of the page, each outcome replacing the last: "Launched on <machine>. Type your task in its
+terminal.", "Resumed on <machine>.", a save, a failed step in its words, and a check the
+person started that stopped. A check cancelled by the person, or run by the panel on its
+own, posts nothing.
 
 **Live dials.** An agent launch (see the workflow below) ends "Launched on <machine> ·
 **dials**", the fix opening Sessions (`e`); a launch the reviewed session carried ends
@@ -856,9 +861,10 @@ space include · m manage · esc generator`, in the management `esc accounts`, i
 sessions `esc generator`, preceded by `↑↓ move · 1–N recall` when recent profiles exist.
 Words are not buttons, since every action is a control elsewhere. For a coarse pointer,
 which has no keys, the key line is hidden, and every button, tab and radio is at least
-44 px. One polite live region announces recalls, commits and the reason a pressed control
-gave; a question announces itself as a dialog, and a press's outcome reaches Manifold's
-notice stack, which announces it.
+44 px. One polite live region announces outcomes, failures, recalls, commits and the
+reason a pressed control gave, whatever the notice stack also shows, since a notice row
+that arrives with its words is not reliably read out; a question announces itself as a
+dialog.
 
 The layout answers the panel's own measured size, never the window's, since Code
 shares the window with its canvas. From 760 px the generator and routing stand side by

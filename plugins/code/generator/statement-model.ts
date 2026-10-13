@@ -493,7 +493,7 @@ export type VerbFacts = {
 };
 export type VerbView = {
   readonly label: string;
-  /** `ready`: a press runs it. `busy`: a step runs. `waiting`: a check's charge waits on its own Approve. `refused`: the gate says no. */
+  /** `ready`: a press runs it. `busy`: a step runs. `waiting`: a check's charge waits on its dialog. `refused`: the gate says no. */
   readonly state: "ready" | "busy" | "waiting" | "refused";
   readonly refusal: GateRefusal | null;
   /** A press saves the workspace team first. */

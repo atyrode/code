@@ -15,8 +15,8 @@ import type { ListFailure } from "./board-model.ts";
 import { rescue } from "./consequences.ts";
 import { previewSelection } from "./dial-space.ts";
 import { DecisionDialog } from "./decision-dialog.tsx";
-import { chargeDecision, differsDecision, narrowedDecision, refusalDecision, type Decision, type DecisionChoice } from "./decision-model.ts";
-import { listServes, type GateRefusalCode } from "./launch-step.ts";
+import { answer, decisionFor, type DecisionChoice } from "./decision-model.ts";
+import { listServes } from "./launch-step.ts";
 import type { VerificationFailure } from "./model-verification.ts";
 import { DialRow, Glyph, toneColor } from "./dial-row.tsx";
 import { MachinePicker, type MachinePickerHandle } from "./machine-picker.tsx";
@@ -26,7 +26,7 @@ import { profileGroups, type LedgerRow } from "./routing-model.ts";
 import { Profile, rippleTeam } from "./routing-pane.tsx";
 import { generatorRows, ROW_EXTRAS, type GeneratorRow, type RowId, type RowWord } from "./rows-model.ts";
 import {
-  changeSentence, commitKind, estimateReadouts, fixView, launchLine, launchReadout, laneFix, poolCounts, quotaParts, reviewDifferences,
+  changeSentence, commitKind, estimateReadouts, fixView, launchLine, launchReadout, laneFix, poolCounts, quotaParts, refusalView, reviewDifferences,
   machineSlot, sameTeam, standstill, statementSlots, teamEdits, verbView, WORD_NAMES,
   type EstimateReadout, type SlotOption, type StatementContext, type StatusAction, type StatusFacts, type StatusFix, type StatusLine, type Vocabulary,
 } from "./statement-model.ts";
@@ -155,8 +155,9 @@ export function GeneratorPane(props: GeneratorPaneProps) {
   // A Launch press whose check narrowed the profile to what answered stopped before launching: the saved profile it stopped
   // on (`profileKey`) and the settings the check moved.
   const [narrowed, setNarrowed] = useState<{ readonly on: string; readonly differs: readonly string[] } | null>(null);
-  // A refused Launch press asks its question until it is answered or the refusal changes: the refusal it was pressed on.
-  const [refused, setRefused] = useState<GateRefusalCode | null>(null);
+  // A refused Launch press asks its question until it is answered or the refusal changes: the refusal it was pressed on, in
+  // the launch line's words.
+  const [refused, setRefused] = useState<string | null>(null);
   const { notify } = useNotice();
   // A Launch press that checks the models first: the profile it was pressed on, and the last check failure and message before it.
   const chain = useRef<{ readonly wanted: Selection | null; readonly failure: VerificationFailure | null; readonly message: unknown } | null>(null);
@@ -218,13 +219,12 @@ export function GeneratorPane(props: GeneratorPaneProps) {
     failed: !verification.failure.cancelled,
   } : null;
   // What a narrowed stop stands on: the saved profile (a write of another revision or team drops it), the rows holding no
-  // edit, and the machine. Changing a setting or the machine is the stop's other way on, so either drops it for good.
+  // edit, and the machine. Changing a setting or the machine is the stop's other way on, so either drops it for good, and so
+  // does a launch that cannot go on now (a machine gone offline): a stop is asked when it happens or never, not later
+  // without a press.
   const profileKey = JSON.stringify([model.record?.revision ?? null, model.record?.selection ?? null, model.localDraft !== null, model.machineId]);
   const shownNarrowed = narrowed !== null && narrowed.on === profileKey ? narrowed.differs : null;
-  useEffect(() => { if (narrowed !== null && narrowed.on !== profileKey) setNarrowed(null); });
-  // A refused press's question goes with its refusal: a refusal that lifted or changed is not asked again without a press.
-  const stillRefused = refused !== null && verb.state === "refused" && verb.refusal?.code === refused;
-  useEffect(() => { if (refused !== null && !stillRefused) setRefused(null); });
+  useEffect(() => { if (narrowed !== null && (narrowed.on !== profileKey || verb.state !== "ready")) setNarrowed(null); });
   // What a held review shows unlike what the panel showed, in the statement's words, while it stands.
   const differs = useMemo(() => model.held && catalog
     ? reviewDifferences(catalog, model.held.projected, model.held.providers, model.held.review.composition, vocab) : null, [model.held, catalog, vocab]);
@@ -239,14 +239,13 @@ export function GeneratorPane(props: GeneratorPaneProps) {
     ompMissing: model.ompMissing || presence?.get(model.machineId) === "absent", accountsProblem: model.accountsProblem, configurationFailed: model.configurationFailed,
   };
   const line = launchLine(status, vocab);
-  // The one question a press waits on, in precedence: a check's charge (from the launch or Models), a review that differs, a
-  // check that changed the profile, then a refused press. A check the panel runs on its own never asks.
-  const decision: Decision | null = charge && verification.mode !== null && verification.mode !== "background"
-    ? chargeDecision(charge, verification.mode, verification.keepsChecks !== false, vocab)
-    : differs && verb.state === "ready" ? differsDecision(differs)
-    : shownNarrowed && verb.state === "ready" ? narrowedDecision(shownNarrowed)
-    : stillRefused && verb.refusal ? refusalDecision(verb.refusal, status, vocab)
-    : null;
+  // A refused press's question goes with its refusal: a refusal that lifted or changed, even within its kind, is not asked
+  // again without a press.
+  const refusal = verb.state === "refused" && verb.refusal ? refusalView(verb.refusal, status, vocab) : null;
+  const stillRefused = refused !== null && refusal?.head === refused;
+  useEffect(() => { if (refused !== null && !stillRefused) setRefused(null); });
+  const decision = decisionFor({ charge, mode: verification.mode, keepsChecks: verification.keepsChecks !== false, ready: verb.state === "ready",
+    differs, narrowed: shownNarrowed, refused: stillRefused ? refusal : null }, vocab);
   const reviewed = model.launchReview && catalog ? {
     machine: machine?.name ?? model.launchReview.destination.machineId,
     pool: poolCounts(catalog, model.launchReview.composition.review.routes, model.launchReview.composition.accountPool),
@@ -422,7 +421,7 @@ export function GeneratorPane(props: GeneratorPaneProps) {
     const button = launchButton.current;
     if (verb.opens) { onOpen(verb.opens); return; }
     const still = prefersReducedMotion();
-    if (verb.state === "refused" && verb.refusal) { setRefused(verb.refusal.code); return; }
+    if (refusal) { setRefused(refusal.head); return; }
     if (verb.state !== "ready") {
       if (!still) button?.animate([{ transform: "none" }, { transform: "translateX(-2px)" }, { transform: "translateX(2px)" }, { transform: "none" }], { duration: 260 });
       say({ value: verb.label.toLowerCase(), text: launchSays.text, warn: true, color: null, staged });
@@ -463,20 +462,21 @@ export function GeneratorPane(props: GeneratorPaneProps) {
     setNarrowed({ on: profileKey, differs: moved.map(edit => `${WORD_NAMES[edit.word].toLowerCase()} ${edit.from} → ${edit.to}`) });
   });
   /**
-   * An answer to the question a press waits on. Every way out of a check's charge but Approve cancels the check first, so
-   * nothing is spent; Approve spends only the charge the dialog showed (`confirmsCharge`). Not now drops a held review, so
-   * the next press reviews again, and a narrowed stop or a refused press's question simply ends.
+   * An answer to the question a press waits on, done as `answer` says: Approve spends only the very charge the dialog showed
+   * (`confirmsCharge`); every other answer to a charge cancels the check first, so nothing is spent.
    */
   function decide(choice: DecisionChoice, detail: number) {
-    const does = choice.does;
-    if (decision?.kind === "charge") {
-      if (does.kind === "approve") { if (charge) model.actions.confirmCharge({ detail, repeat: false }, charge); return; }
-      verification.cancel();
-    } else if (decision?.kind === "differs" && does.kind === "dismiss") model.actions.dropHeld();
-    else if (decision?.kind === "narrowed") setNarrowed(null);
-    else if (decision?.kind === "refused") setRefused(null);
-    if (does.kind === "launch") fire();
-    else if (does.kind === "fix") runFix(does.action);
+    if (!decision) return;
+    for (const effect of answer(decision, choice)) {
+      switch (effect.kind) {
+        case "approve": if (charge) model.actions.confirmCharge({ detail, repeat: false }, charge); break;
+        case "cancel": verification.cancel(); break;
+        case "drop-held": model.actions.dropHeld(); break;
+        case "end": setNarrowed(null); setRefused(null); break;
+        case "launch": fire(); break;
+        case "fix": runFix(effect.action); break;
+      }
+    }
   }
 
   // What the panel's keys ask of the pane, current on every render.
@@ -524,18 +524,22 @@ export function GeneratorPane(props: GeneratorPaneProps) {
     return () => { live = false; observer.disconnect(); };
   }, [rows !== null]);
 
-  // ------------------------------------------------------------ notices: how a press ended, once each
-  // Said in Manifold's one notice stack as well as beside the launch, so it is seen wherever the person is looking; the stack
-  // announces it too. A cancelled check is the person's own doing and a check the panel ran on its own held up nothing, so
-  // neither is said there.
+  // ------------------------------------------------------------ outcomes: how a press ended, once each
+  // Said in Manifold's one notice stack as well as beside the launch, so it is seen wherever the person is looking. A cancelled
+  // check is the person's own doing and a check the panel ran on its own held up nothing, so neither reaches the stack. The
+  // panel's own polite region still announces each, since a notice row that arrives with its words is not reliably read out.
   const seen = useRef({ outcome: model.outcome, message: model.message, failure: verification.failure });
   useEffect(() => {
     const last = seen.current;
     seen.current = { outcome: model.outcome, message: model.message, failure: verification.failure };
     const outcome = model.outcome && model.outcome !== last.outcome ? model.outcome : null;
+    const stopped = stoppedVerifying && verification.failure !== last.failure ? stoppedVerifying : null;
+    if (outcome) announce(`${outcome.kind === "launched" ? "Launched" : "Resumed"} on ${outcome.machine}`);
+    else if (model.message?.failed && model.message !== last.message) announce(model.message.text);
+    else if (stopped) announce(stopped.text);
     const notice = outcome ? outcome.kind === "launched" ? `Launched on ${outcome.machine}. Type your task in its terminal.` : `Resumed on ${outcome.machine}.`
       : model.message && model.message !== last.message ? model.message.text
-      : stoppedVerifying?.failed && verification.failure !== last.failure ? stoppedVerifying.text : null;
+      : stopped?.failed ? stopped.text : null;
     if (notice) notify(notice, { key: PRESS_NOTICE });
   }, [model.outcome, model.message, verification.failure]);
 

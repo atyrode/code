@@ -256,9 +256,10 @@ export function ModelsSheet({ host, model, machine, onBack, backRef, onPlace }: 
     switch (phase) {
       case "inventory": return { label: "checking models…", busy: true, parts: [[`on ${where}`, null]], fixes: [cancel],
         said: { value: "checking models", text: "OMP reads the models your accounts reach; nothing is spent" }, press: busy };
-      // The charge is approved or cancelled in its dialog, over this sheet (decision-dialog.tsx); here it only waits.
+      // A charge waits only on a check the person started, whose dialog is then open over this sheet (decision-dialog.tsx): here
+      // it only waits, behind that dialog.
       case "charge": return { label: "checking models…", busy: true, parts: [[count(charged, "tiny request"), "strong"], ["waiting for your approval", null]], fixes: [],
-        said: { value: "checking models", text: "approve or cancel the check in its dialog" }, press: () => "Approve or cancel the check in its dialog." };
+        said: { value: "checking models", text: "waiting for your approval" }, press: busy };
       case "benchmark": return { label: "checking…", busy: true, parts: [["measuring models", null], [`${measured} of ${measuring}`, "strong"]], fixes: [cancel],
         said: { value: "checking", text: "cancel stops the probe; what it measured so far stays in OMP's history" }, press: busy };
       case "finishing": return { label: "checking…", busy: true, parts: [["putting the model list in use", null]], fixes: [],
