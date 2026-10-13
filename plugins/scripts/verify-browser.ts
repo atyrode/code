@@ -499,8 +499,10 @@ async function focusLaunch(browser: BrowserInstance): Promise<void> {
 }
 async function chooseMachine(browser: BrowserInstance, machineId: string, name: string): Promise<void> {
   // The picker reads "no machine" until the panel has picked one, once every online machine has answered; its word then
-  // changes width, so a press aimed before that pick can miss it.
+  // changes width, so a press aimed before that pick can miss it. The profile's rows can also arrive after the pick, moving
+  // the launch row down under a press aimed at the picker, so both are waited for before it is pressed.
   await until(browser, "the launch names its machine", `!!${machinePicker}?.textContent && ${machinePicker}.getAttribute('aria-label') !== 'Machine: none'`);
+  await until(browser, "the generator's rows are drawn", `document.querySelectorAll('${generator} [data-row]').length > 0`);
   if (await browser.evaluate<boolean>(`${machinePicker}.textContent === ${JSON.stringify(name)}`)) return;
   await click(browser, machinePicker);
   await until(browser, "the machine list opens", `${machineList} !== null`);
