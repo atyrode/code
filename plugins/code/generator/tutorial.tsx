@@ -12,7 +12,8 @@ const G = "plugin-atyrode_code_generator__";
 const OPENING_PX = 6, CARD_MAX_PX = 320, GAP_PX = 12, EDGE_PX = 8;
 /**
  * How long what a step lights waits before it may be tried: longer than the opening's 340 ms glide (styles.css, `tour-scrim`
- * and `tour-ring`) and than a double click's second press, motion or not. And how long the dim takes to go once the tour ends.
+ * and `tour-ring`) and as long as the usual double-click interval, motion or not. And how long the dim takes to go once the
+ * tour ends.
  */
 const SETTLE_MS = 500, LEAVE_MS = 220;
 
@@ -294,14 +295,33 @@ export function TutorialLayer({ phase, step, shown, onTake, onSkip, onNext, onBa
     return () => window.clearTimeout(timer);
   }, [walking, step, placed?.lit]);
   const tryable = placed?.lit.endsWith(":true") === true && !landing;
+  // Whether focus is the walk's: in the panel or its layer, or fallen to the page from there because what had it went away
+  // (removed or made inert), rather than taken elsewhere in Manifold by the person.
+  const focusOurs = useRef(false);
+  useEffect(() => {
+    if (!panel || !walking) return;
+    const document = panel.ownerDocument;
+    const into = (event: FocusEvent) => { focusOurs.current = event.target instanceof Node && panel.contains(event.target); };
+    const away = (event: FocusEvent) => {
+      const left = event.target;
+      if (event.relatedTarget !== null || !(left instanceof HTMLElement) || !panel.contains(left)) return;
+      // A press elsewhere leaves what had focus in place; what went away (a tried Show control) or turned inert does not.
+      queueMicrotask(() => { if (left.isConnected && left.closest("[inert]") === null) focusOurs.current = false; });
+    };
+    focusOurs.current = panel.contains(document.activeElement);
+    document.addEventListener("focusin", into, true);
+    document.addEventListener("focusout", away, true);
+    return () => { document.removeEventListener("focusin", into, true); document.removeEventListener("focusout", away, true); };
+  }, [panel, walking]);
   // The walk holds the panel but what may be tried now. Focus the hold leaves on something it made inert, or that fell to the
-  // page because what was tried went away (a Show control, once its pane shows), goes to Next, so the walk's keys go on.
+  // page from the panel because what was tried went away (a Show control, once its pane shows), goes to Next, so the walk's
+  // keys go on; focus the person took elsewhere in Manifold stays there.
   useLayoutEffect(() => {
     if (!walking || !panel) return;
     const document = panel.ownerDocument, focused = document.activeElement;
     const release = holdPanel(panel, tryable ? litParts.current : []);
-    const stranded = !focused || focused === document.body
-      || (focused !== panel && panel.contains(focused) && !focused.closest("[data-layer]") && focused.closest("[inert]") !== null);
+    const stranded = ((!focused || focused === document.body) && focusOurs.current)
+      || (focused !== null && focused !== panel && panel.contains(focused) && !focused.closest("[data-layer]") && focused.closest("[inert]") !== null);
     if (stranded) next.current?.focus({ preventScroll: true });
     return release;
   }, [walking, panel, step, placed?.lit, tryable]);

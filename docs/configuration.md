@@ -397,8 +397,8 @@ the card. Each step's card is its own and comes in as the opening lands, so movi
 moves focus to its Next and it is read out, and its control is scrolled into view.
 
 During the walk the panel is inert but for what a step offers to try with the pointer, and
-only half a second after the step begins (longer than the opening's glide and than a double
-click's second press, with motion or without), so a press, a key or an assistive tool reaches
+only half a second after the step begins (longer than the opening's glide and as long as the
+usual double-click interval, with motion or without), so a press, a key or an assistive tool reaches
 nothing else and the walk launches, spends and saves nothing: the profile's words, where
 pointing at one says in the readout what it would change and choosing one goes on by itself
 (a struck word only says why; it starts no model check), and a tab or Show control that opens
