@@ -553,6 +553,8 @@ role-weighted relative API list-price heuristic, lowest to highest, not an OAuth
 or an intelligence ranking; subscriptions spend quota windows, which usage shows.
 OpenAI priority uses the documented 2.0 API price multiplier; its speed multiplier
 and thinking factors are heuristic, not account-scoped price or latency guarantees.
+The index does not model cache hits or long-context premiums, and API list prices
+do not describe the remaining capacity or charge of an OAuth subscription pool.
 Speed comes from recorded throughput and first-token time, and only when every lead
 model has them: otherwise its glyphs stay unlit and the readout says
 "unmeasured · a model check measures it", rather than showing the index's middle level.
