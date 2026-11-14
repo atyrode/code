@@ -6,7 +6,7 @@ import { compileCatalog } from "../../domain/catalog.ts";
 import { CatalogDocumentSchema, type CatalogDocument, type Selection } from "../../domain/contracts.ts";
 import type { Exclusion } from "../../domain/probe.ts";
 import { orderedFamilies, providerPolicy } from "../../domain/providers.ts";
-import { defaultSelection, selectionForLane } from "../../domain/routing.ts";
+import { defaultSelection, newPremiumLead, selectionForLane } from "../../domain/routing.ts";
 import type { Configuration } from "../contract.ts";
 import { canWriteCodeWorkspace, codeOperationFailure, codeWorkflow } from "../machine-web.ts";
 import { accountWord, familyWord, hueOf, since, useMinuteTick } from "../ui.tsx";
@@ -108,8 +108,9 @@ export function ModelsSheet({ host, model, machine, onBack, backRef, onPlace }: 
     : running ? "A model check is running." : working ? "Wait for the change in progress." : !edits.open ? edits.refusal.text : null;
   // An unsaved edit made on the list a write would replace holds that write until it is saved or discarded (launch-step.ts
   // `editHoldsCatalogWrite`), saying what the write does to that list and what each fix does with the edit.
-  // A compatible saved selection carries over; without one, the staged list uses its balanced default
-  // or waits for an explicit premium confirmation. Only an edit of the team in use saves here.
+  // Compatible saved choices carry over unless a new main model exceeds the selected tier.
+  // That replacement, like a premium-only list without a balanced default, waits for explicit
+  // actual-tier confirmation. Only an edit of the team in use saves here.
   const savable = model.gate("save").open;
   const madeOn = model.localDraft?.source === "active" ? "the list in use" : model.localDraft?.source === "draft" ? "the staged list" : "the bundled starter";
   const editHold = (kind: CatalogWrite): string | null => {
@@ -130,7 +131,7 @@ export function ModelsSheet({ host, model, machine, onBack, backRef, onPlace }: 
   const [premium, setPremium] = useState<{
     readonly host: HostServices; readonly scope: string; readonly selection: Selection; readonly model: string; readonly effort: string; readonly tier: string;
   } | null>(null);
-  const promotionScope = JSON.stringify([record?.revision, draft?.digest, record?.selection, model.configurationCurrent, model.writable, model.selection, model.edited]);
+  const promotionScope = JSON.stringify([record?.revision, active?.digest, draft?.digest, record?.selection, model.configurationCurrent, model.writable, model.selection, model.edited]);
   const currentPremium = premium && premium.scope === promotionScope && premium.host.client === host.client &&
     premium.host.principal.id === host.principal.id && premium.host.containerId === host.containerId && writeRefusal === null && !editHold("use") ? premium : null;
   useEffect(() => { if (premium && !currentPremium) setPremium(null); }, [premium, currentPremium]);
@@ -162,6 +163,24 @@ export function ModelsSheet({ host, model, machine, onBack, backRef, onPlace }: 
     if (!record || !draft || !compiled || writeRefusal || editHold("use")) return;
     const { containerId, revision } = record, digest = draft.digest, verified = draft.provenance !== null, saved = record.selection;
     let selection = confirmed ?? (saved && previewSelection(compiled, saved) ? saved : undefined);
+    if (confirmed === undefined && selection !== undefined) {
+      try {
+        const previous = active && saved ? { catalog: compileCatalog(active.document), selection: saved } : null;
+        const lead = newPremiumLead(compiled, selection, previous);
+        if (lead) {
+          const candidate: Selection = { ...selection, capability: lead.tier };
+          const review = previewSelection(compiled, candidate);
+          if (!review) { setFailure("The replacement cannot retain this profile at the new model's actual tier. Import another list or check the models."); return; }
+          const effort = review.routes.find(route => route.role === "default")!.lead.thinking;
+          setPremium({ host, scope: promotionScope, selection: review.selection, model: `${lead.provider}/${lead.id}`, effort,
+            tier: lead.tier === 3 ? "strong" : lead.tier === 4 ? "elite" : TIERS[lead.tier - 1]! });
+          return;
+        }
+      } catch (reason) {
+        setFailure(codeOperationFailure(reason));
+        return;
+      }
+    }
     if (selection === undefined) {
       try {
         const providers = draft.provenance?.providers;
@@ -576,7 +595,7 @@ export function ModelsSheet({ host, model, machine, onBack, backRef, onPlace }: 
     </PanelDialog>
     <DecisionDialog decision={currentPremium ? {
       kind: "premium", title: "Use this premium profile?",
-      text: ["This list has no balanced default. Using it requires the explicit premium model and configured effort below.",
+      text: ["Using this list would select the premium model, actual tier and configured effort below. Confirm this explicit profile before putting it in use.",
         "This puts the staged list and this profile in use; it does not check models or launch a session."],
       items: [`${currentPremium.model} · ${currentPremium.tier} · configured ${currentPremium.effort}`],
       choices: [{ label: `Use ${currentPremium.tier} profile`, does: { kind: "approve" } }, { label: "Not now", does: { kind: "dismiss" } }],

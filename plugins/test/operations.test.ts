@@ -357,10 +357,14 @@ describe("container-owned policy configuration", () => {
     const selection: Selection = { lane: { kind: "provider", family: "openai", blend: "only" }, capability: 4, thinking: "max", advisor: "off",
       spark: false, priority: false, prewalk: false, planYolo: false, fallback: true, budget: "any" };
     expect(await invoke(f, "reviewCatalog", input)).toEqual({ refused: "code_invalid_selection" });
+    expect(await invoke(f, "reviewCatalog", { ...input, selection: { ...selection, capability: 2 } }))
+      .toEqual({ refused: "code_invalid_selection" });
     const review = await accepted(f, "reviewCatalog", { ...input, selection });
     expect(review.review.selection).toEqual(selection);
     expect(review.review.routes.find(route => route.role === "default")?.lead).toEqual({ key: "astra", thinking: "max" });
     expect(await invoke(f, "promoteCatalog", { ...input, reviewDigest: review.reviewDigest }))
+      .toEqual({ refused: "code_invalid_selection" });
+    expect(await invoke(f, "promoteCatalog", { ...input, selection: { ...selection, capability: 2 }, reviewDigest: review.reviewDigest }))
       .toEqual({ refused: "code_invalid_selection" });
     expect(await invoke(f, "promoteCatalog", { ...input, selection: { ...selection, prewalk: true }, reviewDigest: review.reviewDigest }))
       .toEqual({ refused: "code_preview_changed" });
@@ -371,6 +375,67 @@ describe("container-owned policy configuration", () => {
     expect(promoted.active).toEqual(record.draft);
     expect(promoted.draft).toBeNull();
     expect((await accepted(f, "reviewCatalog", { ...workspace, expectedRevision: promoted.revision, source: "active" })).review.selection).toEqual(selection);
+  });
+
+  test("a new premium-only draft cannot turn a saved everyday selection into a different premium lead", async () => {
+    const f = fixture(), original = await active(f);
+    const catalog: CatalogDocument = { schemaVersion: 1, models: [{ ...document().models[0]!,
+      key: "fable", id: "claude-fable-5-2", tier: 4 }] };
+    const draft = await accepted(f, "stageCatalog", { ...workspace, expectedRevision: original.revision, document: catalog });
+    const input = { ...workspace, expectedRevision: draft.revision, source: "draft" as const };
+    expect(await invoke(f, "reviewCatalog", { ...input, selection: original.selection! })).toEqual({ refused: "code_invalid_selection" });
+    const elite = { ...original.selection!, capability: 4 as const };
+    const reviewed = await accepted(f, "reviewCatalog", { ...input, selection: elite });
+    expect(await invoke(f, "promoteCatalog", { ...input, selection: original.selection!, reviewDigest: reviewed.reviewDigest }))
+      .toEqual({ refused: "code_invalid_selection" });
+    expect(await configuration(f)).toEqual(draft);
+    const promoted = await accepted(f, "promoteCatalog", { ...input, selection: elite, reviewDigest: reviewed.reviewDigest });
+    expect(promoted.selection).toEqual(elite);
+    expect(promoted.active?.document).toEqual(catalog);
+  });
+
+  test("active review, promotion and selection cannot introduce an over-ceiling lead, but retain an already selected identity", async () => {
+    const f = fixture(), catalog: CatalogDocument = { schemaVersion: 1, models: [...document().models,
+      { ...document().models[0]!, key: "astra", provider: "openai-codex", id: "gpt-6-astra", tier: 4 }] };
+    const draft = await staged(f, catalog);
+    const reviewed = await accepted(f, "reviewCatalog", { ...workspace, expectedRevision: draft.revision, source: "draft" });
+    const record = await accepted(f, "promoteCatalog", { ...workspace, expectedRevision: draft.revision, source: "draft", reviewDigest: reviewed.reviewDigest });
+    const selection: Selection = { ...record.selection!, lane: { kind: "provider", family: "openai", blend: "only" }, capability: 2 };
+    const input = { ...workspace, expectedRevision: record.revision };
+    expect(await invoke(f, "select", { ...input, selection })).toEqual({ refused: "code_invalid_selection" });
+    expect(await invoke(f, "reviewCatalog", { ...input, source: "active", selection })).toEqual({ refused: "code_invalid_selection" });
+    expect(await invoke(f, "promoteCatalog", { ...input, source: "active", selection, reviewDigest: reviewed.reviewDigest }))
+      .toEqual({ refused: "code_invalid_selection" });
+    expect(await configuration(f)).toEqual(record);
+    const elite = await accepted(f, "select", { ...input, selection: { ...selection, capability: 4 } });
+    const legacy = await accepted(f, "select", { ...workspace, expectedRevision: elite.revision, selection });
+    expect((await accepted(f, "reviewCatalog", { ...workspace, expectedRevision: legacy.revision, source: "active" })).review.selection).toEqual(selection);
+  });
+
+  test("a legacy over-ceiling lead survives metadata and key refreshes, never a provider or model identity change", async () => {
+    for (const change of ["metadata", "provider", "id"] as const) {
+      const f = fixture(), catalog: CatalogDocument = { schemaVersion: 1, models: [{ ...document().models[0]!,
+        key: "astra", provider: "openai-codex", id: "gpt-6-astra", tier: 4 }] };
+      const draft = await staged(f, catalog);
+      const elite: Selection = { lane: { kind: "provider", family: "openai", blend: "only" }, capability: 4, thinking: "medium", advisor: "off",
+        spark: false, priority: false, prewalk: false, planYolo: false, fallback: true, budget: "any" };
+      const reviewed = await accepted(f, "reviewCatalog", { ...workspace, expectedRevision: draft.revision, source: "draft", selection: elite });
+      const promoted = await accepted(f, "promoteCatalog", { ...workspace, expectedRevision: draft.revision, source: "draft", selection: elite, reviewDigest: reviewed.reviewDigest });
+      const legacy = await accepted(f, "select", { ...workspace, expectedRevision: promoted.revision, selection: { ...elite, capability: 2 } });
+      const refreshed: CatalogDocument = { schemaVersion: 1, models: [{ ...catalog.models[0]!, key: "refreshed-astra", contextWindow: 199_999,
+        provider: change === "provider" ? "openai" : "openai-codex", id: change === "id" ? "gpt-6.1-astra" : "gpt-6-astra" }] };
+      const stagedNext = await accepted(f, "stageCatalog", { ...workspace, expectedRevision: legacy.revision, document: refreshed });
+      const input = { ...workspace, expectedRevision: stagedNext.revision, source: "draft" as const, selection: legacy.selection! };
+      if (change !== "metadata") {
+        expect(await invoke(f, "reviewCatalog", input)).toEqual({ refused: "code_invalid_selection" });
+        expect(await configuration(f)).toEqual(stagedNext);
+        continue;
+      }
+      const nextReview = await accepted(f, "reviewCatalog", input);
+      const next = await accepted(f, "promoteCatalog", { ...input, reviewDigest: nextReview.reviewDigest });
+      expect(next.selection).toEqual(legacy.selection);
+      expect(next.active?.document).toEqual(refreshed);
+    }
   });
 
   test("discarding a staged list clears it at the revision it was seen in, keeping the list in use and the team", async () => {

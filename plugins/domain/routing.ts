@@ -345,6 +345,28 @@ export function routeService(catalog: CompiledCatalog, routes: readonly Route[],
 /** A model as OMP's catalog and a compiled catalog both name it. */
 export type ModelAddress = { readonly provider: string; readonly id: string };
 
+/**
+ * A newly selected main model above the requested tier needs an explicit premium choice.
+ * An unchanged active provider/model identity keeps its existing meaning across catalog edits.
+ * Callers validate the proposed selection before consulting this admission boundary.
+ */
+export function newPremiumLead(catalog: CompiledCatalog, selection: Selection,
+  previous: { catalog: CompiledCatalog; selection: Selection } | null): (ModelAddress & { tier: Selection["capability"] }) | null {
+  const family = selection.lane.kind === "mixed" ? "openai" : selection.lane.family;
+  const model = catalog.model(catalog.rung(family, selection.capability));
+  if (model.tier === 0 || model.tier <= selection.capability) return null;
+  if (previous !== null) {
+    try {
+      const lane = previous.selection.lane;
+      const before = previous.catalog.model(previous.catalog.rung(lane.kind === "mixed" ? "openai" : lane.family, previous.selection.capability));
+      if (before.provider === model.provider && before.id === model.id) return null;
+    } catch (error) {
+      if (!(error instanceof DomainError) || error.code !== "invalid_selection") throw error;
+    }
+  }
+  return { provider: model.provider, id: model.id, tier: model.tier };
+}
+
 /** The models routes name, leads and fallbacks, each once, in route order. */
 export function routedModels(catalog: CompiledCatalog, routes: readonly Route[]): ModelAddress[] {
   return [...new Set(routes.flatMap(route => [route.lead, ...route.fallback]).map(choice => choice.key))].map(key => catalog.model(key));

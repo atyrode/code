@@ -2629,6 +2629,7 @@ async function starterWorkbenchScenario(browser: BrowserInstance, server: TestSe
     }
     await emptyPoolStarterScenario(browser, server, writer, metadata);
     await premiumStagedCatalogScenario(browser, server, writer, metadata);
+    await premiumReplacementScenario(browser, server, writer, metadata);
     await starterConflictScenario(browser, server, writer);
     assert(trace.requests.some(request => request.name === "atyrode.omp.readModelCatalog"), "The browser itself consumes the real public bundled source");
     for (const request of trace.requests.filter(request => request.name === "atyrode.omp.readModelCatalog")) {
@@ -2725,6 +2726,10 @@ async function premiumStagedCatalogScenario(browser: BrowserInstance, server: Te
       assert(question.items[0]!.includes(`${premiumModel.provider}/${premiumModel.id}`) && question.items[0]!.includes(tier) &&
         question.items[0]!.includes("configured medium"), "The question names the real model, explicit premium tier and configured effort");
       assert.deepEqual(adoptions(), [], "Neither review nor promotion runs before premium confirmation");
+      await questionGeometry(browser, `${tier} premium`);
+      await questionCoarseTargets(browser, `${tier} premium`);
+      assert.equal(await browser.evaluate(asks("premium")), true, "Geometry and coarse-pointer sweeps leave the real premium question open");
+      assert.deepEqual(adoptions(), [], "Resizing and coarse-pointer inspection never review or promote a premium profile");
       if (screenshotDirectory !== undefined) {
         assert(isAbsolute(screenshotDirectory), "CODE_VERIFY_SCREENSHOTS must name an absolute artifact directory");
         mkdirSync(screenshotDirectory, { recursive: true });
@@ -2732,6 +2737,16 @@ async function premiumStagedCatalogScenario(browser: BrowserInstance, server: Te
         const data = result?.data;
         assert(typeof data === "string");
         writeFileSync(join(screenshotDirectory, `premium-${tier}-confirmation.png`), Buffer.from(data, "base64"));
+        try {
+          await panelWidth(browser, 390);
+          await still(browser);
+          const { result: narrow } = await browser.send("Page.captureScreenshot", { format: "png", fromSurface: true, captureBeyondViewport: false });
+          const narrowData = narrow?.data;
+          assert(typeof narrowData === "string");
+          writeFileSync(join(screenshotDirectory, `premium-${tier}-confirmation-narrow.png`), Buffer.from(narrowData, "base64"));
+        } finally {
+          await browser.send("Emulation.clearDeviceMetricsOverride", {});
+        }
       }
       await key(browser, "Escape", 27);
       await until(browser, "cancelling leaves the premium list staged and usable in Models", `${unasked} && ${goIs(modelsSheet, "use staged list")}`);
@@ -2761,6 +2776,101 @@ async function premiumStagedCatalogScenario(browser: BrowserInstance, server: Te
       await closeSheet(browser);
       await assertRoutes(browser, true);
       assert.deepEqual(await routedRoles(browser), expectedRoutes(document, selection), "The mounted shared routes consume the deliberately adopted premium profile");
+      noNativeEffects(trace.requests.slice(from));
+    }
+    fixture.check();
+  } finally {
+    await fixture.stop();
+    trace.stop();
+  }
+}
+
+/** A changed premium address needs actual-tier approval; the same active address survives legacy capability and metadata/key edits. */
+async function premiumReplacementScenario(browser: BrowserInstance, server: TestServer, writer: TokenGrant, metadata: OmpResult<"readModelCatalog">): Promise<void> {
+  const source = catalogFromMetadata(metadata, "any");
+  const trace = await watchActions(browser, server);
+  const reviews: ActionResult<"reviewCatalog">[] = [];
+  const fixture = await intercept(browser, server, async (name, input) => {
+    if (name !== "atyrode.code.reviewCatalog") return undefined;
+    const outcome = await callAction(server, writer.token, name, input);
+    if (!outcome.ok) return { ok: false, denial: outcome.denial };
+    reviews.push(outcome.result as ActionResult<"reviewCatalog">);
+    return { ok: true, result: outcome.result };
+  });
+  try {
+    for (const unchanged of [false, true]) {
+      const selected: Selection = { lane: { kind: "provider", family: "anthropic", blend: "only" }, capability: 2, thinking: "high", advisor: "off",
+        spark: false, priority: false, prewalk: true, planYolo: true, fallback: false, budget: "any" };
+      const original: CatalogDocument = { schemaVersion: 1, models: source.models.filter(model => model.provider === "anthropic" && model.tier === (unchanged ? 4 : 2)) };
+      const fable = source.models.find(model => model.provider === "anthropic" && model.tier === 4);
+      assert(fable && original.models.length === 1);
+      // Local keys and declared context metadata do not change the selected provider/model address.
+      const replacement: CatalogDocument = { schemaVersion: 1, models: [{ ...fable, key: `${fable.key}-replacement`,
+        contextWindow: fable.contextWindow === null ? 128_000 : Math.max(1, fable.contextWindow - 1) }] };
+      const workspace = await createContainer(server, unchanged ? "Unchanged legacy premium address" : "Explicit replacement premium address", "canvas");
+      const target = { containerId: workspace.id };
+      const initialized = await callAction(server, writer.token, "atyrode.code.initializeConfiguration", { ...target, expectedRevision: 0 });
+      assert(initialized.ok);
+      const first = await callAction(server, writer.token, "atyrode.code.stageCatalog", { ...target, expectedRevision: (initialized.result as Configuration).revision, document: original });
+      assert(first.ok);
+      const initialSelection = unchanged ? { ...selected, capability: 4 as const } : selected;
+      const firstInput = { ...target, expectedRevision: (first.result as Configuration).revision, source: "draft" as const, selection: initialSelection };
+      const reviewed = await callAction(server, writer.token, "atyrode.code.reviewCatalog", firstInput);
+      assert(reviewed.ok);
+      const promoted = await callAction(server, writer.token, "atyrode.code.promoteCatalog", { ...firstInput, reviewDigest: (reviewed.result as ActionResult<"reviewCatalog">).reviewDigest });
+      assert(promoted.ok);
+      let active = promoted.result as Configuration;
+      if (unchanged) {
+        const legacy = await callAction(server, writer.token, "atyrode.code.select", { ...target, expectedRevision: active.revision, selection: selected });
+        assert(legacy.ok, "The same active Fable address can retain an explicit legacy capability-2 selection");
+        active = legacy.result as Configuration;
+      }
+      const staged = await callAction(server, writer.token, "atyrode.code.stageCatalog", { ...target, expectedRevision: active.revision, document: replacement });
+      assert(staged.ok);
+      const before = await readConfiguration(server, writer, target), from = trace.requests.length;
+      const adoptions = () => trace.requests.slice(from).filter(request => /^atyrode\.code\.(reviewCatalog|promoteCatalog|select)$/.test(request.name));
+      await openGenerator(browser, server, workspace.id);
+      await assertRoutes(browser, false);
+      await openSheet(browser, "models");
+      await until(browser, "the replacement catalog waits in Models with the saved profile intact", goIs(modelsSheet, "use staged list"));
+      await click(browser, element(`${modelsSheet} [data-go]`));
+      if (!unchanged) {
+        const question = await questionOpens(browser, "premium", "a newly substituted Fable lead requires explicit actual-tier approval");
+        assert(question.items.some(item => item.includes(`${fable.provider}/${fable.id}`) && item.includes("elite") && item.includes("configured high")),
+          "The replacement question names actual Fable, elite and the preserved configured effort");
+        assert.deepEqual(adoptions(), [], "A compatible capability-2 preview cannot send a new Fable lead to review or promotion");
+        if (screenshotDirectory !== undefined) {
+          assert(isAbsolute(screenshotDirectory), "CODE_VERIFY_SCREENSHOTS must name an absolute artifact directory");
+          mkdirSync(screenshotDirectory, { recursive: true });
+          const { result } = await browser.send("Page.captureScreenshot", { format: "png", fromSurface: true, captureBeyondViewport: false });
+          const data = result?.data;
+          assert(typeof data === "string");
+          writeFileSync(join(screenshotDirectory, "premium-replacement-confirmation.png"), Buffer.from(data, "base64"));
+        }
+        await key(browser, "Escape", 27);
+        await until(browser, "cancelling a premium substitution keeps the replacement staged", `${unasked} && ${goIs(modelsSheet, "use staged list")}`);
+        assert.deepEqual(await readConfiguration(server, writer, target), before, "Cancelling preserves the active Sonnet list, saved capability and all preferences");
+        assert.deepEqual(adoptions(), [], "Cancelling a new premium lead performs neither review nor promotion");
+        await click(browser, element(`${modelsSheet} [data-go]`));
+        await questionOpens(browser, "premium", "a cancelled substitution needs a new deliberate approval");
+        await answer(browser, "approve");
+      }
+      await until(browser, unchanged ? "the unchanged legacy address promotes without a premium question" : "the confirmed premium replacement is put in use",
+        `${unasked} && ${element(modelsSheet)}.dataset.phase !== 'staged' && ${sheetState(modelsSheet)}.includes('not checked')`);
+      const review = reviews.at(-1);
+      assert(review);
+      const selection: Selection = unchanged ? selected : { ...selected, capability: 4 };
+      assert.deepEqual(review.review.selection, selection, "Actual-tier confirmation changes only capability; an unchanged legacy address keeps every saved preference");
+      assert.deepEqual(adoptions(), [
+        { name: "atyrode.code.reviewCatalog", input: { ...target, expectedRevision: before.revision, source: "draft", selection } },
+        { name: "atyrode.code.promoteCatalog", input: { ...target, expectedRevision: before.revision, source: "draft", reviewDigest: review.reviewDigest, selection } },
+      ], "Both adoption RPCs bind the same deliberate or unchanged legacy profile, with no subsequent select");
+      const used = await readConfiguration(server, writer, target);
+      assert.deepEqual([used.configuration?.active?.document, used.configuration?.selection, used.configuration?.draft], [replacement, selection, null],
+        "Replacement atomically adopts the exact new catalog and the permitted profile");
+      await closeSheet(browser);
+      await assertRoutes(browser, false);
+      assert.deepEqual(await routedRoles(browser), expectedRoutes(replacement, selection), "The mounted routes consume the approved address without changing effort or other preferences");
       noNativeEffects(trace.requests.slice(from));
     }
     fixture.check();

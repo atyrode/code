@@ -62,6 +62,13 @@ selection is validated and bound into that digest; promotion supplies the same s
 digest, source and revision. Omission uses the balanced default (or saved active selection),
 never a silent premium upgrade. This lets an explicitly selected strong/elite profile
 promote a sparse premium-only catalog without first applying a temporary default.
+A new main lead whose actual catalog tier exceeds the requested tier is refused,
+even if a sparse ladder fills that lower dial with a premium model. Select its actual
+strong/elite tier deliberately; Models' premium question makes that same explicit
+selection before review and promotion. Already reviewed active choices remain usable
+when the selected main provider and model id are unchanged, including legacy visible
+choices. Key or metadata-only refreshes do not invent a new model substitution; merely
+having the premium model somewhere in the old catalog is not prior selection.
 Discarding clears the staged list at the revision it was seen in and refuses `code_catalog_missing`
 when none is staged; the active list, the saved team and the account choices stay as
 they are.

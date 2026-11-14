@@ -4,7 +4,7 @@ import type { RuntimeAccountPool } from "@atyrode/manifold-omp";
 import { initialAccountChoices, selectedAccountPool } from "../domain/accounts.ts";
 import { compileCatalog } from "../domain/catalog.ts";
 import { DomainError, type CatalogDocument, type Selection } from "../domain/contracts.ts";
-import { defaultSelection, reviewCatalog } from "../domain/routing.ts";
+import { defaultSelection, newPremiumLead, reviewCatalog } from "../domain/routing.ts";
 import { CODE_PREFERENCES_EVENT, CatalogRevisionSchema, ConfigurationSchema, VerificationProvenanceSchema,
   ConfigurationLookupSchema, TargetSchema, type Configuration, type Workspace, type CatalogReview,
   type ActionInput, type VerificationProvenance } from "./contract.ts";
@@ -168,6 +168,9 @@ export function catalogReview(ctx: CodeContext, record: Configuration, source: "
   const selection = wanted ?? (source === "active" && record.selection ? record.selection
     : defaultSelection(compiled, providers ? provider => providers.includes(provider) : undefined));
   const review = reviewCatalog(compiled, selection, ctx.now());
+  if (newPremiumLead(compiled, review.selection, record.active && record.selection
+    ? { catalog: source === "active" ? compiled : compileCatalog(record.active.document), selection: record.selection } : null))
+    throw new DomainError("invalid_selection");
   const facts = { revision: record.revision, source, catalogDigest: catalog.digest, provenance: catalog.provenance, review };
   // Time-dependent estimates do not change the reviewed route and selection. Provenance is bound:
   // promoting a reviewed catalog promotes the verification it was reviewed with, and no other.

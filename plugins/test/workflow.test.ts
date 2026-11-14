@@ -222,15 +222,15 @@ test("null selections verify and adopt everyday served Sonnet, otherwise served 
 });
 
 test("verification promotes an explicit elite selection with its premium-only derived list in one write", async () => {
-  for (const explicit of [true, false]) {
+  for (const capability of [4, 2, null] as const) {
     const f = verificationFixture();
     f.omp.accounts.accounts = [f.slot("openai-codex", 3)];
     f.omp.inventory.models = [row("openai-codex", "gpt-6-astra", 10, 200_000, ["low", "medium", "high", "max"], true)];
     const pending = await prepared(f, 0);
     const selection: Selection = { ...preview, lane: { kind: "provider", family: "openai", blend: "only" },
-      capability: 4, thinking: "max", advisor: "off", spark: false };
-    if (!explicit) {
-      const stopped = await stopOf(pending.confirm(null));
+      capability: capability ?? 4, thinking: "max", advisor: "off", spark: false };
+    if (capability !== 4) {
+      const stopped = await stopOf(pending.confirm(capability === null ? null : selection));
       expect([stopped.step, stopped.reason]).toEqual(["derive", "code_invalid_selection"]);
       expect(f.calls).not.toContain("atyrode.code.stageCatalog");
       expect((await f.configuration()).configuration).toMatchObject({ revision: 1, selection: null, active: null, draft: null });
@@ -245,6 +245,59 @@ test("verification promotes an explicit elite selection with its premium-only de
     expect(f.calls.filter(door => effects.includes(door))).toEqual(["atyrode.code.initializeConfiguration", actionDoor("startInventory"),
       actionDoor("startBenchmark"), "atyrode.code.stageCatalog", "atyrode.code.promoteCatalog"]);
     expect(f.calls).not.toContain("atyrode.code.select");
+  }
+});
+
+test("a model merely listed in the old catalog cannot become an over-ceiling main lead during verification", async () => {
+  const f = verificationFixture(), levels = ["low", "medium", "high", "max"] as const;
+  f.omp.accounts.accounts = [f.slot("openai-codex", 3)];
+  f.omp.inventory.models = [
+    row("openai-codex", "gpt-6-luna", 0.1, 200_000, levels, true),
+    row("openai-codex", "gpt-6.1-terra", 1, 200_000, levels, true),
+    row("openai-codex", "gpt-6.1-sol", 2, 200_000, levels, true),
+    row("openai-codex", "gpt-6-astra", 10, 200_000, levels, true),
+  ];
+  const selection: Selection = { ...preview, lane: { kind: "provider", family: "openai", blend: "only" },
+    capability: 2, thinking: "medium", advisor: "off", spark: false };
+  const first = await (await prepared(f, 0)).confirm(selection);
+  expect(first.configuration.active?.document.models.some(model => model.id === "gpt-6-astra")).toBe(true);
+  const old = compileCatalog(first.configuration.active!.document);
+  expect(old.model(reviewCatalog(old, selection, 10_000).routes.find(route => route.role === "default")!.lead.key).id).toBe("gpt-6.1-terra");
+  f.omp.inventory.models = f.omp.inventory.models.filter(model => model.id === "gpt-6-astra");
+  const pending = await prepared(f, first.configuration.revision), from = f.calls.length;
+  const stopped = await stopOf(pending.confirm(selection));
+  expect([stopped.step, stopped.reason]).toEqual(["derive", "code_invalid_selection"]);
+  expect(f.calls.slice(from)).not.toContain("atyrode.code.stageCatalog");
+  expect((await f.configuration()).configuration).toEqual(first.configuration);
+  const chosen = await (await prepared(f, first.configuration.revision)).confirm({ ...selection, capability: 4 });
+  expect(chosen.configuration.selection?.capability).toBe(4);
+  expect(chosen.configuration.active?.document.models.map(model => model.id)).toEqual(["gpt-6-astra"]);
+});
+
+test("verification retains the same legacy premium identity through metadata refresh, but never changes its provider or id without an explicit tier", async () => {
+  for (const change of ["metadata", "provider", "id"] as const) {
+    const f = verificationFixture();
+    f.omp.accounts.accounts = [f.slot("openai-codex", 3), f.slot("openai", 4)];
+    f.omp.inventory.models = [row("openai-codex", "gpt-6-astra", 10, 200_000, ["low", "medium", "high", "max"], true)];
+    const elite: Selection = { ...preview, lane: { kind: "provider", family: "openai", blend: "only" },
+      capability: 4, thinking: "medium", advisor: "off", spark: false };
+    const first = await (await prepared(f, 0)).confirm(elite);
+    const legacy = await f.workflow.code("select", { containerId: target.containerId, expectedRevision: first.configuration.revision,
+      selection: { ...elite, capability: 2 } });
+    f.omp.inventory.models = [row(change === "provider" ? "openai" : "openai-codex",
+      change === "id" ? "gpt-6.1-astra" : "gpt-6-astra", 10, 199_999, ["low", "medium", "high", "max"], true)];
+    const pending = await prepared(f, legacy.revision), from = f.calls.length;
+    if (change !== "metadata") {
+      const stopped = await stopOf(pending.confirm(legacy.selection));
+      expect([stopped.step, stopped.reason]).toEqual(["derive", "code_invalid_selection"]);
+      expect(f.calls.slice(from)).not.toContain("atyrode.code.stageCatalog");
+      expect((await f.configuration()).configuration).toEqual(legacy);
+      continue;
+    }
+    const refreshed = await pending.confirm(legacy.selection);
+    expect(refreshed.configuration.selection).toEqual(legacy.selection);
+    expect(refreshed.configuration.active?.document.models[0]).toMatchObject({ provider: "openai-codex", id: "gpt-6-astra", tier: 4, contextWindow: 199_999 });
+    expect(refreshed.configuration.active?.digest).not.toBe(legacy.active?.digest);
   }
 });
 
@@ -556,6 +609,43 @@ test("adopting refuses another pool, a pool with no kept check, and a workspace 
   f.caller.principal = { id: "reader", kind: "human", name: "Reader", color: "#abcdef" };
   expect(await adopt(second.containerId, initialized.revision)).toEqual({ refused: "code_check_missing" });
   expect((await f.configuration(second)).configuration).toEqual(initialized);
+});
+
+test("adopting a check refuses a new over-ceiling lead and retains only an exact already selected premium identity", async () => {
+  for (const change of ["metadata", "provider", "id"] as const) {
+    const f = verificationFixture();
+    f.omp.accounts.accounts = [f.slot("openai-codex", 3), f.slot("openai", 4)];
+    f.omp.inventory.models = [row("openai-codex", "gpt-6-astra", 10, 200_000, ["low", "medium", "high", "max"], true)];
+    const elite: Selection = { ...preview, lane: { kind: "provider", family: "openai", blend: "only" },
+      capability: 4, thinking: "medium", advisor: "off", spark: false };
+    const first = await (await prepared(f, 0)).confirm(elite);
+    const initialized = await f.workflow.code("initializeConfiguration", { containerId: second.containerId, expectedRevision: 0 });
+    const input = { containerId: second.containerId, accounts: f.omp.accounts, poolIdentityDigest: first.provenance.poolIdentityDigest, budget: "any" as const };
+    expect(await handlers.adoptCheck!(f.ctx, { ...input, expectedRevision: initialized.revision, selection: { ...elite, capability: 2 } }))
+      .toEqual({ refused: "code_invalid_selection" });
+    expect((await f.configuration(second)).configuration).toEqual(initialized);
+    const adopted = await f.workflow.code("adoptCheck", { ...input, expectedRevision: initialized.revision, selection: elite });
+    const legacy = await f.workflow.code("select", { containerId: second.containerId, expectedRevision: adopted.revision, selection: { ...elite, capability: 2 } });
+    const document = { ...first.configuration.active!.document, models: first.configuration.active!.document.models.map(model => ({
+      ...model, key: `${model.key}.refreshed`, contextWindow: 199_999,
+      provider: change === "provider" ? "openai" : model.provider, id: change === "id" ? "gpt-6.1-astra" : model.id,
+    })) };
+    const { providers: _providers, ...verification } = first.provenance;
+    const staged = await f.workflow.code("stageCatalog", { containerId: target.containerId, expectedRevision: first.configuration.revision, document,
+      verification: { ...verification, benchmarkCompletedAt: 9_000, accounts: f.omp.accounts, budget: "any" } });
+    if (change !== "metadata") {
+      expect(await handlers.adoptCheck!(f.ctx, { ...input, expectedRevision: legacy.revision, selection: null }))
+        .toEqual({ refused: "code_invalid_selection" });
+      expect((await f.configuration(second)).configuration).toEqual(legacy);
+      const chosen = await f.workflow.code("adoptCheck", { ...input, expectedRevision: legacy.revision, selection: elite });
+      expect(chosen.selection).toEqual(elite);
+      expect(chosen.active).toEqual(staged.draft);
+      continue;
+    }
+    const refreshed = await f.workflow.code("adoptCheck", { ...input, expectedRevision: legacy.revision, selection: null });
+    expect(refreshed.selection).toEqual(legacy.selection);
+    expect(refreshed.active).toEqual(staged.draft);
+  }
 });
 
 test("the standing approval is the caller's own, written at its exact revision, and bounds what checks spend without asking", async () => {

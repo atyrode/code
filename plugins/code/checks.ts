@@ -3,7 +3,7 @@ import { epochMilliseconds, probeAddress } from "@atyrode/manifold-omp";
 import { selectedAccountPool } from "../domain/accounts.ts";
 import { compileCatalog } from "../domain/catalog.ts";
 import { CatalogDocumentSchema, DomainError, SelectionSchema, type CatalogDocument, type Selection } from "../domain/contracts.ts";
-import { clampSelection } from "../domain/routing.ts";
+import { clampSelection, newPremiumLead } from "../domain/routing.ts";
 import { ChecksSchema, MAX_CHECKS, VerificationProvenanceSchema, digest, id, revision, type ActionInput, type Checks,
   type Configuration, type ModelCheck, type VerificationProvenance } from "./contract.ts";
 import { CodeRefusal, type CodeContext } from "./context.ts";
@@ -129,7 +129,11 @@ export async function adoptCheck(ctx: CodeContext, args: ActionInput<"adoptCheck
   if (check.document.models.some(model => !pool.providers.includes(model.provider))) throw new CodeRefusal("invalid_provenance");
   if (inUse && inUse.poolIdentityDigest === check.poolIdentityDigest && inUse.benchmarkCompletedAt >= check.provenance.benchmarkCompletedAt)
     throw new CodeRefusal("check_current");
-  const selection = clampSelection(compileCatalog(check.document), args.selection ?? record.selection, provider => pool.providers.includes(provider));
+  const catalog = compileCatalog(check.document);
+  const selection = clampSelection(catalog, args.selection ?? record.selection, provider => pool.providers.includes(provider));
+  if (newPremiumLead(catalog, selection, record.active && record.selection
+    ? { catalog: compileCatalog(record.active.document), selection: record.selection } : null))
+    throw new DomainError("invalid_selection");
   return commitConfiguration(ctx, previous, { ...record,
     active: { document: check.document, digest: check.digest, provenance: check.provenance }, selection });
 }

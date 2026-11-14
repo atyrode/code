@@ -2,7 +2,7 @@ import { describe, expect, test } from "bun:test";
 import { compileCatalog } from "./catalog.ts";
 import { type CatalogDocument, type CatalogModel, type Route, type Selection } from "./contracts.ts";
 import { familyPolicy, providerPolicy } from "./providers.ts";
-import { clampSelection, compileOmpOverlay, defaultSelection, reviewCatalog, ReviewSchema, routedModels, routeService, selectionForLane, servedRoutes, unpublishedModels } from "./routing.ts";
+import { clampSelection, compileOmpOverlay, defaultSelection, newPremiumLead, reviewCatalog, ReviewSchema, routedModels, routeService, selectionForLane, servedRoutes, unpublishedModels } from "./routing.ts";
 
 function model(key: string, provider: string, tier: CatalogModel["tier"], changes: Partial<CatalogModel> = {}): CatalogModel {
   return {
@@ -268,6 +268,41 @@ describe("default selection", () => {
         advisor: "glance", thinking: "medium", spark: false,
       });
     }
+  });
+});
+
+describe("new premium main-model admission", () => {
+  test("a new over-ceiling main needs an explicit tier even when the old catalog already listed it", () => {
+    const before = compileCatalog(document());
+    const after = compileCatalog({ schemaVersion: 1, models: [model("a4", "anthropic", 4)] });
+    const chosen = selectionForLane({ kind: "provider", family: "anthropic", blend: "only" }, 2);
+    const proposed = { provider: "anthropic", id: "native-a4", tier: 4 };
+    expect(newPremiumLead(after, chosen, { catalog: before, selection: chosen })).toEqual(proposed);
+    expect(newPremiumLead(after, chosen, null)).toEqual(proposed);
+    expect(newPremiumLead(after, { ...chosen, capability: 4 }, null)).toBeNull();
+    expect(newPremiumLead(before, chosen, null)).toBeNull();
+    expect(newPremiumLead(after, chosen, { catalog: before, selection: { ...chosen, capability: 4 } })).toBeNull();
+  });
+
+  test("unchanged legacy active model identity survives key and metadata edits without changing compilation", () => {
+    const before = compileCatalog({ schemaVersion: 1, models: [model("a4", "anthropic", 4)] });
+    const after = compileCatalog({ schemaVersion: 1, models: [
+      model("renamed", "anthropic", 4, { id: "native-a4", inputCostPerMillion: 9, contextWindow: 100_000, tokensPerSecond: 91 }),
+    ] });
+    const chosen = selectionForLane({ kind: "provider", family: "anthropic", blend: "only" }, 2);
+    expect(newPremiumLead(after, chosen, { catalog: before, selection: chosen })).toBeNull();
+    const review = reviewCatalog(after, chosen, daytime);
+    expect(route(review.routes, "default").lead).toEqual({ key: "renamed", thinking: "medium" });
+    expect(compileOmpOverlay(after, chosen, review.routes).modelRoles?.default).toBe("anthropic/native-a4:medium");
+  });
+
+  test("the same model id on another provider is a new premium identity", () => {
+    const before = compileCatalog({ schemaVersion: 1, models: [model("a4", "anthropic", 4)] });
+    const after = compileCatalog({ schemaVersion: 1, models: [model("moved", "openai", 4, { id: "native-a4" })] });
+    const previous = selectionForLane({ kind: "provider", family: "anthropic", blend: "only" }, 2);
+    const chosen = selectionForLane({ kind: "provider", family: "openai", blend: "only" }, 2);
+    expect(newPremiumLead(after, chosen, { catalog: before, selection: previous }))
+      .toEqual({ provider: "openai", id: "native-a4", tier: 4 });
   });
 });
 

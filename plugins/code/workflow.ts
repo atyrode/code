@@ -12,11 +12,11 @@ import { createCodeClient, reviewedSessionOptions, sessionInput, type SessionOpt
   type Configuration, type Target, type VerificationProvenance } from "./contract.ts";
 import { HARNESS_OPERATION_ID, observePermissionPlan, operationReady, type PermissionPlanInput } from "./permission-plan.ts";
 import { selectedAccountPool } from "../domain/accounts.ts";
-import { compileCatalog } from "../domain/catalog.ts";
+import { compileCatalog, type CompiledCatalog } from "../domain/catalog.ts";
 import { projectUsage } from "../domain/usage.ts";
 import { providerPolicy } from "../domain/providers.ts";
 import type { Exclusion } from "../domain/probe.ts";
-import { clampSelection, laneFamilies } from "../domain/routing.ts";
+import { clampSelection, laneFamilies, newPremiumLead } from "../domain/routing.ts";
 import { DomainError, type AccountChoices, type Selection } from "../domain/contracts.ts";
 
 export type Dispatch = (door: string, input: unknown) => Promise<unknown>;
@@ -655,12 +655,13 @@ export function createCodeWorkflowClient(transport: Dispatch) {
     await unchangedCharge(charge, run);
     run.progress(charge.providers.map(({ provider, requests: total }) => ({ provider, done: 0, total })));
     let confirmed = false;
+    const previous = record.active && record.selection ? { catalog: compileCatalog(record.active.document), selection: record.selection } : null;
     return {
       kind: "charge", charge, approvedRequests: checks.approvedRequests,
       confirm: (selection, confirmOptions = options) => {
         if (confirmed) return Promise.reject(new WorkflowError("code_verification_confirmed"));
         confirmed = true;
-        return confirmVerification(charge, inUse, selection, verificationRun(confirmOptions, { ...evidence, benchmarkJobIds: [] }), confirmOptions.unasked === true);
+        return confirmVerification(charge, inUse, previous, selection, verificationRun(confirmOptions, { ...evidence, benchmarkJobIds: [] }), confirmOptions.unasked === true);
       },
     };
   }
@@ -669,8 +670,8 @@ export function createCodeWorkflowClient(transport: Dispatch) {
    * read again now, still covers it: an approval withdrawn since the charge was answered stops the
    * run before its first benchmark request.
    */
-  async function confirmVerification(charge: ChargeReview, inUse: ReadonlySet<string>, wanted: Selection | null, run: VerificationRun,
-    unasked: boolean): Promise<VerifiedModels> {
+  async function confirmVerification(charge: ChargeReview, inUse: ReadonlySet<string>, previous: { catalog: CompiledCatalog; selection: Selection } | null,
+    wanted: Selection | null, run: VerificationRun, unasked: boolean): Promise<VerifiedModels> {
     const { target } = charge;
     run.enter("benchmark");
     await unchangedCharge(charge, run);
@@ -705,8 +706,11 @@ export function createCodeWorkflowClient(transport: Dispatch) {
       throw run.fail(`code_models_unanswered: ${unanswered.slice(0, 8).join(", ")}${unanswered.length > 8 ? ` and ${unanswered.length - 8} more` : ""}`);
     // Narrow before anything is written, so an unsupported selection stops without staging a list.
     let selection: Selection;
-    try { selection = clampSelection(compileCatalog(derived.document), wanted, provider => charge.pool.providers.includes(provider)); }
-    catch (error) { throw run.fail(error instanceof Error ? error.message : "code_invalid_selection"); }
+    try {
+      const catalog = compileCatalog(derived.document);
+      selection = clampSelection(catalog, wanted, provider => charge.pool.providers.includes(provider));
+      if (newPremiumLead(catalog, selection, previous)) throw new DomainError("invalid_selection");
+    } catch (error) { throw run.fail(error instanceof Error ? error.message : "code_invalid_selection"); }
     await run.hold();
     run.enter("stage");
     const pool = await unchangedCharge(charge, run);

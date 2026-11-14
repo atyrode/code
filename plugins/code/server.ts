@@ -7,7 +7,7 @@ import { reduceAccountChoices, selectedAccountPool } from "../domain/accounts.ts
 import { compileCatalog } from "../domain/catalog.ts";
 import { DomainError } from "../domain/contracts.ts";
 import { catalogFromObservations, inventoryDraft } from "../domain/probe.ts";
-import { reviewCatalog } from "../domain/routing.ts";
+import { newPremiumLead, reviewCatalog } from "../domain/routing.ts";
 import { buildSuggestionRequest, parseSuggestionResponse, SuggestionError } from "../domain/suggestions.ts";
 import { RefusalSchema, rootActionSchemas, type ActionInput, type ActionResult, type RootAction } from "./contract.ts";
 import { CodeRefusal, digestOf, type CodeContext } from "./context.ts";
@@ -89,7 +89,10 @@ const productHandlers: ProductHandlers = {
     const previous = await readConfiguration(ctx, args, true); expectRevision(previous, args.expectedRevision);
     const record = requireConfiguration(previous);
     if (!record.active) throw new CodeRefusal("catalog_missing");
-    reviewCatalog(compileCatalog(record.active.document), args.selection, ctx.now());
+    const catalog = compileCatalog(record.active.document);
+    reviewCatalog(catalog, args.selection, ctx.now());
+    if (newPremiumLead(catalog, args.selection, record.selection ? { catalog, selection: record.selection } : null))
+      throw new DomainError("invalid_selection");
     return commitConfiguration(ctx, previous, { ...record, selection: args.selection });
   },
   readChecks,
