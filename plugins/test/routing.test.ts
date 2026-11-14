@@ -130,7 +130,7 @@ describe("the routing", () => {
 
   test("routing displays the model-metadata clamp without discarding the explicit effort choice", () => {
     const limited = compileCatalog({ schemaVersion: 1, models: catalog.models.map((entry): CatalogModel =>
-      entry.key === "o2" ? { ...entry, thinkingLevels: ["low", "medium", "high"] } : entry) });
+      entry.key === "o1" || entry.key === "o2" ? { ...entry, thinkingLevels: ["low", "medium", "high"] } : entry) });
     for (const thinking of ["high", "xhigh", "max"] as const) {
       const selected = reviewCatalog(limited, review({ thinking }).selection, now);
       const rows = routeLedger(limited, selected, displayAliases(limited), [], vocab);
