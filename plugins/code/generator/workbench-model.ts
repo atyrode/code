@@ -2,7 +2,7 @@ import { useEffect, useLayoutEffect, useMemo, useRef, useState } from "react";
 import type { HostServices } from "@manifold/plugin";
 import { formatManifoldUri, type MachineSummary } from "@manifold/protocol";
 import { compileCatalog, type CompiledCatalog } from "../../domain/catalog.ts";
-import { servedProviders } from "../../domain/accounts.ts";
+import { initialAccountChoices, servedProviders } from "../../domain/accounts.ts";
 import { defaultSelection, routeService, routedModels, type Review, type ServiceGap } from "../../domain/routing.ts";
 import { catalogFromMetadata } from "../../domain/probe.ts";
 import type { AccountChoiceChange, CatalogDocument, Selection } from "../../domain/contracts.ts";
@@ -250,8 +250,8 @@ export function useWorkbench({ host, target, machine, rosterError, available }: 
   const judgedAccounts = accounts.data ?? (lastAccounts.current && Date.now() - lastAccounts.current.at < ACCOUNT_GRACE_MS ? lastAccounts.current.data : null);
   const accountsFailed = accounts.error !== null && judgedAccounts === null;
   const servedKey = useMemo(() => {
-    if (!judgedAccounts || !configuration.data?.configuration || configuration.error !== null) return null;
-    const providers = servedProviders(judgedAccounts, configuration.data.configuration.accounts);
+    if (!judgedAccounts || !configuration.data || configuration.error !== null) return null;
+    const providers = servedProviders(judgedAccounts, configuration.data.configuration?.accounts ?? initialAccountChoices());
     return providers === null ? null : JSON.stringify([...providers].sort());
   }, [judgedAccounts, configuration.data, configuration.error]);
   const served = useMemo<ReadonlySet<string> | null>(() => servedKey === null ? null : new Set(JSON.parse(servedKey) as string[]), [servedKey]);
@@ -308,8 +308,10 @@ export function useWorkbench({ host, target, machine, rosterError, available }: 
   }, [document]);
   const initialSelection = useMemo(() => {
     if (!compiled) return null;
-    try { return defaultSelection(compiled); } catch { return null; }
-  }, [compiled]);
+    // An empty pool has no executable default. Keep catalog-only exploration visible; the launch
+    // gate and quota still receive the known empty pool and cannot treat the preview as entitlement.
+    try { return defaultSelection(compiled, served?.size ? provider => served.has(provider) : undefined); } catch { return null; }
+  }, [compiled, served]);
   const selection = dials?.selection ?? record?.selection ?? initialSelection;
   const profile = useMemo<ProfileDraft | null>(() => dials ?? (document && selection ? {
     source: record?.active ? "active" : record?.draft ? "draft" : "starter",
@@ -329,8 +331,8 @@ export function useWorkbench({ host, target, machine, rosterError, available }: 
       const restored = dials === null ? restoreDraft(kept, record, metadata.data, metadataKey) : null;
       if (restored) { setDials(restored); return; }
     }
-    if (dials === null && profile?.source === "starter") setDials(profile);
-  }, [kept, dials, profile, configurationCurrent, record, metadata.data, metadata.error, metadataKey]);
+    if (dials === null && profile?.source === "starter" && (accounts.data !== null || accounts.error !== null)) setDials(profile);
+  }, [kept, dials, profile, configurationCurrent, record, metadata.data, metadata.error, metadataKey, accounts.data, accounts.error]);
   // Keep the draft for a reload, unless it only repeats the team the view shows without it (an
   // untouched first-use preview, or an edit turned back): a kept copy of that could only go stale.
   const edited = editedDraft(dials, initialSelection);
@@ -370,7 +372,7 @@ export function useWorkbench({ host, target, machine, rosterError, available }: 
   // choices that no longer resolve, refuse it outright, and a fresh one with nothing included composes
   // nothing. A first read still out judges neither way; the run reads the accounts itself.
   const accountState: GateFacts["accounts"] = accountsFailed || (judgedAccounts !== null && judgedAccounts.status !== "fresh") ? "unreadable"
-    : judgedAccounts === null || !configuration.data?.configuration ? "usable"
+    : judgedAccounts === null || configuration.data === null ? "usable"
     : served === null ? "unreadable" : served.size === 0 ? "none" : "usable";
   // What made them unusable, in its own words, so the launch line never calls a mismatch of saved choices an unreadable read.
   const accountsProblem: WorkbenchModel["accountsProblem"] = accountState !== "unreadable" ? null

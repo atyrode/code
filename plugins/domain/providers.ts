@@ -26,7 +26,9 @@ export const providerPolicies: readonly ProviderPolicy[] = Object.freeze([
     // smaller context windows than the older terra and are priced alike, so neither price nor
     // context recovers that order; the names are the provider's own statement of it.
     tierNames: ["luna", "terra", "sol", "astra"],
-    priority: { key: "openai", value: "priority", costMultiplier: 1.9, speedMultiplier: 1.3 },
+    // The API priority price is twice standard pricing, not an OAuth subscription bill.
+    // The speed multiplier is an estimate heuristic, not measured priority throughput.
+    priority: { key: "openai", value: "priority", costMultiplier: 2.0, speedMultiplier: 1.3 },
   }),
   policy({
     family: "deepseek", providers: ["deepseek"], label: "DeepSeek", accountLabel: "DeepSeek",

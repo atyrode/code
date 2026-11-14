@@ -104,12 +104,15 @@ describe("what each role runs, from its own chain and the pools", () => {
     }
   });
 
-  test("GPT-led rescues reviews on Codex until Claude reopens; with fallbacks off the same reviews have no route", () => {
-    const result = outcomes(selection(), reading({}, { blocks: blocked }));
-    expect(result.get("reviewer")).toMatchObject({ kind: "falls-back", model: { key: "o3" }, pool: { id: "openai-codex:codex" }, until: now + 5 * HOUR });
+  test("a mixed team's planning and slow work fall back to Codex until Claude reopens, unless fallbacks are off", () => {
+    const lane: Selection["lane"] = { kind: "mixed" };
+    const result = outcomes(selection({ lane }), reading({}, { blocks: blocked }));
+    for (const role of ["plan", "slow"])
+      expect(result.get(role)).toMatchObject({ kind: "falls-back", model: { key: "o2" }, pool: { id: "openai-codex:codex" }, until: now + 5 * HOUR });
     expect(result.get("default")).toMatchObject({ kind: "leads", model: { key: "o2" }, pool: { id: "openai-codex:codex", verdict: { kind: "room" } } });
-    const off = outcomes(selection({ fallback: false }), reading({}, { blocks: blocked }));
-    expect(off.get("reviewer")).toEqual({ role: "reviewer", kind: "no-route", until: now + 5 * HOUR });
+    const off = outcomes(selection({ lane, fallback: false }), reading({}, { blocks: blocked }));
+    for (const role of ["plan", "slow"])
+      expect(off.get(role)).toEqual({ role, kind: "no-route", until: now + 5 * HOUR });
     expect(off.get("default")?.kind).toBe("leads");
   });
 
@@ -121,9 +124,10 @@ describe("what each role runs, from its own chain and the pools", () => {
     }
     // Codex exhausted everywhere: default's chain runs o1 (exhausted too), then Claude, which nobody serves.
     const spent = [window(1, { resetsAt: now + 2 * HOUR })];
-    const result = outcomes(selection(), reading({ alice: spent, bob: spent, dave: [window(1, { resetsAt: now + HOUR })] }, { excluded: ["carol"] }));
+    const result = outcomes(selection({ lane: { kind: "mixed" } }), reading({ alice: spent, bob: spent, dave: [window(1, { resetsAt: now + HOUR })] }, { excluded: ["carol"] }));
     expect(result.get("default")).toEqual({ role: "default", kind: "no-route", until: now + HOUR });
-    expect(result.get("reviewer")).toEqual({ role: "reviewer", kind: "no-account", provider: "anthropic" });
+    for (const role of ["plan", "slow"])
+      expect(result.get(role)).toEqual({ role, kind: "no-account", provider: "anthropic" });
   });
 
   test("with no account signed in at all, every role says so, never that it leads", () => {

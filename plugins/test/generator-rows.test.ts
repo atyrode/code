@@ -98,16 +98,16 @@ describe("the generator's rows", () => {
   });
 
   test("a lead or an only box whose variant the included accounts cannot run is struck, with the variant's reason", () => {
-    const codexOnly = lead(team(), null, catalog, new Set(["openai-codex"]));
-    // GPT-led reviews on Claude, which no included account serves.
+    const codexOnly = lead(team({ advisor: "glance" }), null, catalog, new Set(["openai-codex"]));
+    // The shared advisor crosses to Claude on GPT-led, which no included account serves.
     expect(codexOnly.only).toMatchObject({ checked: true, enabled: true, struck: true, word: { available: false, option: null } });
     expect(codexOnly.only!.word.reason).toBeTruthy();
     expect(codexOnly.words.find(word => word.key === "anthropic")).toMatchObject({ available: false, option: null });
   });
 
   test("a lead whose variant on the box's side cannot run lands on the one that can, and says so; it is struck only when neither can", () => {
-    // On Mixed with Claude unserved, GPT-led cannot run but GPT only can, so GPT stays pickable and says where it lands.
-    const codexOnly = lead(team({ lane: { kind: "mixed" } }), null, catalog, new Set(["openai-codex"]));
+    // With the shared advisor on and Claude unserved, GPT-led cannot run but GPT only can.
+    const codexOnly = lead(team({ lane: { kind: "mixed" }, advisor: "glance" }), null, catalog, new Set(["openai-codex"]));
     const gpt = codexOnly.words.find(word => word.key === "openai")!;
     expect(gpt).toMatchObject({ available: true, reason: null });
     expect(gpt.option?.selection?.lane).toEqual({ kind: "provider", family: "openai", blend: "only" });

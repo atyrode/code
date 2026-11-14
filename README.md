@@ -50,8 +50,8 @@ quota preservation and Code-owned upstream fallback repair are not planned.
   profile, OMP missing from the machine) with a fix; pressing it anyway opens a dialog
   with the reason, why it applies and the same fix. Whatever a press waits on the person
   for (a check's charge, a review that differs) is asked in such a dialog, and how a
-  press ended also reaches Manifold's notice stack. **Routing** beside it lists every
-  role's `model:thinking`, with a fallback-chains checkbox, and **usage** under both;
+  press ended also reaches Manifold's notice stack. **Routing** beside it lists OMP's
+  shared native roles and their `model:thinking`, with a fallback-chains checkbox, and **usage** under both;
   each can be hidden. Below 760 px routing and usage stand under the generator when the
   panel is tall enough for the generator and the whole routing at once, and are tabs of
   their own otherwise, the profile then grouped under the rows by provider and level. The
@@ -132,7 +132,7 @@ retained job or terminal placement is not provider success.
 
 ## Development and evidence
 
-Use Bun **1.4.2**, the pinned sibling Manifold checkout, the exact OMP Git client
+Use Bun **1.4.4**, the pinned sibling Manifold checkout, the exact OMP Git client
 pin and `scripts/gate.sh`. The gate prepares real OMP bundles, then runs Code's
 `check`, `test`, `pack` and disposable-server/browser `verify`; see
 [plugin development](plugins/README.md).

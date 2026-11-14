@@ -80,7 +80,7 @@ describe("governed classifier suggestions", () => {
     const input = document();
     input.models.push({ ...input.models.find(model => model.key === "a3")!, key: "a4", id: "native-a4", tier: 4 });
     const catalog = compileCatalog(input);
-    const selection = defaultSelection(catalog);
+    const selection: Selection = { ...defaultSelection(catalog), lane: { kind: "provider", family: "openai", blend: "only" } };
     const elite = response('critical — security migration\n{"model":"elite","thinking":"xhigh","advisor":"audit"}');
     expect(() => parseSuggestionResponse(catalog, selection, elite, nowMs)).toThrow("code_suggestion_unavailable");
     const only: Selection = { ...selection, lane: { kind: "provider", family: "anthropic", blend: "only" }, spark: false };

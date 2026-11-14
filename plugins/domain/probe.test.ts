@@ -151,11 +151,15 @@ describe("pure typed scaffolding", () => {
         expect(review.available.capabilities).toEqual([1, 2, 3, 4]);
         const overlay = compileOmpOverlay(catalog, review.selection, review.routes);
         expect(overlay.modelRoles?.default).toBe(`${provider}/series${capability}:${["low", "medium", "high", "max"][capability - 1]}`);
-        expect(review.routes.find(route => route.role === "plan")?.lead.key).toBe(`${provider}.series${Math.min(4, capability + 1)}`);
+        for (const role of ["plan", "slow"]) {
+          expect(review.routes.find(route => route.role === role)?.lead).toEqual({
+            key: `${provider}.series${capability}`, thinking: ["low", "medium", "high", "max"][capability - 1],
+          });
+        }
         if (capability === 4) {
           expect(review.routes.find(route => route.role === "task")?.fallback.map(choice => choice.key))
             .toEqual([`${provider}.series3`, `${provider}.series2`]);
-          expect(review.routes.find(route => route.role === "scout")?.lead.key).toBe(`${provider}.series2`);
+          expect(review.routes.find(route => route.role === "smol")?.lead.key).toBe(`${provider}.series1`);
           expect(review.routes.find(route => route.role === "commit")?.lead.key).toBe(`${provider}.series1`);
         }
       }
@@ -214,7 +218,7 @@ describe("pure typed scaffolding", () => {
         lane: { kind: "provider", family: primary, blend: "led" } }, 200);
       expect(review.available.capabilities).toEqual([1, 2, 3, 4]);
       expect(catalog.model(review.routes.find(route => route.role === "default")!.lead.key).tier).toBe(4);
-      expect(review.routes.find(route => route.role === "reviewer")?.lead.key).toBe(`${provider}.series3`);
+      for (const role of ["plan", "slow"]) expect(catalog.model(review.routes.find(route => route.role === role)!.lead.key).tier).toBe(4);
       expect(review.routes.find(route => route.role === "default")?.fallback.map(choice => choice.key))
         .toContain(`${provider}.series3`);
       const mixed = { ...selection, lane: { kind: "mixed" } as const };
@@ -622,7 +626,7 @@ describe("a family Code requires that the accounts reach only in part", () => {
     const review = (changes: Partial<Selection>) => reviewCatalog(catalog, { ...team, ...changes }, 200);
     const lead = (value: Review, role: string) => catalog.model(value.routes.find(route => route.role === role)!.lead.key).id;
     const gpt: Selection["lane"] = { kind: "provider", family: "openai", blend: "only" };
-    expect(team).toMatchObject({ lane: { kind: "mixed" }, capability: 3 });
+    expect(team).toMatchObject({ lane: { kind: "provider", family: "anthropic", blend: "only" }, capability: 2, thinking: "medium" });
     // GPT's smart tier is filled from its nearest rung: it routes to terra itself, and elite is not offered.
     expect(([1, 2, 3] as const).map(capability => lead(review({ lane: gpt, capability }), "default"))).toEqual(["gpt-6-luna", "gpt-5.6-terra", "gpt-5.6-terra"]);
     const smart = review({ lane: gpt, capability: 3 });
@@ -634,10 +638,14 @@ describe("a family Code requires that the accounts reach only in part", () => {
     // A filled lead crosses at its own tier: GPT-led smart leads on terra, a normal rung, so its crossing is Claude's normal.
     expect(review({ lane: { kind: "provider", family: "openai", blend: "led" }, capability: 3 }).routes.find(route => route.role === "default")!.fallback
       .map(choice => catalog.model(choice.key).id)).toEqual(["gpt-6-luna", "claude-sonnet-5-5", "claude-haiku-5-5"]);
-    // Claude keeps its four tiers, and Mixed crosses to them where its deliberative roles reach past GPT's top.
+    // Claude keeps its four explicit tiers; routine deliberation never silently promotes one.
     expect(([1, 2, 3, 4] as const).map(capability => lead(review({ lane: { kind: "provider", family: "anthropic", blend: "only" }, capability }), "default")))
       .toEqual(["claude-haiku-5-5", "claude-sonnet-5-5", "claude-opus-5-5", "claude-fable-5-1"]);
-    expect([lead(review({}), "default"), lead(review({}), "plan")]).toEqual(["gpt-5.6-terra", "claude-fable-5-1"]);
+    expect([lead(review({}), "default"), lead(review({}), "plan"), lead(review({}), "slow")])
+      .toEqual(["claude-sonnet-5-5", "claude-sonnet-5-5", "claude-sonnet-5-5"]);
+    const mixed = review({ lane: { kind: "mixed" }, capability: 3 });
+    expect([lead(mixed, "default"), lead(mixed, "plan"), lead(mixed, "slow")])
+      .toEqual(["gpt-5.6-terra", "claude-opus-5-5", "claude-opus-5-5"]);
     // No lane at any tier it offers routes, leads or falls back on, a model the receipts left out.
     const left = new Set(derived.exclusions.map(exclusion => exclusion.id));
     const routed = new Set(review({}).available.lanes.flatMap(lane => review({ lane, capability: 1 }).available.capabilities
@@ -663,14 +671,29 @@ describe("a family Code requires that the accounts reach only in part", () => {
     expect(() => catalogFromObservations(nothing.inventory, nothing.benchmark)).toThrow("probe_insufficient_ladder");
   });
 
-  test("a plan serving every GPT model ladders luna, terra, sol and astra, OpenAI's own order", () => {
+  test("a hypothetical pool serving every GPT model preserves its named rungs and balanced native routing", () => {
     // The receipts list terra at 1M beside sol's and astra's 922k: ranked by window, terra topped the
     // family, sol sat under it and astra was left out.
+    // Changed verdicts below are hypothetical coverage, not new provider-probe evidence.
     const reachable = Object.fromEntries(operatorRows.flatMap(([provider, id, , , , , , verdict]) =>
       provider === "openai-codex" && verdict !== null ? [[id, "reachable" as const]] : []));
     const { inventory, benchmark } = operatorReceipts(reachable);
-    expect(tiers(catalogFromObservations(inventory, benchmark).document, "openai-codex"))
+    const document = catalogFromObservations(inventory, benchmark).document, catalog = compileCatalog(document);
+    expect(tiers(document, "openai-codex"))
       .toEqual([[1, "gpt-6-luna"], [2, "gpt-5.6-terra"], [3, "gpt-6.1-sol"], [4, "gpt-6-astra"]]);
+    const onlyOpenai = (provider: string) => provider === "openai-codex";
+    const chosen = defaultSelection(catalog, onlyOpenai), review = reviewCatalog(catalog, chosen, 200);
+    const overlay = compileOmpOverlay(catalog, chosen, review.routes, onlyOpenai);
+    expect(chosen).toMatchObject({ lane: { kind: "provider", family: "openai", blend: "only" }, capability: 3, thinking: "medium" });
+    expect(overlay.modelRoles).toEqual({
+      default: "openai-codex/gpt-6.1-sol:medium", task: "openai-codex/gpt-6.1-sol:medium",
+      plan: "openai-codex/gpt-6.1-sol:high", slow: "openai-codex/gpt-6.1-sol:high",
+      advisor: "openai-codex/gpt-6-luna:low", vision: "openai-codex/gpt-6.1-sol:low",
+      smol: "openai-codex/gpt-6-luna:medium", tiny: "openai-codex/gpt-6-luna:low", commit: "openai-codex/gpt-6-luna:low",
+    });
+    expect(review.routes.flatMap(route => [route.lead, ...route.fallback]).some(choice => catalog.model(choice.key).id === "gpt-6-astra")).toBe(false);
+    const elite = reviewCatalog(catalog, { ...chosen, capability: 4 }, 200);
+    expect(compileOmpOverlay(catalog, elite.selection, elite.routes, onlyOpenai).modelRoles?.slow).toBe("openai-codex/gpt-6-astra:high");
   });
 
   test("a plan serving terra and astra alone ladders each at its own tier, the tiers between routing to terra", () => {
@@ -693,7 +716,7 @@ describe("passive starter metadata", () => {
     const compiled = compileCatalog(document), selection = defaultSelection(compiled);
     const review = reviewCatalog(compiled, selection, 1000);
     expect(review.routes.map(route => route.role)).toEqual([
-      "default", "task", "plan", "slow", "reviewer", "security-reviewer", "scout", "sonic", "advisor", "vision", "smol", "tiny", "commit",
+      "default", "task", "plan", "slow", "advisor", "vision", "smol", "tiny", "commit",
     ]);
     for (const model of document.models) {
       const source = snapshot.models.find(row => row.provider === model.provider && row.id === model.id)!;
@@ -721,7 +744,8 @@ describe("passive starter metadata", () => {
   test("a starter whose bundled list holds one GPT model ladders GPT short rather than leaving no starter", () => {
     const snapshot = metadata();
     snapshot.models = snapshot.models.filter(model => model.provider !== "openai-codex" || model.id === "gpt-mini-6");
-    const compiled = compileCatalog(catalogFromMetadata(snapshot, "any")), selection = defaultSelection(compiled);
+    const compiled = compileCatalog(catalogFromMetadata(snapshot, "any"));
+    const selection = defaultSelection(compiled, provider => provider === "openai-codex");
     expect([compiled.short, [1, 2, 3].map(tier => compiled.model(compiled.rung("openai", tier)).id)]).toEqual([["openai"], ["gpt-mini-6", "gpt-mini-6", "gpt-mini-6"]]);
     expect(compiled.model(reviewCatalog(compiled, selection, 1000).routes.find(route => route.role === "default")!.lead.key).id).toBe("gpt-mini-6");
   });

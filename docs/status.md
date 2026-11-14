@@ -44,7 +44,7 @@ fresh quota observation afterward. Run-scoped credentials and grants were
 revoked after each proof. Existing credential backups were retained, and no
 production deployment, backup disposal or personal-session mutation occurred.
 
-See [plugin development](../plugins/README.md) for the Bun 1.4.2 and pinned
+See [plugin development](../plugins/README.md) for the Bun 1.4.4 and pinned
 Code/OMP/Manifold gate, and [configuration](configuration.md) for the exact
 actions. Source retirement does not authorize moving or deleting existing user
 files, service state, credentials or backups.
@@ -166,8 +166,8 @@ files, service state, credentials or backups.
   sealed resource reads, restricted tools, native resume, explicit model/thinking
   precedence, missing/changed-state refusal and cancellation. Synthetic inference
   in isolated network namespaces is not paid-provider or live-fleet acceptance.
-- The credential runtime uses OMP's published 18.8.6 graph with its retained
-  patch; the ordinary CLI and the independent, unpatched SDK host use 18.8.6 too.
+- The earlier OMP 0.2.0 qualification used the published 18.8.6 credential graph
+  with its retained patch; its ordinary CLI and independent unpatched SDK host also used 18.8.6.
   Native lifecycle accounting uses public SDK hooks and passes the retained
   deadline/quiescence regressions without copying credential algorithms. This
   does not qualify the separate unpatched credential migration in
@@ -192,7 +192,7 @@ files, service state, credentials or backups.
   The gate runs real Code-to-native tool and bounded-material proof against Code's
   current pins. Source and disposable verification do not establish a released Code bundle
   or deployed production capability, and no transition-ledger row advances.
-  Code now pins Manifold
+  That baseline pinned Manifold
   [`8260541`](https://github.com/atyrode/manifold/commit/82605419ea9a67198d9ea0dae1257a8fd812ecd8)
   ([manifold#1078](https://github.com/atyrode/manifold/pull/1078)), protocol 57, and OMP
   [`0639a16`](https://github.com/atyrode/manifold-omp/commit/0639a16900ae145677370a4ced669afcc5d19faf)
@@ -217,9 +217,9 @@ files, service state, credentials or backups.
   `SHA256SUMS` of the family under verification
   ([manifold-omp#119](https://github.com/atyrode/manifold-omp/pull/119)); Code's
   `verify:native` names the sums of the OMP bundles its gate prepared and installed.
-  OMP's inventory receipt is now its 18.8.6 one, and each row carries the SDK's
-  `quotaTier`, which the derivation reads directly. OMP's bundled catalog is stamped
-  with its separately pinned SDK's version, now also 18.8.6. No version string decides
+  That baseline's inventory receipt was its 18.8.6 one, and each row carried the SDK's
+  `quotaTier`, which the derivation reads directly. Its bundled catalog was stamped
+  with its separately pinned SDK's version, then also 18.8.6. No version string decides
   whether a verification holds: it records the artifact its inventory ran from and the bundled
   catalog's revision. An OMP update alone, another artifact or another catalog revision that
   still publishes every routed model, leaves it current and is noted in Models; it goes stale

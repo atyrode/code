@@ -129,7 +129,7 @@ export async function adoptCheck(ctx: CodeContext, args: ActionInput<"adoptCheck
   if (check.document.models.some(model => !pool.providers.includes(model.provider))) throw new CodeRefusal("invalid_provenance");
   if (inUse && inUse.poolIdentityDigest === check.poolIdentityDigest && inUse.benchmarkCompletedAt >= check.provenance.benchmarkCompletedAt)
     throw new CodeRefusal("check_current");
-  const selection = clampSelection(compileCatalog(check.document), args.selection ?? record.selection);
+  const selection = clampSelection(compileCatalog(check.document), args.selection ?? record.selection, provider => pool.providers.includes(provider));
   return commitConfiguration(ctx, previous, { ...record,
     active: { document: check.document, digest: check.digest, provenance: check.provenance }, selection });
 }

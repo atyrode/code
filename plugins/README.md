@@ -163,7 +163,7 @@ account choices; it does not fetch a provider or mutate broker state.
 
 ## Pinned dependencies and gate
 
-Use Bun 1.4.2 and two immutable revisions:
+Use Bun 1.4.4 and two immutable revisions:
 
 ```text
 <parent>/
@@ -190,7 +190,7 @@ what it replaced. From `plugins/`:
 bun add "github:atyrode/manifold-omp#<commit>"
 ```
 
-Then repeat the same commit in the publishable root `package.json`. Verify by
+Then repeat the same `bun add` operation in the publishable root package. Verify by
 reading the resolved entry rather than trusting that the install succeeded:
 `grep manifold-omp plugins/bun.lock` shows the requested commit in full and the resolved one
 ABBREVIATED, so a resolution still naming the old build is visible as a different short hash
@@ -241,12 +241,17 @@ drafts, four-level routing, permission denial and stale-review behavior. Its
 native resources remain deliberately unconfigured, so it claims no provider
 request, consent success or account-backed session.
 
+Set `CODE_VERIFY_SCREENSHOTS` to an absolute, disposable artifact directory when
+running the gate to retain mounted generator PNGs for everyday, strong, elite,
+main-max and narrow main-max choices. These are visual-inspection evidence, not
+golden tests or native/provider success.
+
 `verify:native` then reuses the exact prepared OMP source's disposable native
 launcher and synthetic unpaid model gateway. It installs Code's real bundles,
 configures the profile through public Code doors and exercises Code-to-OMP
 run/read/cancel, selected/refused tool effects, policy acknowledgement, durable
 correlation, uncertain cancellation without replay and omitted-selection behavior.
-This separate native proof requires Linux x64, Bun 1.4.2, delegated systemd,
+This separate native proof requires Linux x64, Bun 1.4.4, delegated systemd,
 `unshare`, `OMP_VERIFY_SYSTEM`, `OMP_VERIFY_BWRAP` and
 `MANIFOLD_TEST_STATIC_BUSYBOX`; `OMP_VERIFY_SYSTEMD_MODE=user` selects a local
 user manager. The system declaration lists reviewed individual runtime files,

@@ -58,10 +58,9 @@ function Token({ value, reason, delay, onPoint, onChanged }: {
   </span>;
 }
 
-/** A row lights in turn: a bar beside its mark fades, and its role name passes through the accent. */
+/** A row lights in turn: its role name passes through the accent. */
 function flash(row: HTMLElement | null, delay: number) {
   if (!row || prefersReducedMotion()) return;
-  row.querySelector(`.${G}route-mark`)?.animate([{ opacity: 1 }, { opacity: 0 }], { duration: 760, delay, easing: EASE, pseudoElement: "::before" });
   const role = row.querySelector<HTMLElement>(`.${G}route-role`);
   const accent = getComputedStyle(row).getPropertyValue("--tui-acc").trim();
   role?.animate([{ color: accent }, { color: accent, offset: 0.2 }, { color: getComputedStyle(role).color }], { duration: 760, delay, easing: EASE, fill: "backwards" });
@@ -82,7 +81,6 @@ function RouteRow({ row, index, chains, onPoint }: { row: LedgerRow; index: numb
   const delay = index * 18;
   const fallback = chains && !row.off ? row.fallback : [];
   return <li ref={element} className={`${G}route`} data-role={row.role} data-off={row.off || undefined}>
-    <span className={`${G}route-mark`}>{row.agentBacked ? "●" : ""}{row.agentBacked && <span className="plugin-atyrode_code__sr">, agent</span>}</span>
     <span className={`${G}route-role`} title={row.role}>{row.role}</span>
     <span className={`${G}chain`}>
       <Token value={row.lead} reason={row.down} delay={delay} onPoint={onPoint} onChanged={() => flash(element.current, delay)} />
@@ -107,10 +105,10 @@ export type RoutingPaneProps = {
 };
 
 /**
- * ROUTING: every role on one line, `model:thinking` in its provider's hue, ● for the roles an
- * agent backs, the advisor's line held while it is off. A change rolls each value that moves and
- * flashes its row, top to bottom; a lead quota leaves out is struck and says why under the pointer;
- * `f` shows the fallback chains behind each lead while fallbacks are on.
+ * ROUTING: every shared role on one line, `model:thinking` in its provider's hue, with the advisor's
+ * line held after slow while it is off. A change rolls each value that moves and flashes its row,
+ * top to bottom; a lead quota leaves out is struck and says why under the pointer; `f` shows the
+ * fallback chains behind each lead while fallbacks are on.
  */
 export function RoutingPane({ ledger, chains, fallbacks, onChains, hide, hidden }: RoutingPaneProps) {
   const [pointed, setPointed] = useState<Pointed | null>(null);
@@ -139,9 +137,9 @@ export function RoutingPane({ ledger, chains, fallbacks, onChains, hide, hidden 
 /**
  * The grouped profile, under the generator's rows whenever routing is not shown with them: the roles
  * grouped by what they run (`profileGroups`: by provider, then by level), each group's
- * `model:thinking` then its roles, ● for the agent-backed. When a change moves a role between groups
- * it glides from where it was to where it lands. A name too long for its room ends in an ellipsis and
- * says itself whole in its title.
+ * `model:thinking` then its roles. When a change moves a role between groups it glides from where
+ * it was to where it lands. A name too long for its room ends in an ellipsis and says itself whole
+ * in its title.
  */
 export function Profile({ groups }: { groups: readonly ProfileGroup[] }) {
   const box = useRef<HTMLDivElement>(null);
@@ -180,7 +178,7 @@ export function Profile({ groups }: { groups: readonly ProfileGroup[] }) {
       </span>
       <span className={`${G}profile-roles`}>
         {group.roles.map(role => <span key={role.role} className={`${G}profile-role`} data-role={role.role} title={role.role}>
-          {role.agentBacked && <span className={`${G}profile-mark`} aria-label="agent">●</span>}{role.role === "security-reviewer" ? "security" : role.role}
+          {role.role}
         </span>)}
       </span>
     </Fragment>)}

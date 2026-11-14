@@ -170,9 +170,12 @@ export function GeneratorPane(props: GeneratorPaneProps) {
   // The saved workspace profile, while the rows hold an unsaved edit of it: what `z` returns to and the launch's save would change.
   const saved = model.localDraft?.source === "active" ? model.record?.selection ?? null : null;
   const rosterError = model.rosterError !== null;
+  // A starter with no included account is a render-only model preview. Its dials may explore the
+  // catalog; the workbench keeps the exact empty pool for every save, check and launch refusal.
+  const optionServed = model.profile?.source === "starter" && served?.size === 0 ? null : served;
   const context = useMemo<StatementContext | null>(() => catalog && selection && controlsReview ? {
-    catalog, selection, review: controlsReview, served, nowMs: Date.now(), pools, machines, rosterError, machineId: model.machineId, omp: presence,
-  } : null, [catalog, selection, controlsReview, served, pools, machines, rosterError, model.machineId, presence]);
+    catalog, selection, review: controlsReview, served: optionServed, nowMs: Date.now(), pools, machines, rosterError, machineId: model.machineId, omp: presence,
+  } : null, [catalog, selection, controlsReview, optionServed, pools, machines, rosterError, model.machineId, presence]);
   const slots = useMemo(() => context && statementSlots(context, vocab), [context, vocab]);
   // The machine is chosen from the roster alone: a profile that cannot be formed (a first use whose bundled list failed) still has somewhere to run.
   const machineOptions = useMemo(() => machineSlot({ machines, rosterError, machineId: model.machineId, omp: presence }).options,
@@ -368,7 +371,11 @@ export function GeneratorPane(props: GeneratorPaneProps) {
 
   function resetTo(which: "defaults" | "saved") {
     if (!catalog || !selection || !controlsReview) return;
-    const target = which === "defaults" ? defaultSelection(catalog) : saved;
+    let target = saved;
+    if (which === "defaults") {
+      try { target = defaultSelection(catalog, optionServed === null ? undefined : provider => optionServed.has(provider)); }
+      catch { refuse("No default profile can be formed from the included accounts and this model list.", which); return; }
+    }
     if (!target) return;
     const before = controlsReview;
     if (which === "saved") {

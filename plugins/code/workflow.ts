@@ -706,7 +706,7 @@ export function createCodeWorkflowClient(transport: Dispatch) {
     // Narrowed before anything is written, so a selection the verified catalog cannot serve stops
     // here with nothing staged, rather than after a promotion saved its default instead.
     let selection: Selection;
-    try { selection = clampSelection(compileCatalog(derived.document), wanted); }
+    try { selection = clampSelection(compileCatalog(derived.document), wanted, provider => charge.pool.providers.includes(provider)); }
     catch (error) { throw run.fail(error instanceof Error ? error.message : "code_invalid_selection"); }
     await run.hold();
     run.enter("stage");

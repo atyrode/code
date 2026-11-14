@@ -67,7 +67,7 @@ const EXTRA: Readonly<Record<MoreDial, Extra>> = {
   fallbacks: { word: "fallbacks", on: "on", off: "off",
     does: { on: "A role whose model is out falls back along its chain", off: "A role whose model is out waits for it" } },
   priority: { word: "priority", on: "on", off: "off",
-    does: { on: "Requests ask for priority service: faster, at a higher rate", off: "Requests use ordinary service" } },
+    does: { on: "Requests ask for priority service; cost uses API list pricing, not subscription billing", off: "Requests use ordinary service" } },
   prewalk: { word: "prewalk", on: "on", off: "off",
     does: { on: "Tasks and subagents start with OMP's prewalk", off: "Tasks and subagents start without a prewalk" } },
   plans: { word: "auto plans", on: "auto", off: "ask",
@@ -430,7 +430,7 @@ function poolWord(pool: QuotaPool | null, vocab: Vocabulary): string {
 export type FixView = { readonly label: string; readonly result: string; readonly selection: Selection; readonly review: Review };
 
 /**
- * "Claude-led keeps all 12 on GPT" when the move puts every role on one pool ("GPT only gives all 12
+ * "Claude-led keeps all 8 on GPT" when the move puts every role on one pool ("GPT only gives all 8
  * a route" where the label already names it); otherwise each group of rescued roles by name. A move
  * onto a pool whose availability is not known now says so: a rescue is not measured room.
  */
@@ -448,7 +448,7 @@ export function fixView(fix: Rescue, catalog: CompiledCatalog, pools: readonly Q
   if (only && fix.rescued.removed.length === 0 && fix.rescued.fallsBack.length === 0) {
     const count = fix.review.routes.length;
     const lane = fix.review.selection.lane;
-    // "GPT only keeps all 12 on GPT" says the pool twice; a lane move that names the pool's family only needs the result.
+    // "GPT only keeps all 8 on GPT" says the pool twice; a lane move that names the pool's family only needs the result.
     const named = fix.moves.some(move => move.dial === "lane") && lane.kind === "provider" && lane.family === only.family &&
       only.bucket === providerPolicy(only.provider).quotaBucketBase;
     result = named ? `gives all ${count} a route` : `keeps all ${count} on ${poolWord(only, vocab)}`;
@@ -565,8 +565,8 @@ export function reviewMatches(projection: Projection, reviewed: { readonly revie
     shown.providers!.length === projection.providers.length && shown.providers!.every((provider, index) => provider === projection.providers![index]);
 }
 /**
- * How the routes differ between two reviews, grouped where roles go alike: `reviewer,
- * security-reviewer sol → fable · plan high → x-high`; empty when no role's lead moved.
+ * How the routes differ between two reviews, grouped where shared roles go alike:
+ * `plan, slow sol → sonnet · default medium → high`; empty when no role's lead moved.
  */
 export function movesText(catalog: CompiledCatalog, before: Review, after: Review): string {
   const aliases = displayAliases(catalog);

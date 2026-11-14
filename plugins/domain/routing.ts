@@ -1,5 +1,5 @@
 import { z } from "zod";
-import { ThinkingLevelSchema, epochMilliseconds, type Overlay, type ThinkingLevel } from "@atyrode/manifold-omp";
+import { epochMilliseconds, type Overlay, type ThinkingLevel } from "@atyrode/manifold-omp";
 import {
   CapabilitySchema, DomainError, EstimatesSchema, LaneSchema, RouteSchema, SelectionSchema, admittedBy,
   type Estimates, type Lane, type ModelChoice, type Route, type Selection,
@@ -26,21 +26,11 @@ export const ReviewSchema = z.strictObject({
 export type Review = z.infer<typeof ReviewSchema>;
 
 /** The roles Code routes, in its order. Advisor is omitted while the advisor is off. */
-export const ROLES = ["default", "task", "plan", "slow", "reviewer", "security-reviewer", "scout", "sonic",
-  "advisor", "vision", "smol", "tiny", "commit"] as const;
+export const ROLES = ["default", "task", "plan", "slow", "advisor", "vision", "smol", "tiny", "commit"] as const;
 type Role = typeof ROLES[number];
-const agentRoles: Partial<Record<Role, true>> = { task: true, reviewer: true, "security-reviewer": true, scout: true, sonic: true };
-const deliberative: Partial<Record<Role, true>> = { plan: true, slow: true, reviewer: true, "security-reviewer": true };
-const utilityCaps: Partial<Record<Role, readonly number[]>> = {
-  commit: [1, 1, 1, 1], tiny: [1, 1, 2, 2], smol: [1, 2, 2, 2], sonic: [1, 2, 2, 2], scout: [1, 2, 2, 2],
-};
-const utilityThinking: Partial<Record<Role, readonly ThinkingLevel[]>> = {
-  commit: ["minimal", "minimal", "minimal", "low"], tiny: ["minimal", "low", "low", "low"],
-  smol: ["low", "low", "medium", "medium"], sonic: ["low", "medium", "medium", "medium"],
-  scout: ["low", "medium", "medium", "medium"],
-};
+const utilityThinking: Partial<Record<Role, ThinkingLevel>> = { smol: "medium", tiny: "low", commit: "low" };
 const weights: Record<Role, number> = {
-  default: 10, task: 6, plan: 3, slow: 2, reviewer: 3, "security-reviewer": 1, scout: 2, sonic: 3,
+  default: 10, task: 6, plan: 3, slow: 2,
   advisor: 4, vision: 0.5, smol: 1, tiny: 0.5, commit: 0.5,
 };
 const thinkingCost: Record<ThinkingLevel, number> = { minimal: 0.6, low: 0.8, medium: 1, high: 1.3, xhigh: 1.6, max: 2 };
@@ -99,31 +89,36 @@ function selectionFacts(catalog: CompiledCatalog, input: Selection): { selection
 }
 
 /**
- * OLD CODE'S DEFAULT (`keys.go:47-53`), the profile its screenshot shows: Capable, medium
- * thinking and a glance advisor.
- *
- * Availability is read first, from a selection every lane admits, because `selectionFacts`
- * refuses a capability the lead family lacks.
+ * Everyday work starts on Sonnet's second rung, otherwise Sol's third rung, at medium effort.
+ * Only the supplied account pool determines whether a provider is served; catalog-only previews
+ * may omit that predicate. Explicit saved selections are not reinterpreted by this policy.
  */
-export function defaultSelection(catalog: CompiledCatalog): Selection {
-  const lane: Lane = MIXED_FAMILIES.every(family => catalog.families.includes(family))
-    ? { kind: "mixed" } : { kind: "provider", family: catalog.families[0]!, blend: "only" };
-  const admitted: Selection = {
-    lane, capability: 1, thinking: "medium", advisor: "glance", spark: false, priority: false,
-    prewalk: false, planYolo: false, fallback: true, budget: "any",
-  };
-  const { available } = selectionFacts(catalog, admitted);
-  const selection: Selection = { ...admitted, capability: available.capabilities.filter(value => value <= 3).at(-1)! };
-  // A catalog without any image-capable model has no complete default profile.
-  selectedRoutes(catalog, selection);
-  return selection;
+export function defaultSelection(catalog: CompiledCatalog, serves: (provider: string) => boolean = () => true): Selection {
+  let completeProfile = false;
+  for (const family of orderedFamilies(catalog.families, ["anthropic", "openai"])) {
+    const selection: Selection = {
+      lane: { kind: "provider", family, blend: "only" }, capability: family === "anthropic" ? 2 : 3,
+      thinking: "medium", advisor: "glance", spark: false, priority: false,
+      prewalk: false, planYolo: false, fallback: true, budget: "any",
+    };
+    let routes: Route[];
+    try {
+      // Resolve the whole profile: an image-capable lead is required even for a pure lane.
+      routes = selectedRoutes(catalog, selection);
+    } catch (error) {
+      if (!(error instanceof DomainError) || error.code !== "invalid_selection") throw error;
+      continue;
+    }
+    completeProfile = true;
+    if (routes.every(route => serves(catalog.model(route.lead.key).provider))) return selection;
+  }
+  throw new DomainError(completeProfile ? "account_unavailable" : "invalid_selection");
 }
 
 function selectedRoutes(catalog: CompiledCatalog, selection: Selection): Route[] {
   const { lane, capability, thinking } = selection;
   const primary = lane.kind === "mixed" ? "openai" : lane.family;
   const pure = lane.kind === "provider" && lane.blend === "only";
-  const extreme = thinking === "minimal" || thinking === "max";
   const crossingFamily = (family: string): string | undefined => {
     const preferred = familyPolicy(family).crossTo;
     return preferred === null ? undefined : catalog.families.includes(preferred) ? preferred : catalog.families.find(candidate => candidate !== family);
@@ -188,25 +183,16 @@ function selectedRoutes(catalog: CompiledCatalog, selection: Selection): Route[]
       }
       if (!imageLead) throw new DomainError("invalid_selection");
       lead = imageLead;
-      level = extreme ? thinking : "low";
+      level = "low";
       fallbacks = chain(lead).filter(key => key !== undefined && catalog.model(key).images);
-    } else if (utilityCaps[role]) {
-      const tier = utilityCaps[role]![capability - 1]!;
-      if (!extreme) level = utilityThinking[role]![ThinkingLevelSchema.options.indexOf(thinking) - 1]!;
-      lead = catalog.rung(primary, tier);
-      if (role === "scout" || role === "sonic") fallbacks = [sibling(lead)];
+    } else if (utilityThinking[role]) {
+      lead = catalog.rung(primary, 1);
+      level = utilityThinking[role]!;
     } else {
-      let family = primary;
-      if (!pure && deliberative[role]) {
-        if (lane.kind === "mixed") family = "anthropic";
-        else if (role === "reviewer" || role === "security-reviewer") {
-          const cross = crossingFamily(primary);
-          if (!cross) throw new DomainError("invalid_selection");
-          family = cross;
-        }
-      }
-      lead = catalog.rung(family, capability + (deliberative[role] ? 1 : 0));
-      if (!extreme && deliberative[role]) level = ThinkingLevelSchema.options[Math.min(4, ThinkingLevelSchema.options.indexOf(thinking) + 1)]!;
+      const deliberative = role === "plan" || role === "slow";
+      const family = lane.kind === "mixed" && deliberative ? "anthropic" : primary;
+      lead = catalog.rung(family, capability);
+      if (deliberative) level = "high";
       fallbacks = chain(lead);
     }
     if (!admits(lead)) throw new DomainError("budget_unsatisfiable");
@@ -220,7 +206,7 @@ function selectedRoutes(catalog: CompiledCatalog, selection: Selection): Route[]
         fallback.push(choice(key, fallbackLevels?.[index] ?? level));
       }
     }
-    routes.push({ role, agentBacked: agentRoles[role] === true, lead: choice(lead, level), fallback });
+    routes.push({ role, lead: choice(lead, level), fallback });
   }
   return routes;
 }
@@ -276,9 +262,9 @@ export function reviewCatalog(catalog: CompiledCatalog, input: Selection, nowMs:
  * this catalog cannot serve refuses `budget_unsatisfiable` here instead of becoming a paid one.
  * Without a selection to keep, the catalog's own default is the answer.
  */
-export function clampSelection(catalog: CompiledCatalog, wanted: Selection | null): Selection {
-  const fallback = defaultSelection(catalog);
-  if (wanted === null) return fallback;
+export function clampSelection(catalog: CompiledCatalog, wanted: Selection | null,
+  serves: (provider: string) => boolean = () => true): Selection {
+  if (wanted === null) return defaultSelection(catalog, serves);
   const parsed = SelectionSchema.safeParse(wanted);
   if (!parsed.success) throw new DomainError("invalid_selection");
   const lanes = lanesFor(catalog);
@@ -286,7 +272,7 @@ export function clampSelection(catalog: CompiledCatalog, wanted: Selection | nul
   const lane = lanes.find(candidate => candidate.kind === "mixed" ? want.kind === "mixed"
       : want.kind === "provider" && candidate.family === want.family && candidate.blend === want.blend)
     ?? lanes.find(candidate => candidate.kind === "provider" && want.kind === "provider" && candidate.family === want.family)
-    ?? fallback.lane;
+    ?? defaultSelection(catalog, serves).lane;
   const { available } = selectionFacts(catalog, { ...parsed.data, lane, capability: 1, spark: false, priority: false });
   const capability = available.capabilities.filter(value => value <= parsed.data.capability).at(-1) ?? available.capabilities[0]!;
   const selection: Selection = { ...parsed.data, lane, capability, spark: false, priority: parsed.data.priority && available.priority };
@@ -362,7 +348,7 @@ export function compileOmpOverlay(catalog: CompiledCatalog, input: Selection, ro
   const supplied = new Map(parsed.data.map(route => [route.role, route]));
   for (const route of expected) {
     const actual = supplied.get(route.role);
-    if (!actual || actual.agentBacked !== route.agentBacked || actual.lead.key !== route.lead.key ||
+    if (!actual || actual.lead.key !== route.lead.key ||
         actual.lead.thinking !== route.lead.thinking || actual.fallback.length !== route.fallback.length ||
         actual.fallback.some((value, index) => value.key !== route.fallback[index]!.key || value.thinking !== route.fallback[index]!.thinking)) {
       throw new DomainError("invalid_selection");
@@ -374,25 +360,22 @@ export function compileOmpOverlay(catalog: CompiledCatalog, input: Selection, ro
   };
   const modelRoles: Record<string, string> = {};
   const fallbackChains: Record<string, string[]> = {};
-  const agentModelOverrides: Record<string, string> = {};
   for (const route of expected) {
     modelRoles[route.role] = reference(route.lead);
     // Even an empty chain is explicit, avoiding OMP's default-role inheritance.
     fallbackChains[route.role] = route.fallback.map(reference);
-    if (route.agentBacked) agentModelOverrides[route.role] = `@${route.role}`;
   }
   const overlay: Overlay = {
     modelRoles,
     retry: selection.fallback
       ? { enabled: true, modelFallback: true, fallbackRevertPolicy: "cooldown-expiry", fallbackChains }
       : { enabled: true, modelFallback: false },
-    task: { agentModelOverrides },
     defaultThinkingLevel: selection.thinking,
     advisor: { enabled: selection.advisor !== "off" },
   };
-  if (selection.advisor === "audit") overlay.task!.agentAdvisor = { task: "on" };
+  if (selection.advisor === "audit") overlay.task = { agentAdvisor: { task: "on" } };
   if (selection.prewalk) {
-    overlay.task!.prewalk = true;
+    overlay.task = { ...overlay.task, prewalk: true };
     overlay.prewalk = { enabled: true };
   }
   if (selection.priority) {

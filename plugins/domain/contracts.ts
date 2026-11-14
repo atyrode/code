@@ -88,7 +88,6 @@ export type CatalogDocument = z.infer<typeof CatalogDocumentSchema>;
 export const ModelChoiceSchema = z.strictObject({ key: identifier, thinking: ThinkingLevelSchema });
 export const RouteSchema = z.strictObject({
   role: identifier,
-  agentBacked: z.boolean(),
   lead: ModelChoiceSchema,
   fallback: z.array(ModelChoiceSchema).max(32),
 });

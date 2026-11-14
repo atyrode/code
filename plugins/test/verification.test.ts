@@ -80,7 +80,7 @@ function facts(changes: Partial<LaunchFacts> = {}, status: VerificationStatus = 
     profile: { source: "active" }, localDraft: null, record: { active: {} }, localReview: {}, skillProblems: [],
     queries: { setup: { error: null } }, verification: { status, held, passed: held !== "unverified", mode: null, ready }, unservedLead: null, ...changes };
 }
-const claude = { provider: "anthropic", family: "anthropic", roles: ["reviewer"] };
+const claude = { provider: "anthropic", family: "anthropic", roles: ["slow"] };
 
 describe("the next launch step with the model check", () => {
   test("a check precedes save and launch whenever the list in use cannot serve a launch, and the Launch press runs it", () => {

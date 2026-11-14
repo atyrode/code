@@ -16,7 +16,7 @@ function facts(changes: Partial<GateFacts> = {}, status: VerificationStatus = "c
 }
 const every: readonly WorkbenchIntent[] = ["verify", "confirm", "save", "launch", "resume", "resume-with-team", "open",
   "edit-team", "edit-options", "edit-machine", "edit-accounts"];
-const claude = { provider: "anthropic", family: "anthropic", roles: ["reviewer", "security-reviewer"] };
+const claude = { provider: "anthropic", family: "anthropic", roles: ["plan", "slow"] };
 const code = (verdict: GateVerdict) => verdict.open ? "open" : verdict.refusal.code;
 
 describe("one gate for every action", () => {

@@ -36,7 +36,7 @@ function review(changes: Partial<Selection> = {}): Review {
     priority: false, prewalk: false, planYolo: false, fallback: true, budget: "any", ...changes,
   }, now);
 }
-const gptLed: Selection["lane"] = { kind: "provider", family: "openai", blend: "led" };
+const mixed: Selection["lane"] = { kind: "mixed" };
 const claudeOnly: Selection["lane"] = { kind: "provider", family: "anthropic", blend: "only" };
 
 /** Three Codex subscriptions, one Claude subscription, one DeepSeek key. */
@@ -96,10 +96,11 @@ const aliases = displayAliases(catalog);
 const ledger = (team: Review, options: Options = {}) => routeLedger(catalog, team, aliases, quotaPools(catalog, reading(options)), vocab);
 
 describe("the routing", () => {
-  test("every role on one line as its lead's alias and thinking, and the advisor's line held after sonic while it is off", () => {
+  test("only native shared roles appear in stable order, with the off advisor held after slow", () => {
     const off = ledger(review());
+    expect(off.map(row => row.role)).toEqual(["default", "task", "plan", "slow", "advisor", "vision", "smol", "tiny", "commit"]);
     const at = off.findIndex(row => row.role === "advisor");
-    expect(off[at - 1]?.role).toBe("sonic");
+    expect(off[at - 1]?.role).toBe("slow");
     expect(off[at]).toMatchObject({ off: true, lead: null });
     // Turning the advisor on fills its line in place rather than adding one.
     const on = ledger(review({ advisor: "glance" }));
@@ -110,13 +111,13 @@ describe("the routing", () => {
 
   test("a lead whose pool is out is struck with that pool's reopening and what the role does meanwhile; the rest stand", () => {
     const claudeOut = { blocks: { carol: [{ scope: "", until: now + 5 * HOUR }] } };
-    const led = ledger(review({ lane: gptLed }), claudeOut);
-    const reviewer = led.find(row => row.role === "reviewer")!;
-    expect(reviewer.lead?.family).toBe("anthropic");
-    expect(reviewer.down).toMatch(/^Claude blocked until \+5h · falls back to o3:/);
+    const led = ledger(review({ lane: mixed }), claudeOut);
+    const slow = led.find(row => row.role === "slow")!;
+    expect(slow.lead).toMatchObject({ alias: "a2", family: "anthropic", thinking: "high" });
+    expect(slow.down).toMatch(/^Claude blocked until \+5h · falls back to o2:high$/);
     expect(led.filter(row => row.lead?.family === "openai").every(row => row.down === null)).toBe(true);
     // Without fallbacks the role has no route, and says so.
-    expect(ledger(review({ lane: gptLed, fallback: false }), claudeOut).find(row => row.role === "reviewer")?.down).toBe("Claude blocked until +5h · no route");
+    expect(ledger(review({ lane: mixed, fallback: false }), claudeOut).find(row => row.role === "slow")?.down).toBe("Claude blocked until +5h · no route");
     // No included account is the same strike, for its own reason.
     expect(ledger(review({ lane: claudeOnly }), { excluded: ["carol"] }).find(row => row.role === "default")?.down).toBe("No Claude account included");
   });
@@ -131,17 +132,18 @@ describe("the routing", () => {
 
   test("the grouped profile reads by provider, the default's first, then by tier and thinking, strongest first; roles keep routing order", () => {
     const row = (role: string, family: string, alias: string, tier: RouteToken["tier"], thinking: string): LedgerRow => ({
-      role, agentBacked: false, off: false, down: null, fallback: [],
+      role, off: false, down: null, fallback: [],
       lead: { key: `${family}.${alias}`, alias, thinking, family, id: `${family}/${alias}`, effort: thinking, tier },
     });
     const groups = profileGroups([
-      row("plan", "openai", "o3", 3, "medium"), row("scout", "deepseek", "d1", 1, "max"), row("default", "anthropic", "a2", 2, "high"),
-      row("smol", "openai", "o1", 1, "low"), row("commit", "openai", "nano", 1, "minimal"), row("reviewer", "anthropic", "a3", 3, "medium"),
-      row("sonic", "openai", "o3", 3, "xhigh"), row("vision", "anthropic", "a2", 2, "low"), row("tiny", "openai", "mini", 1, "low"),
-      row("task", "anthropic", "a2", 2, "high"), { role: "advisor", agentBacked: false, off: true, lead: null, down: null, fallback: [] },
+      row("default", "anthropic", "a2", 2, "high"), row("task", "anthropic", "a2", 2, "high"),
+      row("plan", "anthropic", "a3", 3, "medium"), row("slow", "openai", "o3", 3, "xhigh"),
+      row("vision", "anthropic", "a2", 2, "low"), row("smol", "openai", "o1", 1, "medium"),
+      row("tiny", "deepseek", "d1", 1, "low"), row("commit", "openai", "o1", 1, "low"),
+      { role: "advisor", off: true, lead: null, down: null, fallback: [] },
     ]);
     expect(groups.map(group => `${group.lead.alias}:${group.lead.thinking}`)).toEqual([
-      "a3:medium", "a2:high", "a2:low", "o3:xhigh", "o3:medium", "mini:low", "o1:low", "nano:minimal", "d1:max",
+      "a3:medium", "a2:high", "a2:low", "o3:xhigh", "o1:medium", "o1:low", "d1:low",
     ]);
     expect(groups[1]?.roles.map(role => role.role)).toEqual(["default", "task"]);
   });

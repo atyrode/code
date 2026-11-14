@@ -164,7 +164,9 @@ export function catalogReview(ctx: CodeContext, record: Configuration, source: "
   const catalog = record[source];
   if (!catalog) throw new CodeRefusal("catalog_missing");
   const compiled = compileCatalog(catalog.document);
-  const selection = source === "active" && record.selection ? record.selection : defaultSelection(compiled);
+  const providers = catalog.provenance?.providers;
+  const selection = source === "active" && record.selection ? record.selection
+    : defaultSelection(compiled, providers ? provider => providers.includes(provider) : undefined);
   const review = reviewCatalog(compiled, selection, ctx.now());
   const facts = { revision: record.revision, source, catalogDigest: catalog.digest, provenance: catalog.provenance, review };
   // Time-dependent estimates do not change the reviewed route and selection. Provenance is bound:

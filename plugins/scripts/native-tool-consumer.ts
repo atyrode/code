@@ -62,6 +62,14 @@ export async function createNativeToolConsumer(context: NativeToolConsumerContex
   const composed = await call("composeSession", { ...workspace, expectedRevision: configuration.revision,
     accounts, prompt: context.input.prompt });
   check(canonicalJobJson(composed.accountPool) === canonicalJobJson(context.input.accountPool), "account-choice-broadened");
+  const roles = ["default", "task", "plan", "slow", "vision", "smol", "tiny", "commit"];
+  check(canonicalJobJson(composed.review.routes.map(route => route.role)) === canonicalJobJson(roles), "shared-route-order-changed");
+  check(canonicalJobJson(Object.keys(composed.overlay.modelRoles ?? {}).sort()) === canonicalJobJson([...roles].sort()), "shared-role-keys-changed");
+  check(!Object.hasOwn(composed.overlay.task ?? {}, "agentModelOverrides"), "named-agent-overrides-emitted");
+  check(canonicalJobJson(composed.overlay.modelRoles) === canonicalJobJson({
+    default: "openai/gpt-5:low", task: "openai/gpt-5:low", plan: "openai/gpt-5:high", slow: "openai/gpt-5:high",
+    vision: "openai/gpt-5:low", smol: "openai/gpt-5-mini:medium", tiny: "openai/gpt-5-mini:low", commit: "openai/gpt-5-mini:low",
+  }), "shared-role-effort-or-premium-boundary-changed");
   const input = sessionInput(target, composed, context.input.expectedDefaultsRevision, { skills: { mode: "disabled" } });
   const request = { ...target, expectedRevision: configuration.revision, prompt: input.prompt, skills: input.skills };
   const before = ListJobRunsResultSchema.parse(await ownerAction(hub, "engine.jobs.listRuns", {

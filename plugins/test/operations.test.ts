@@ -401,6 +401,56 @@ describe("pure client-supplied policy composition", () => {
     expect(current.compositionDigest).not.toBe(composed.compositionDigest);
   });
 
+  test("composition emits only native shared roles, bounds helpers and buys a premium rung only when selected", async () => {
+    const f = fixture();
+    let record = await active(f);
+    const roles = ["default", "task", "plan", "slow", "advisor", "vision", "smol", "tiny", "commit"];
+    for (const capability of [2, 3] as const) {
+      record = await accepted(f, "select", { ...workspace, expectedRevision: record.revision,
+        selection: { ...record.selection!, capability, thinking: "max", advisor: "glance", prewalk: true, fallback: true } });
+      const composed = await accepted(f, "composeSession", { ...workspace, expectedRevision: record.revision, accounts: accounts(), prompt: "" });
+      expect(composed.review.routes.map(route => route.role)).toEqual(roles);
+      expect(Object.keys(composed.overlay.modelRoles!)).toEqual(roles);
+      expect(Object.keys(composed.overlay.retry!.fallbackChains!)).toEqual(roles);
+      expect(composed.overlay.task).toEqual({ prewalk: true });
+      expect(composed.overlay.modelRoles).toEqual({
+        default: `anthropic/native-model${capability}:max`, task: `anthropic/native-model${capability}:max`,
+        plan: `anthropic/native-model${capability}:high`, slow: `anthropic/native-model${capability}:high`,
+        advisor: "anthropic/native-model1:low", vision: `anthropic/native-model${capability}:low`,
+        smol: "anthropic/native-model1:medium", tiny: "anthropic/native-model1:low", commit: "anthropic/native-model1:low",
+      });
+      expect(composed.overlay.retry!.fallbackChains!.plan).toEqual(capability === 2
+        ? ["anthropic/native-model1:high"] : ["anthropic/native-model2:high", "anthropic/native-model1:high"]);
+      for (const role of ["advisor", "smol", "tiny", "commit"])
+        expect(composed.overlay.retry!.fallbackChains![role]).toEqual([]);
+    }
+    record = await accepted(f, "select", { ...workspace, expectedRevision: record.revision, selection: { ...record.selection!, advisor: "off" } });
+    const off = await accepted(f, "composeSession", { ...workspace, expectedRevision: record.revision, accounts: accounts(), prompt: "" });
+    expect(Object.keys(off.overlay.modelRoles!)).toEqual(roles.filter(role => role !== "advisor"));
+    expect(Object.keys(off.overlay.retry!.fallbackChains!)).toEqual(roles.filter(role => role !== "advisor"));
+    expect(off.overlay.advisor).toEqual({ enabled: false });
+  });
+
+  test("a free profile composes routine work without promoting to a paid premium rung, but refuses that explicit rung", async () => {
+    const f = fixture(), catalog = document();
+    for (const model of catalog.models.filter(model => model.tier < 3)) {
+      model.inputCostPerMillion = 0;
+      model.outputCostPerMillion = 0;
+    }
+    const draft = await staged(f, catalog);
+    const review = await accepted(f, "reviewCatalog", { ...workspace, expectedRevision: draft.revision, source: "draft" });
+    const promoted = await accepted(f, "promoteCatalog", { ...workspace, expectedRevision: draft.revision, source: "draft", reviewDigest: review.reviewDigest });
+    const selection = { ...promoted.selection!, capability: 2 as const, budget: "free" as const };
+    const saved = await accepted(f, "select", { ...workspace, expectedRevision: promoted.revision, selection });
+    const composed = await accepted(f, "composeSession", { ...workspace, expectedRevision: saved.revision, accounts: accounts(), prompt: "" });
+    expect(composed.overlay.modelRoles?.slow).toBe("anthropic/native-model2:high");
+    expect(Object.values(composed.overlay.modelRoles!).some(reference => reference.includes("native-model3"))).toBe(false);
+    expect(Object.values(composed.overlay.retry!.fallbackChains!).flat().some(reference => reference.includes("native-model3"))).toBe(false);
+    expect(await invoke(f, "select", { ...workspace, expectedRevision: saved.revision, selection: { ...selection, capability: 3 } }))
+      .toEqual({ refused: "code_budget_unsatisfiable" });
+    expect(await configuration(f)).toEqual(saved);
+  });
+
   test("composition refuses choices committed during its configuration read", async () => {
     const f = fixture(), record = await active(f);
     f.afterNextRead(async () => {
@@ -481,10 +531,24 @@ describe("verified catalogs and launch-time honesty", () => {
       inventoryObservedAt: now - 2000, benchmarkCompletedAt: now - 1000, providers: ["anthropic"], poolIdentityDigest: verified.poolIdentityDigest });
     const review = await accepted(f, "reviewCatalog", { ...workspace, expectedRevision: staged.revision, source: "draft" });
     expect(review.provenance).toEqual(staged.draft!.provenance);
+    expect(review.review.selection).toMatchObject({ lane: { kind: "provider", family: "anthropic", blend: "only" }, capability: 2, thinking: "medium" });
     const promoted = await accepted(f, "promoteCatalog", { ...workspace, expectedRevision: staged.revision, source: "draft", reviewDigest: review.reviewDigest });
     expect(promoted.active).toEqual(staged.draft);
     // Manual authorship stays exactly that: the same document staged without a verification is unverified.
     expect((await accepted(f, "stageCatalog", { ...workspace, expectedRevision: promoted.revision, document: document() })).draft?.provenance).toBeNull();
+  });
+
+  test("an unverified preview names catalog models without manufacturing verified account coverage", async () => {
+    const f = fixture(), record = await staged(f);
+    const review = await accepted(f, "reviewCatalog", { ...workspace, expectedRevision: record.revision, source: "draft" });
+    expect(review.review.selection).toMatchObject({ lane: { kind: "provider", family: "anthropic", blend: "only" }, capability: 2, thinking: "medium" });
+    expect(review.provenance).toBeNull();
+    expect(await configuration(f)).toEqual(record);
+    const promoted = await accepted(f, "promoteCatalog", { ...workspace, expectedRevision: record.revision, source: "draft", reviewDigest: review.reviewDigest });
+    expect(promoted.active?.provenance).toBeNull();
+    expect(promoted.accounts).toEqual(record.accounts);
+    expect(await invoke(f, "composeSession", { ...workspace, expectedRevision: promoted.revision,
+      accounts: { ...accounts(), accounts: [] }, prompt: "" })).toEqual({ refused: "code_account_unavailable" });
   });
 
   test("a verification recorded without the OMP runtime and model catalog it ran against reads as unverified, without a schema change", async () => {
@@ -523,7 +587,7 @@ describe("verified catalogs and launch-time honesty", () => {
   });
 
   test("a launch prunes the fallbacks no included account serves and still refuses a lead nobody serves", async () => {
-    // Claude-led at capability 3: the tier-2 GPT rung, alone on `openai`, is only ever a fallback, and Codex leads some roles.
+    // Mixed at capability 3: the tier-2 GPT rung, alone on `openai`, is only a fallback, while Codex leads ordinary work.
     const rung = (key: string, provider: string, tier: 1 | 2 | 3, inputCostPerMillion: number) => ({ ...document().models[0]!,
       key, provider, id: `native-${key}`, api: "openai-codex-responses", tier, inputCostPerMillion, images: true });
     const catalog: CatalogDocument = { schemaVersion: 1, models: [rung("o1", "openai-codex", 1, 1), rung("o2", "openai", 2, 2),
@@ -534,7 +598,7 @@ describe("verified catalogs and launch-time honesty", () => {
     const review = await accepted(f, "reviewCatalog", { ...workspace, expectedRevision: record.revision, source: "draft" });
     const promoted = await accepted(f, "promoteCatalog", { ...workspace, expectedRevision: record.revision, source: "draft", reviewDigest: review.reviewDigest });
     const saved = await accepted(f, "select", { ...workspace, expectedRevision: promoted.revision,
-      selection: { ...promoted.selection!, lane: { kind: "provider", family: "anthropic", blend: "led" }, capability: 3, fallback: true, advisor: "off" } });
+      selection: { ...promoted.selection!, lane: { kind: "mixed" }, capability: 3, fallback: true, advisor: "off" } });
     const scope = accounts().scope;
     const slot = (provider: string, credentialId: number) => ({ reference: { kind: "credential" as const, scope, provider, credentialId },
       credentialId, identityKey: null, type: "api_key" as const, email: null, disabled: false, blocks: [] });
@@ -554,11 +618,11 @@ describe("verified catalogs and launch-time honesty", () => {
     const f = fixture(), record = await active(f);
     const input = { ...workspace, expectedRevision: record.revision, accounts: accounts(), prompt: "" };
     const composed = await accepted(f, "composeSession", input);
-    f.published = published(document().models.filter(model => model.tier !== 3));
-    expect(await invoke(f, "composeSession", input)).toEqual({ refused: "code_model_unpublished: anthropic/native-model3" });
+    f.published = published(document().models.filter(model => model.tier !== 2));
+    expect(await invoke(f, "composeSession", input)).toEqual({ refused: "code_model_unpublished: anthropic/native-model2" });
     f.published = published([]);
     expect(await invoke(f, "composeSession", input))
-      .toEqual({ refused: "code_model_unpublished: anthropic/native-model1, anthropic/native-model2, anthropic/native-model3" });
+      .toEqual({ refused: "code_model_unpublished: anthropic/native-model1, anthropic/native-model2" });
     // Another OMP list that still publishes every routed model composes, as a different composition.
     f.published = { ...published(), revision: "b".repeat(64) };
     expect((await accepted(f, "composeSession", input)).compositionDigest).not.toBe(composed.compositionDigest);

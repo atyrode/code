@@ -11,12 +11,12 @@ if [ "$#" -ne 0 ]; then
   exit 1
 fi
 if ! command -v bun >/dev/null 2>&1; then
-  echo "gate.sh: Bun 1.4.2 is required" >&2
+  echo "gate.sh: Bun 1.4.4 is required" >&2
   exit 1
 fi
 version="$(bun --version)"
-if [ "$version" != "1.4.2" ]; then
-  echo "gate.sh: Bun 1.4.2 is required; found $version" >&2
+if [ "$version" != "1.4.4" ]; then
+  echo "gate.sh: Bun 1.4.4 is required; found $version" >&2
   exit 1
 fi
 if [ ! -f "$manifold/packages/plugin-kit/src/pack.ts" ]; then

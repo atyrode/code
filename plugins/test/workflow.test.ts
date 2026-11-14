@@ -184,6 +184,43 @@ test("verification prepares a charge without spending, and one confirmation save
   expect(f.calls.filter(door => door === actionDoor("startBenchmark"))).toHaveLength(2);
 });
 
+test("null selections verify and adopt everyday served Sonnet, otherwise served Sol, using only the exact pool", async () => {
+  for (const withAnthropic of [true, false]) {
+    const f = verificationFixture();
+    f.omp.accounts.accounts = [f.slot("openai-codex", 3), ...(withAnthropic ? [f.slot("anthropic", 1)] : [])];
+    const levels = ["low", "medium", "high", "max"] as const;
+    f.omp.inventory.models = [
+      ...(withAnthropic ? [
+        row("anthropic", "claude-haiku-5-5", 0.1, 200_000, levels, true),
+        row("anthropic", "claude-sonnet-5-5", 2, 200_000, levels, true),
+        row("anthropic", "claude-opus-5-5", 4, 200_000, levels, true),
+        row("anthropic", "claude-fable-5-2", 8, 200_000, levels, true),
+      ] : []),
+      row("openai-codex", "gpt-6-luna", 0.1, 200_000, levels, true),
+      row("openai-codex", "gpt-6.1-terra", 1, 200_000, levels, true),
+      row("openai-codex", "gpt-6.1-sol", 2, 200_000, levels, true),
+      row("openai-codex", "gpt-6-astra", 10, 200_000, levels, true),
+    ];
+    const pending = await prepared(f, 0), verified = await pending.confirm(null);
+    const selection = verified.configuration.selection!;
+    expect(selection).toMatchObject({
+      lane: { kind: "provider", family: withAnthropic ? "anthropic" : "openai", blend: "only" },
+      capability: withAnthropic ? 2 : 3, thinking: "medium",
+    });
+    const catalog = compileCatalog(verified.configuration.active!.document);
+    const review = reviewCatalog(catalog, selection, 10_000);
+    expect(catalog.model(review.routes.find(route => route.role === "default")!.lead.key).id)
+      .toBe(withAnthropic ? "claude-sonnet-5-5" : "gpt-6.1-sol");
+    expect(verified.provenance.providers).toEqual(withAnthropic ? ["anthropic", "openai-codex"] : ["openai-codex"]);
+    const from = f.calls.length;
+    const adopted = await f.workflow.verifyModels(second, { expectedRevision: 0, budget: "any", selection: null });
+    expect(adopted.kind).toBe("adopted");
+    expect((await f.configuration(second)).configuration?.selection).toEqual(selection);
+    expect(f.calls.slice(from)).not.toContain(actionDoor("startInventory"));
+    expect(f.calls.slice(from)).not.toContain(actionDoor("startBenchmark"));
+  }
+});
+
 test("a confirmation refuses to spend against a revision, pool, OMP defaults or OMP that moved since the charge", async () => {
   for (const move of ["revision", "pool", "defaults", "runtime", "catalog"] as const) {
     const f = verificationFixture();
@@ -446,6 +483,23 @@ test("a workspace whose saved choices select a kept pool adopts the person's che
   expect(saved.selection?.lane).toEqual(deepseekOnly.lane);
   // Holding the check now, that workspace checks for real when asked again.
   expect((await prepared(f, saved.revision, {}, second)).charge.requests).toBe(5);
+});
+
+test("adopting a newer check with no new selection preserves the workspace's explicit saved controls", async () => {
+  const f = verificationFixture();
+  const first = await (await prepared(f, 0)).confirm(preview);
+  const adopted = await f.workflow.verifyModels(second, { expectedRevision: 0, budget: "any", selection: null });
+  if (adopted.kind !== "adopted") throw new Error("expected a kept check");
+  const chosen = await f.workflow.code("select", { containerId: second.containerId, expectedRevision: adopted.verified.configuration.revision,
+    selection: { ...adopted.verified.configuration.selection!, capability: 3, thinking: "max", advisor: "off", prewalk: true, fallback: false } });
+  const newer = await (await prepared(f, first.configuration.revision)).confirm(preview);
+  expect(newer.provenance.benchmarkCompletedAt).toBeGreaterThan(first.provenance.benchmarkCompletedAt);
+  const from = f.calls.length;
+  const again = await f.workflow.verifyModels(second, { expectedRevision: chosen.revision, budget: "any", selection: null });
+  expect(again.kind).toBe("adopted");
+  expect((await f.configuration(second)).configuration?.selection).toEqual(chosen.selection);
+  expect(f.calls.slice(from)).not.toContain(actionDoor("startInventory"));
+  expect(f.calls.slice(from)).not.toContain(actionDoor("startBenchmark"));
 });
 
 test("adopting refuses another pool, a pool with no kept check, and a workspace already holding one no older", async () => {

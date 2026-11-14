@@ -167,12 +167,13 @@ newest version of each model name. OpenAI names its tiers, so its ladder is thos
 luna, terra, sol and astra, each at its own tier whatever its price or context window (of
 ids sharing a name, the newest takes it), and a model whose id names none of them is not
 chosen; a listing with none of the names is laddered as any other family is. Any other
-family's cheapest model is its first rung and its most capable its top (the highest thinking
-ceiling, then the higher price), with up to two of the most capable models priced between
-them, or, where fewer than two lie between, priced as an end, as its middles. A rung that is
-not cheaper than a rung below it must reach every thinking level of that rung. A context
-window is not a capability: it never ranks a model or refuses a rung, since OpenAI's newer
-sol and astra carry smaller windows than the older terra beneath them. A catalog verified
+family's cheapest model is its first rung; the top and up to two middles follow a
+deterministic heuristic of thinking ceiling, then API list price. Middles come from
+between the ends where available, otherwise an end's price. This is not measured
+intelligence, and neither higher price nor a higher reasoning ceiling proves quality.
+A rung that is not cheaper than one below it must reach every thinking level of that
+rung. Context is not a ranking input: OpenAI's newer sol and astra carry smaller
+windows than the older terra beneath them. A catalog verified
 under the earlier context rule keeps its ladder, as stored active policy does, until it is
 verified again.
 
@@ -484,10 +485,22 @@ or quota bucket, and a stored selection with the Spark flag reads as off.
 
 ### Routing, cost and speed
 
-The **routing** pane lists every role on one line: `●` for a role an agent backs, the
-role, and its lead as `model:thinking` in the provider's hue, with the advisor's line
-held while it is off so turning it on adds a value rather than a line. A change rolls
-each value that moves and flashes its row, top to bottom; a launch lights the rows in
+The **routing** pane lists OMP's shared roles on one line each: the role and its lead
+as `model:thinking` in the provider's hue, with the advisor's line held while it is off
+so turning it on adds a value rather than a line. Code configures only `default`,
+`task`, `plan`, `slow`, `advisor`, `vision`, `smol`, `tiny` and `commit`; it emits no
+named-agent model overrides. OMP's bundled agents keep their prompts, restrictions,
+model selectors and inheritance: task uses `@task`, scout and sonic use `@smol`
+at medium, reviewer uses `@slow`, and security-reviewer and seance inherit natively.
+A fresh profile chooses a complete served Sonnet lane at medium, otherwise served Sol
+at medium. With no included accounts, the bundled starter remains an explicitly
+render-only preview: dials can be explored, but the no-account launch refusal stays.
+Saved explicit choices remain visible. Planning and slow use the selected tier at
+high, without a hidden premium tier; explicit strong/elite selections remain available.
+Smol stays on the cheap first rung at medium, tiny/commit at low, and vision at low,
+even when main thinking is max.
+
+A change rolls each value that moves and flashes its row, top to bottom; a launch lights the rows in
 turn. A lead that quota leaves out (its pool blocked, maxed or served by no included
 account) is struck and says why under the pointer ("Claude blocked until 16:55 ·
 falls back to sol:high", or "no route"); any pointed value names its exact
@@ -505,7 +518,7 @@ generator's head brings it back.
 
 Whenever routing is not shown with the generator (hidden, or a tab of its own in a short
 narrow panel) the profile shows under the rows grouped by what it runs: each group's
-`model:thinking`, then its roles in routing order with `●` on agent-backed ones. Groups
+`model:thinking`, then its shared roles in routing order. Groups
 read by provider, the default role's first and then GPT, Claude, DeepSeek and the rest.
 Within a provider they read by level: the higher tier first (elite, smart, normal, fast),
 then the higher thinking, and last by alias, so equal levels always stand in one order. A
@@ -513,11 +526,13 @@ change that moves a role between groups glides it there.
 
 The **cost** and **speed** meters sit above the launch: five glyphs each (`$` and `»`),
 lit to the level in the lane's accent, and the level's word while pointed. Cost is a
-role-weighted relative list-price index, lowest to highest, not billing; subscriptions
-spend quota windows, which usage shows. Speed comes from measured throughput and
-first-token time, and only when every lead model has them: otherwise its glyphs stay
-unlit and the readout says "unmeasured · a model check measures it", rather than
-showing the index's middle level.
+role-weighted relative API list-price heuristic, lowest to highest, not an OAuth bill
+or an intelligence ranking; subscriptions spend quota windows, which usage shows.
+OpenAI priority uses the documented 2.0 API price multiplier; its speed multiplier
+and thinking factors are heuristic, not account-scoped price or latency guarantees.
+Speed comes from recorded throughput and first-token time, and only when every lead
+model has them: otherwise its glyphs stay unlit and the readout says
+"unmeasured · a model check measures it", rather than showing the index's middle level.
 
 ### The launch
 

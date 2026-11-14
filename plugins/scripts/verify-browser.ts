@@ -3,7 +3,7 @@ import assert from "node:assert/strict";
 import { createHash, randomBytes } from "node:crypto";
 import { chmodSync, existsSync, mkdirSync, mkdtempSync, readdirSync, readFileSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
-import { join, resolve } from "node:path";
+import { isAbsolute, join, resolve } from "node:path";
 import { pathToFileURL } from "node:url";
 import type { Browser as BrowserInstance } from "../../../manifold/scripts/cdp.ts";
 import type { TestAgent, TestServer } from "../../../manifold/packages/testkit/src/index.ts";
@@ -42,6 +42,7 @@ MANIFOLD_DIR selects the pinned SDK checkout; default: the sibling manifold dire
 Requires installed SDK dependencies, setsid and Chromium (MANIFOLD_CHROMIUM may select its binary).
 MANIFOLD_GATE_DIST may supply an existing SDK web build; otherwise gate-dist builds a
 throwaway web bundle. Missing Chromium or any failed assertion is a failure, not a skip.
+CODE_VERIFY_SCREENSHOTS may name an absolute artifact directory for mounted shared-routing PNGs.
 Starts only a disposable loopback server and an isolated testkit machine transport/terminal
 host. No native job owner, native setup, terminals, OMP processes, inference or providers are invoked.
 Every Chromium runs supervised in its own process group: success, failure, SIGINT/SIGTERM/SIGHUP
@@ -97,6 +98,7 @@ const pluginRoot = resolve(import.meta.dir, "..");
 const manifold = resolve(process.env.MANIFOLD_DIR ?? join(pluginRoot, "../../manifold"));
 const bundleDirectory = resolve(process.argv[2] ?? join(pluginRoot, "dist"));
 const ompBundleDirectory = resolve(process.env.CODE_OMP_BUNDLES_DIR ?? join(pluginRoot, ".integration/omp/plugins/dist"));
+const screenshotDirectory = process.env.CODE_VERIFY_SCREENSHOTS;
 const ompFamily = ["atyrode.omp", "atyrode.omp.accounts", "atyrode.omp.gateway"];
 const family = ["atyrode.code", "atyrode.code.accounts", "atyrode.code.generator", "atyrode.code.usage"];
 /** The accounts panel's root, around its scroll region: its layer, a native review, stands in it. */
@@ -513,7 +515,7 @@ const setupSheet = `${generator} [data-sheet="setup"]`;
 const importDialog = `${layers} dialog[aria-labelledby="${G}import-title"]`;
 const routeRows = `${generator} [data-pane="routing"] .${G}route`;
 const starterProviders = ["anthropic", "deepseek", "openai-codex"];
-const profileRoles = ["default", "task", "plan", "slow", "reviewer", "security-reviewer", "scout", "sonic", "vision", "smol", "tiny", "commit"];
+const profileRoles = ["default", "task", "plan", "slow", "advisor", "vision", "smol", "tiny", "commit"];
 /** The generator's rows, top to bottom: the dials, then fallbacks as an on/off row; the other profile switches live in the session options. */
 type RowId = "lane" | "tier" | "thinking" | "advisor" | "fallbacks";
 const ROWS: readonly RowId[] = ["lane", "tier", "thinking", "advisor", "fallbacks"];
@@ -586,7 +588,7 @@ async function routedRoles(browser: BrowserInstance): Promise<Routed[]> {
     const value = route.querySelector('.${G}chain > .${G}tok > .${G}tok-layer:not([aria-hidden]) .${G}tok-value');
     return { role: route.dataset.role, alias: value?.querySelector('.${G}tok-alias')?.textContent ?? '',
       thinking: (value?.querySelector('.${G}tok-thinking')?.textContent ?? '').replace(/^:/, '') };
-  }).sort((left, right) => left.role < right.role ? -1 : left.role > right.role ? 1 : 0)`);
+  })`);
 }
 /** What the routing must show for a selection: every routed role on its lead's alias at the lead's thinking. */
 function expectedRoutes(document: CatalogDocument, selection: Selection): Routed[] {
@@ -594,15 +596,94 @@ function expectedRoutes(document: CatalogDocument, selection: Selection): Routed
   const aliases = displayAliases(compiled);
   return reviewCatalog(compiled, selection, Date.now()).routes.map(route => ({
     role: route.role, alias: aliases.get(route.lead.key) ?? route.lead.key, thinking: route.lead.thinking,
-  })).sort((left, right) => left.role < right.role ? -1 : left.role > right.role ? 1 : 0);
+  }));
 }
 async function assertRoutes(browser: BrowserInstance, advisor: boolean): Promise<void> {
   await until(browser, "the routing routes the profile", `document.querySelector(${JSON.stringify(`${routeRows}:not([data-off])`)}) !== null`);
   await still(browser);
   const routed = await routedRoles(browser);
-  assert.deepEqual(routed.map(entry => entry.role).sort(), [...profileRoles, ...(advisor ? ["advisor"] : [])].sort(),
-    "The full current role contract is routed, including delegated and utility roles");
+  assert.deepEqual(routed.map(entry => entry.role), profileRoles.filter(role => advisor || role !== "advisor"),
+    "Only native shared roles are routed, in native order");
+  assert.deepEqual(await browser.evaluate(`[...document.querySelectorAll(${JSON.stringify(routeRows)})].map(route => route.dataset.role)`), profileRoles,
+    "The advisor's row stays after slow even while it is off");
   assert(routed.every(entry => entry.alias && entry.thinking), "Every routed role names its model and supported effort");
+}
+
+/** Real pointer and keyboard dial commits update shared-role consumers, not just the selected words. */
+async function sharedDialScenario(browser: BrowserInstance, document: CatalogDocument, initial: Selection, label: string): Promise<void> {
+  const compiled = compileCatalog(document), aliases = displayAliases(compiled);
+  let selection: Selection = { ...initial, lane: { kind: "provider", family: "anthropic", blend: "only" }, capability: 2, thinking: "medium", advisor: "glance" };
+  const screenshot = async (name: string) => {
+    if (screenshotDirectory === undefined) return;
+    assert(isAbsolute(screenshotDirectory), "CODE_VERIFY_SCREENSHOTS must name an absolute artifact directory");
+    mkdirSync(screenshotDirectory, { recursive: true });
+    const { result } = await browser.send("Page.captureScreenshot", { format: "png", fromSurface: true, captureBeyondViewport: false });
+    const data = result?.data;
+    assert(typeof data === "string", "Chromium returns the mounted routing screenshot");
+    writeFileSync(join(screenshotDirectory, `${label}-${name}.png`), Buffer.from(data, "base64"));
+  };
+  const assertPolicy = async (description: string) => {
+    await assertRoutes(browser, selection.advisor !== "off");
+    const shown = await routedRoles(browser);
+    assert.deepEqual(shown, expectedRoutes(document, selection), `${description}: the mounted routing matches the committed selection`);
+    const expectLead = (role: string, tier: number, thinking: Selection["thinking"]) => {
+      const key = compiled.rung("anthropic", tier);
+      assert.deepEqual(shown.find(route => route.role === role), { role, alias: aliases.get(key) ?? key, thinking: compiled.clampThinking(key, thinking) },
+        `${description}: ${role} uses the requested rung and effort`);
+    };
+    for (const role of ["default", "task"]) expectLead(role, selection.capability, selection.thinking);
+    for (const role of ["plan", "slow"]) expectLead(role, selection.capability, "high");
+    expectLead("smol", 1, "medium");
+    for (const role of ["tiny", "commit"]) expectLead(role, 1, "low");
+    assert.equal(shown.find(route => route.role === "vision")?.thinking, compiled.clampThinking(compiled.rung("anthropic", selection.capability), "low"),
+      `${description}: vision stays low even under main max`);
+    if (selection.advisor !== "off") {
+      const tier = selection.advisor === "glance" ? 1 : selection.advisor === "review" ? 2 : 3;
+      expectLead("advisor", tier, selection.advisor === "glance" ? "low" : selection.advisor === "review" ? "medium" : "high");
+    }
+  };
+  await choose(browser, "lane", "anthropic");
+  if (await browser.evaluate(`${onlyBox}.getAttribute('aria-checked')`) !== "true") await click(browser, onlyBox);
+  await choose(browser, "tier", "normal");
+  await choose(browser, "thinking", "medium");
+  await choose(browser, "advisor", "glance");
+  await assertPolicy("Routine capable medium");
+  await screenshot("everyday");
+  await choose(browser, "tier", "smart");
+  selection = { ...selection, capability: 3 };
+  await assertPolicy("An explicit strong choice");
+  await screenshot("strong");
+  await focusRow(browser, "tier");
+  await key(browser, "End", 35);
+  await until(browser, "End explicitly selects elite", `${chosenKey("tier")} === 'elite'`);
+  selection = { ...selection, capability: 4 };
+  await assertPolicy("An explicit keyboard elite choice");
+  await screenshot("elite");
+  await focusRow(browser, "thinking");
+  await key(browser, "End", 35);
+  await until(browser, "End explicitly selects maximum main effort", `${chosenKey("thinking")} === 'max'`);
+  selection = { ...selection, thinking: "max" };
+  await assertPolicy("Maximum main effort keeps utility budgets low");
+  await screenshot("main-max");
+  try {
+    await panelWidth(browser, 390, 2400);
+    await assertPolicy("Narrow main max retains all shared routes");
+    await screenshot("narrow-main-max");
+  } finally {
+    await browser.send("Emulation.clearDeviceMetricsOverride", {});
+  }
+  for (const advisor of ["off", "glance", "review", "audit"] as const) {
+    await choose(browser, "advisor", advisor);
+    selection = { ...selection, advisor };
+    await assertPolicy(`Advisor ${advisor}`);
+  }
+  await choose(browser, "advisor", initial.advisor);
+  await choose(browser, "thinking", initial.thinking);
+  await choose(browser, "tier", ["fast", "normal", "smart", "elite"][initial.capability - 1]!);
+  await choose(browser, "lane", initial.lane.kind === "mixed" ? "mixed" : initial.lane.family);
+  if (initial.lane.kind === "provider" && await browser.evaluate(`${onlyBox}.getAttribute('aria-checked')`) !== String(initial.lane.blend === "only")) await click(browser, onlyBox);
+  await assertRoutes(browser, initial.advisor !== "off");
+  assert.deepEqual(await routedRoles(browser), expectedRoutes(document, initial), "The pointer and keyboard dial round trip restores the initial routes");
 }
 
 /** Chooses a word of a row by a real press, unless it is already chosen. */
@@ -1240,7 +1321,7 @@ async function usableStarter(browser: BrowserInstance, edited = false): Promise<
     const stops = row.querySelectorAll('[role="radio"][tabindex="0"]');
     return stops.length !== 1 || stops[0].getAttribute('aria-checked') !== 'true';
   }).map(row => row.dataset.row)`), [], "Each row is one keyboard Tab stop: its chosen value");
-  // The default profile keeps the old Code advisor default (glance), so the advisor role is routed.
+  // The bundled default enables a glance advisor; explicit choices can turn it off without moving its row.
   await assertRoutes(browser, true);
 }
 
@@ -2394,6 +2475,31 @@ async function starterWorkbenchScenario(browser: BrowserInstance, server: TestSe
   assert.equal(metadata.source, "bundled");
   assert.deepEqual([...new Set(metadata.models.map(model => model.provider))].sort(), [...starterProviders].sort(),
     "The starter uses exact sanctioned providers, never an OpenAI alias for Codex");
+  const latest: Readonly<Record<string, readonly (readonly [id: string, input: number, output: number])[]>> = {
+    anthropic: [
+      ["claude-haiku-5-5", 0.1, 0.5], ["claude-sonnet-5-5", 2, 10],
+      ["claude-opus-5-5", 4, 20], ["claude-fable-5-2", 8, 40],
+    ],
+    "openai-codex": [
+      ["gpt-6-luna", 0.1, 0.5], ["gpt-6.1-terra", 1, 5],
+      ["gpt-6.1-sol", 2, 10], ["gpt-6-astra", 10, 50],
+    ],
+  };
+  const bundledStarter = catalogFromMetadata(metadata, "any");
+  for (const [provider, models] of Object.entries(latest)) {
+    for (const [id, input, output] of models) {
+      const source = metadata.models.find(model => model.provider === provider && model.id === id);
+      assert(source, `The real pinned OMP metadata publishes ${provider}/${id}`);
+      assert.deepEqual([source.inputCostPerMillion, source.outputCostPerMillion], [input, output],
+        `${provider}/${id} retains authoritative API list pricing, never an OAuth bill`);
+    }
+    const rungs = bundledStarter.models.filter(model => model.provider === provider).sort((left, right) => left.tier - right.tier);
+    assert.deepEqual(rungs.map(model => [model.tier, model.id, model.inputCostPerMillion, model.outputCostPerMillion]),
+      models.map(([id, input, output], index) => [index + 1, id, input, output]),
+      `The passive metadata-to-starter consumer retains all four latest ${provider} series in their named rungs and at their source prices`);
+    assert(rungs.every(model => model.tokensPerSecond === null && model.timeToFirstTokenMs === null),
+      "Passive bundled pricing and series selection never fabricate measured throughput or latency");
+  }
   const deployments = await ownerAction(server, "engine.jobs.listDeployments", { pluginId: "atyrode.omp", limit: 100 });
   const terminals = await ownerAction(server, "core.terminals.listAll", {});
   await arrangeWorkbench(server, writer);
@@ -2420,12 +2526,14 @@ async function starterWorkbenchScenario(browser: BrowserInstance, server: TestSe
       assert.equal(await browser.evaluate(`${liveRegion}?.textContent`), "", "The live region is mounted empty");
       // Models shows the policy derivation of the exact real OMP metadata response; untouched, the preview keeps no edit.
       const draftKey = storedDraftKey(writer.principal.id, workspace.id);
-      const starter = catalogFromMetadata(metadata, "any"), initialSelection = defaultSelection(compileCatalog(starter));
+      const starter = bundledStarter, initialSelection = defaultSelection(compileCatalog(starter));
       const initialDraft = await readProfile(browser, draftKey);
       assert.deepEqual(initialDraft.list, listOf(starter), "Models shows the starter the exact real OMP metadata response derives, each rung on its model");
       assert.equal(initialDraft.kept, null, "An untouched preview keeps no edit");
       assert.deepEqual(await browser.evaluate(`[${chosenKey("thinking")}, ${chosenKey("advisor")}]`), [initialSelection.thinking, initialSelection.advisor],
         "The rows show that list's default profile");
+      await sharedDialScenario(browser, starter, initialSelection, initialized ? "initialized" : "first-use");
+      assert.deepEqual(await readProfile(browser, draftKey), initialDraft, "Exercising all shared route dials restores the untouched preview without a kept edit");
       // The first workspace has one recent profile, which the panel reads as it mounts.
       const recent = { ...initialSelection, thinking: "high", advisor: "off" } satisfies Selection;
       if (!initialized) {
@@ -2486,6 +2594,7 @@ async function starterWorkbenchScenario(browser: BrowserInstance, server: TestSe
       assert(native.ok);
       assert((native.result as OmpResult<"describeDestination">).operations.every(operation => !operation.nativeReady));
     }
+    await emptyPoolStarterScenario(browser, server, writer, metadata);
     await starterConflictScenario(browser, server, writer);
     assert(trace.requests.some(request => request.name === "atyrode.omp.readModelCatalog"), "The browser itself consumes the real public bundled source");
     for (const request of trace.requests.filter(request => request.name === "atyrode.omp.readModelCatalog")) {
@@ -2496,6 +2605,50 @@ async function starterWorkbenchScenario(browser: BrowserInstance, server: TestSe
   assert.deepEqual(await ownerAction(server, "engine.jobs.listDeployments", { pluginId: "atyrode.omp", limit: 100 }), deployments);
   assert.deepEqual(await ownerAction(server, "core.terminals.listAll", {}), terminals,
     "Starter editing, saving and conflict recovery create neither native approvals nor terminals");
+}
+
+/** A fresh, known empty account pool keeps local catalog exploration and account repair reachable, never a runnable entitlement. */
+async function emptyPoolStarterScenario(browser: BrowserInstance, server: TestServer, writer: TokenGrant, metadata: OmpResult<"readModelCatalog">): Promise<void> {
+  const fixture = await intercept(browser, server, name => name === "atyrode.omp.accounts.accounts" ? { ok: true, result: fixtureAccounts([]) } : undefined);
+  const trace = await watchActions(browser, server);
+  const document = catalogFromMetadata(metadata, "any"), initial = defaultSelection(compileCatalog(document));
+  try {
+    for (const initialized of [false, true]) {
+      const workspace = await createContainer(server, initialized ? "Initialized empty account preview" : "First-use empty account preview", "canvas");
+      const target = { containerId: workspace.id };
+      if (initialized) assert((await callAction(server, writer.token, "atyrode.code.initializeConfiguration", { ...target, expectedRevision: 0 })).ok);
+      const before = await readConfiguration(server, writer, target), from = trace.requests.length;
+      await openGenerator(browser, server, workspace.id);
+      await usableStarter(browser);
+      await until(browser, "a known empty pool explains the refusal and offers account repair",
+        `${launchIs("launch", "refused")} && ${element(stage)}.textContent.includes('No account is included') && !!${fix("accounts")}`);
+      assert.equal(await browser.evaluate(`!!${fix("list-retry")}`), false, "An empty account pool is not a model-list failure");
+      assert.deepEqual(await routedRoles(browser), expectedRoutes(document, initial), "An empty pool keeps a render-only catalog profile visible");
+      await choose(browser, "tier", "smart");
+      await focusRow(browser, "thinking");
+      await key(browser, "End", 35);
+      await until(browser, "keyboard exploration can choose maximum main effort without accounts", `${chosenKey("thinking")} === 'max'`);
+      const selection: Selection = { ...initial, capability: 3, thinking: "max" };
+      await assertRoutes(browser, selection.advisor !== "off");
+      assert.deepEqual(await routedRoles(browser), expectedRoutes(document, selection), "Pointer and keyboard exploration update real shared routes without an included account");
+      await until(browser, "local exploration remains refused on the known empty pool",
+        `${launchIs("save & launch", "refused")} && ${element(stage)}.textContent.includes('No account is included')`);
+      await click(browser, launchButton);
+      await until(browser, "a launch press explains the missing account without starting a check", asks("refused"));
+      assert.equal((await browser.evaluate<Asked>(asked)).title, "No account is included");
+      await key(browser, "Escape", 27);
+      await until(browser, "Esc returns from the refusal to the catalog preview", unasked);
+      await click(browser, fix("accounts"));
+      await until(browser, "account repair stays reachable from the empty-pool preview", shownView("accounts"));
+      assert.deepEqual(await readConfiguration(server, writer, target), before, "Empty-pool exploration and refusal save no workspace policy");
+      assert.deepEqual(trace.requests.slice(from).filter(request => /^atyrode\.code\.(initializeConfiguration|adoptStarterProfile|stageCatalog|promoteCatalog|select|changeAccounts)$/.test(request.name)), []);
+      noNativeEffects(trace.requests.slice(from));
+    }
+    fixture.check();
+  } finally {
+    await fixture.stop();
+    trace.stop();
+  }
 }
 
 async function starterConflictScenario(browser: BrowserInstance, server: TestServer, writer: TokenGrant): Promise<void> {
