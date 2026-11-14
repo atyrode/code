@@ -123,6 +123,15 @@ export function ModelsSheet({ host, model, machine, onBack, backRef, onPlace }: 
   // draft the workbench makes of that edit and ends with it (`followPress`); a visited sheet stays mounted, so it sees them all.
   const [savePress, setSavePress] = useState<SavePress | null>(null);
   const localDraft = model.localDraft;
+  const saveQuestion = useRef<SavePress | null>(null);
+  useLayoutEffect(() => {
+    if (model.premiumSave && savePress) { saveQuestion.current = savePress; return; }
+    const asked = saveQuestion.current;
+    if (!asked || model.premiumSave) return;
+    saveQuestion.current = null;
+    // Confirmed saves enter perform's busy state; dismissing the question never attempted a save.
+    if (!model.busy) setSavePress(current => current === asked ? null : current);
+  }, [model.premiumSave, model.busy, savePress]);
   useLayoutEffect(() => { setSavePress(previous => followPress(previous, localDraft)); }, [localDraft]);
   const failedSave = saveFailure(savePress, localDraft, model.message);
   const editFixes: readonly GoFix[] = [
@@ -161,11 +170,12 @@ export function ModelsSheet({ host, model, machine, onBack, backRef, onPlace }: 
   }
   function useStaged(confirmed?: Selection) {
     if (!record || !draft || !compiled || writeRefusal || editHold("use")) return;
-    const { containerId, revision } = record, digest = draft.digest, verified = draft.provenance !== null, saved = record.selection;
+    const { containerId, revision } = record, digest = draft.digest, verified = draft.provenance !== null;
+    const saved = verification.stagedSelection ?? record.selection;
     let selection = confirmed ?? (saved && previewSelection(compiled, saved) ? saved : undefined);
     if (confirmed === undefined && selection !== undefined) {
       try {
-        const previous = active && saved ? { catalog: compileCatalog(active.document), selection: saved } : null;
+        const previous = active && record.selection ? { catalog: compileCatalog(active.document), selection: record.selection } : null;
         const lead = newPremiumLead(compiled, selection, previous);
         if (lead) {
           const candidate: Selection = { ...selection, capability: lead.tier };
@@ -173,7 +183,7 @@ export function ModelsSheet({ host, model, machine, onBack, backRef, onPlace }: 
           if (!review) { setFailure("The replacement cannot retain this profile at the new model's actual tier. Import another list or check the models."); return; }
           const effort = review.routes.find(route => route.role === "default")!.lead.thinking;
           setPremium({ host, scope: promotionScope, selection: review.selection, model: `${lead.provider}/${lead.id}`, effort,
-            tier: lead.tier === 3 ? "strong" : lead.tier === 4 ? "elite" : TIERS[lead.tier - 1]! });
+            tier: TIERS[lead.tier - 1]! });
           return;
         }
       } catch (reason) {
@@ -190,7 +200,7 @@ export function ModelsSheet({ host, model, machine, onBack, backRef, onPlace }: 
           if (!previewSelection(compiled, selection)) throw new Error("code_budget_unsatisfiable");
         }
       } catch {
-        // A sparse list may declare only strong or elite. Naming a candidate is not adoption:
+        // A sparse list may declare only smart or elite. Naming a candidate is not adoption:
         // the deliberate dialog must accept its exact model, tier and configured effort first.
         for (const capability of [3, 4] as const) {
           for (const family of families) {
@@ -202,7 +212,7 @@ export function ModelsSheet({ host, model, machine, onBack, backRef, onPlace }: 
             const model = compiled.model(lead.key);
             if (model.tier !== capability) continue;
             setPremium({ host, scope: promotionScope, selection: review.selection, model: `${model.provider}/${model.id}`,
-              effort: lead.thinking, tier: capability === 3 ? "strong" : "elite" });
+              effort: lead.thinking, tier: TIERS[capability - 1]! });
             return;
           }
         }
@@ -321,7 +331,7 @@ export function ModelsSheet({ host, model, machine, onBack, backRef, onPlace }: 
   function primary(): Primary {
     switch (phase) {
       case "inventory": return { label: "checking models…", busy: true, parts: [[`on ${where}`, null]], fixes: [cancel],
-        said: { value: "checking models", text: "OMP reads the models your accounts reach; nothing is spent" }, press: busy };
+        said: { value: "checking models", text: "OMP lists advertised models; account access and performance are not checked yet" }, press: busy };
       // A charge waits only on a check the person started, whose dialog is then open over this sheet (decision-dialog.tsx): here
       // it only waits behind that dialog, still rather than breathing, since nothing runs while the person decides.
       case "charge": return { label: "checking models…", disabled: true, parts: [[count(charged, "tiny request"), "strong"], ["waiting for your approval", null]], fixes: [],
@@ -342,10 +352,8 @@ export function ModelsSheet({ host, model, machine, onBack, backRef, onPlace }: 
           press: () => { if (writeRefusal) return writeRefusal; useStaged(); return null; } };
       }
       case "verified": {
-        // The head already says when the list was checked; beside the action, only its alternative: checking again, through
-        // the same gate as a first check, whose charge asks unless the person approved checks. A check again that stopped,
-        // the panel's own included, says so: what it would have changed (the list, or for a stop while saving the profile,
-        // the team) stays as it was, which the head alone cannot show.
+        // The head already says when the list was checked; beside the action, only its alternative:
+        // checking again through the same charge gate. A check that stopped is said here too.
         const stopped = verification.failure;
         const note: readonly Part[] = stopped ? [[stopped.cancelled ? "check cancelled" : "check stopped", stopped.cancelled ? null : "attention"]] : [];
         return { label: "back to code", parts: [...note, ...refused], fixes: verifyGate.open ? [{ label: "check again", run: () => model.actions.verify() }] : [],

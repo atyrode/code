@@ -14,6 +14,14 @@ sole progress record; source descriptions here do not imply deployment.
 Code packs four bundles. The three visible parts require the root, and the root
 declares the OMP root, accounts and gateway plugins as required dependencies.
 
+The native shared-role generation is a clean contract pair: typed Code caller
+0.2.0 and root plugin 0.5.0 require qualified OMP 0.4.0 and matching pinned
+core/owner capabilities. A separately pinned dependent caller stays on its old
+caller/root pair until its owner upgrades and repacks it. New-root activation
+must wait for the matching callers actually deployed there; see the
+[owned rollout boundary](../docs/status.md#native-shared-role-cutover). No
+compatibility shim or installed-caller roster is implied.
+
 | Directory | Plugin / surface |
 | --- | --- |
 | `atyrode.code/` | `atyrode.code`: shared catalog, routing, account-choice and suggestion policy |

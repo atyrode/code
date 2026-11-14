@@ -4,7 +4,7 @@ import { initialAccountChoices, reduceAccountChoices } from "../domain/accounts.
 import { compileCatalog } from "../domain/catalog.ts";
 import type { CatalogModel, Selection } from "../domain/contracts.ts";
 import { quotaPools, type QuotaPool } from "../domain/quota.ts";
-import { reviewCatalog, type Review } from "../domain/routing.ts";
+import { newPremiumLead, reviewCatalog, type Review } from "../domain/routing.ts";
 import { projectUsage } from "../domain/usage.ts";
 import { optionConsequence, rescue, seatRole, type OptionContext } from "../code/generator/consequences.ts";
 import { chooseOption } from "../code/generator/dial-space.ts";
@@ -135,6 +135,33 @@ describe("what an option would do before it is chosen", () => {
     for (const [word, key, thinking] of [["glance", "o1", "low"], ["review", "o2", "medium"], ["audit", "o3", "high"]] as const) {
       expect(chooseOption(catalog, max.selection, max, "advisor", word, known).review?.routes.find(route => route.role === "advisor")?.lead)
         .toEqual({ key, thinking });
+    }
+  });
+
+  test("a sparse lane preview retains preferences until an actual-tier choice, with the unchanged active address exempt", () => {
+    for (const capability of [3, 4] as const) {
+      const sparse = compileCatalog({ schemaVersion: 1, models: [
+        model("o1", "openai-codex", 1, { inputCostPerMillion: 0, outputCostPerMillion: 0 }),
+        model("o2", "openai-codex", 2, { inputCostPerMillion: 0, outputCostPerMillion: 0 }),
+        model("premium", "anthropic", capability, { inputCostPerMillion: 0, outputCostPerMillion: 0 }),
+      ] });
+      const selected: Selection = { ...review().selection, thinking: "max", advisor: "off", prewalk: true, planYolo: true, fallback: false, budget: "free" };
+      const active = reviewCatalog(sparse, selected, now);
+      const chosen = chooseOption(sparse, selected, active, "lane", "claude-only", known);
+      expect(chosen.refusal).toBeNull();
+      const draft = chosen.selection!;
+      expect(draft).toEqual({ ...selected, lane: claudeOnly });
+      expect(chosen.review?.routes.find(route => route.role === "default")?.lead.key).toBe("premium");
+      const previous = { catalog: sparse, selection: selected };
+      const lead = newPremiumLead(sparse, draft, previous);
+      expect(lead).toEqual({ provider: "anthropic", id: "native-premium", tier: capability });
+      const explicit: Selection = { ...draft, capability: lead!.tier };
+      const confirmed = reviewCatalog(sparse, explicit, now);
+      expect(confirmed.selection).toEqual({ ...draft, capability });
+      expect(confirmed.routes.find(route => route.role === "default")?.lead).toEqual({ key: "premium", thinking: "max" });
+      expect(newPremiumLead(sparse, explicit, previous)).toBeNull();
+      expect(newPremiumLead(sparse, draft, { catalog: sparse, selection: explicit })).toBeNull();
+      expect(draft.capability).toBe(2);
     }
   });
 });

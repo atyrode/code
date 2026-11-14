@@ -14,6 +14,14 @@ transition ledger. This page records constraints, not another roadmap.
 [#286](https://github.com/atyrode/code/issues/286) owns the native routing refresh.
 The typed caller package is 0.2.0 and the root action plugin is 0.5.0 because the
 strict public route result no longer contains `agentBacked`; the generator is 0.4.0.
+The clean cutover pairs Code caller 0.2.0-or-newer with root plugin 0.5.0-or-newer,
+qualified OMP 0.4.0-or-newer and their exact matching core/owner capabilities. These
+numbers are minimum contract generations, not a substitute for the immutable pins.
+Separately pinned callers intentionally remain on their old caller/root pair until
+their owner migrates and repacks them. Before activating the new root, the operator
+must confirm every dependent caller in that deployment is paired; independently
+owned Babel adoption is a prerequisite only if Babel is present there. This page does
+not assert an installed roster or cross-version compatibility.
 There is no compatibility alias. Code configures only shared native roles and does
 not replace bundled agents or emit `task.agentModelOverrides`. The
 [routing contract](configuration.md#routing-cost-and-speed) distinguishes configured
@@ -22,10 +30,12 @@ tiers unless explicitly selected. Widget and memory stay on the cheap first rung
 their own empty retry chains, including while ordinary fallbacks are off. Shared
 memory routing does not change its enabled/backend/retention/autolearn preferences.
 
-The source gate uses Bun 1.4.4 and Manifold
-[`a7c2237`](https://github.com/atyrode/manifold/commit/a7c2237b7cf8829ca93928339703c699300d6937),
-protocol 59. Exact OMP source is pinned in both package manifests and resolved
-lockfiles; the gate prepares that source rather than installed CLI or branch bytes.
+The source gate uses Bun 1.4.4 and the exact
+[Manifold revision](../plugins/MANIFOLD_REV). Both Code package manifests and their
+resolved locks pin the same immutable OMP source; its paired SDK revision and Code's
+workflow SDK source must match that file. Protocol and hardened-contract admission
+come from that exact SDK, not an older installed hub. The gate prepares the pinned
+source rather than installed CLI or branch bytes.
 Disposable browser and synthetic native proof do not establish live activation,
 native owner binding, credential migration, provider availability or production
 acceptance. Operational follow-through stays open at the owning issue until the

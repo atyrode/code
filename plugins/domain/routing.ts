@@ -101,24 +101,13 @@ export function selectionForLane(lane: Lane, capability: Selection["capability"]
 }
 
 /**
- * Everyday work starts on Sonnet's second rung, otherwise Sol's third rung, at medium effort.
- * Only the supplied account pool determines whether a provider is served; catalog-only previews
- * may omit that predicate. Explicit saved selections are not reinterpreted by this policy.
+ * Everyday work first tries an authored Sonnet-tier rung, then an authored Sol-tier rung, at medium
+ * effort. Only after both profiles are unavailable does it try lower authored tiers and generic
+ * families. The supplied account pool must serve the whole profile; saved choices are not reinterpreted.
  */
 export function defaultSelection(catalog: CompiledCatalog, serves: (provider: string) => boolean = () => true): Selection {
   let completeProfile = false;
-  for (const family of orderedFamilies(catalog.families, ["anthropic", "openai"])) {
-    let capability: Selection["capability"] = family === "anthropic" ? 2 : 3;
-    // Nearest-rung filling remains visible for explicit choices, never an automatic premium default.
-    if (catalog.model(catalog.rung(family, capability)).tier > capability) {
-      let lower: Selection["capability"] | null = null;
-      for (const model of catalog.models) {
-        if (model.tier === 0 || model.tier > capability || catalog.family(model.key) !== family) continue;
-        if (lower === null || model.tier > lower) lower = model.tier;
-      }
-      if (lower === null) continue;
-      capability = lower;
-    }
+  const usableSelection = (family: string, capability: Selection["capability"]): Selection | null => {
     const selection = selectionForLane({ kind: "provider", family, blend: "only" }, capability);
     let routes: Route[];
     try {
@@ -126,12 +115,26 @@ export function defaultSelection(catalog: CompiledCatalog, serves: (provider: st
       routes = selectedRoutes(catalog, selection);
     } catch (error) {
       if (!(error instanceof DomainError) || error.code !== "invalid_selection") throw error;
-      continue;
+      return null;
     }
     // The automatic ceiling covers vision and helpers too, not merely the main model.
-    if (routes.some(route => catalog.model(route.lead.key).tier > capability)) continue;
+    if (routes.some(route => catalog.model(route.lead.key).tier > capability)) return null;
     completeProfile = true;
-    if (routes.every(route => serves(catalog.model(route.lead.key).provider))) return selection;
+    return routes.every(route => serves(catalog.model(route.lead.key).provider)) ? selection : null;
+  };
+  for (const [family, capability] of [["anthropic", 2], ["openai", 3]] as const) {
+    if (!catalog.families.includes(family) || catalog.model(catalog.rung(family, capability)).tier !== capability) continue;
+    const selection = usableSelection(family, capability);
+    if (selection !== null) return selection;
+  }
+  for (const family of orderedFamilies(catalog.families, ["anthropic", "openai"])) {
+    const ceiling = family === "anthropic" ? 1 : family === "openai" ? 2 : 3;
+    for (const capability of [3, 2, 1] as const) {
+      // Nearest-rung filling remains visible for explicit choices, never an automatic tier label.
+      if (capability > ceiling || catalog.model(catalog.rung(family, capability)).tier !== capability) continue;
+      const selection = usableSelection(family, capability);
+      if (selection !== null) return selection;
+    }
   }
   throw new DomainError(completeProfile ? "account_unavailable" : "invalid_selection");
 }

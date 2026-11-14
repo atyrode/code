@@ -60,11 +60,11 @@ All Code actions are `atyrode.code.<name>`:
 the exact catalog digest, compiled route/estimate review and `reviewDigest`. An explicit
 selection is validated and bound into that digest; promotion supplies the same selection,
 digest, source and revision. Omission uses the balanced default (or saved active selection),
-never a silent premium upgrade. This lets an explicitly selected strong/elite profile
+never a silent premium upgrade. This lets an explicitly selected smart/elite profile
 promote a sparse premium-only catalog without first applying a temporary default.
 A new main lead whose actual catalog tier exceeds the requested tier is refused,
 even if a sparse ladder fills that lower dial with a premium model. Select its actual
-strong/elite tier deliberately; Models' premium question makes that same explicit
+authored tier deliberately; Models' premium question makes that same explicit
 selection before review and promotion. Already reviewed active choices remain usable
 when the selected main provider and model id are unchanged, including legacy visible
 choices. Key or metadata-only refreshes do not invent a new model substitution; merely
@@ -196,11 +196,11 @@ staged catalog is an explicit preview, not an active profile or a bundled fallba
 An unresolved catalog keeps Models repair reachable; the main view then says the
 model list is unavailable, with Retry and Models, whatever else the launch line says.
 
-The starter is render-only. Nothing writes it as the workspace's catalog except a
-model verification (the panel's **model check**),
-`workflow.verifyModels(target, { expectedRevision, budget, selection, adoptOnly })`: the
-one way a Code catalog comes to name models, because only a probe shows which this
-operator can call. Preparing reads the workspace at `expectedRevision` (initializing an
+The starter and manual imports remain unverified. The panel's **model check**,
+`workflow.verifyModels(target, { expectedRevision, budget, selection, adoptOnly })`,
+is the source of a checked catalog with real, account-scoped inventory and benchmark
+evidence; metadata alone is never provider readiness or entitlement. Preparing reads
+the workspace at `expectedRevision` (initializing an
 absent one). When the caller keeps a check of the workspace's present pool, derived under
 `budget`, whose benchmark completed later than that of the list the workspace holds for
 that pool, or the workspace holds none for it, preparing puts that check in use
@@ -229,9 +229,23 @@ and every other offered model with its reason; the document's compiled catalog n
 short families. It refuses only a family Code requires whose ladder would put a model above
 one that costs no more and thinks deeper (`code_ladder_regression`, naming both), a benchmark
 that does not answer the charge exactly, and nothing laddered at all
-(`code_probe_insufficient_ladder`). Only the returned `confirm`
-spends: one benchmark job per provider, then derive, stage, review, promote and save
-the selection narrowed to what the verified catalog hosts. An `inconclusive` model may be
+(`code_probe_insufficient_ladder`).
+
+Before spending, the existing charge's inventory can form an advertised, unmeasured
+planning catalog. A known new over-ceiling main model asks for its actual authored
+tier before benchmark confirmation, including when standing spending
+approval already covers the charge. This provisional plan is not a successful probe,
+verified catalog or entitlement. Premium intent and spending approval remain separate,
+and the authoritative derived catalog is checked again after real answers.
+
+Only the returned `confirm` spends: one benchmark job per provider, then derive and
+stage genuine evidence, review, and atomically promote the selected profile narrowed
+to what the verified catalog hosts. If completed real verification unexpectedly makes
+a new premium lead necessary, its authentic scoped catalog and kept-check evidence
+remain staged, but the active profile is not promoted. Models can confirm the actual
+tier and adopt that existing evidence without another benchmark or charge; canceling
+that later question adds no RPC, write or spend. Partial, failed or canceled benchmarks
+are never labeled verified. An `inconclusive` model may be
 left out only where nothing already chosen needs it. When it is in the list in use as a
 verification with this exact account pool made it, or in the caller's own check of that
 pool, or belongs to a family the wanted lane names (one provider, or OpenAI and Anthropic
@@ -295,7 +309,7 @@ replace the list an unsaved edit rests on and says which list the edit is on and
 each fix does: **save**, for an edit of the team in use, keeps the edit on that list;
 **discard edit**, offered by the import dialog too, drops it. If only a premium profile
 can be formed, adopting it requires a deliberate question naming its actual model,
-strong/elite tier and configured effort; canceling writes nothing. The readout says
+smart/elite tier and configured effort; canceling writes nothing. The readout says
 when the saved profile was replaced rather than silently reinterpreting it. While a
 Models write is in flight the gate counts it as a step in
 progress, so no edit lands before its receipt does. Only an untouched draft gives way
@@ -509,15 +523,17 @@ seance inherit natively. Those frontmatter values are defaults, not guaranteed e
 effort: OMP considers caller effort, then an explicit role suffix, then agent frontmatter
 and resolved defaults, with per-call ceilings applied natively. Code does not install
 per-agent thinking overrides.
-A fresh profile chooses a complete served Sonnet lane at medium, otherwise served Sol
-at medium, or a real lower rung when the everyday target is unavailable. It never
+A fresh profile first tries the exact authored Sonnet tier 2 at medium, then exact Sol
+tier 3, each as a complete bounded profile served by the selected pool. Only if neither
+works does it try usable lower authored rungs, with the capability dial set to the
+actual tier; a Haiku-only fallback is fast, not a synthetic normal choice. It never
 fills upward to a premium default. With no included accounts, the bundled starter remains an explicitly
 render-only preview: dials can be explored, but the no-account launch refusal stays.
 Saved explicit choices remain visible. Routine medium profiles configure planning and
 slow at high on the selected model tier, without a hidden premium tier. Their configured
 effort mapping is `minimal→minimal`, `low→medium`, `medium→high`, `high→xhigh`,
 `xhigh→xhigh`, `max→max`, followed by model-metadata clamping. Explicit max remains
-available; xhigh is never silently promoted to max. Strong/elite model choices remain explicit.
+available; xhigh is never silently promoted to max. Smart/elite model choices remain explicit.
 Automatic fallbacks stay at or below both that role's explicitly selected tier and
 its lead tier; a sparse ladder cannot quietly substitute a premium model. An explicitly
 selected advisor review/audit has its own tier, independent of the main model dial.
@@ -525,8 +541,9 @@ Smol and memory stay on the cheap first rung at medium, widget/tiny/commit at lo
 and vision at low, even when main thinking is max. Memory and widget each have their
 own explicit empty fallback chain, including while ordinary fallbacks are off, so
 neither inherits OMP's one-shot main fill or a built-in premium retry chain. Widget's
-native background-job author/caption consumer disables reasoning; its low suffix is
-not an assertion of effective reasoning effort. Managed native memory extraction
+native background-job author/caption consumer disables reasoning and does not forward
+the configured low suffix; that suffix is not an effective reasoning-effort claim.
+Managed native memory extraction
 passes configured medium effort through model-metadata clamping; the adapter does not
 disable reasoning or impose a fixed lower effort. The bundled sleep consolidation is
 deterministic and reports no LLM use; an available summarizer callback is not proof it
@@ -1060,8 +1077,8 @@ question is open over the sheet it reads "waiting for your approval" beside it),
 with **check again** beside it, the same check a list that holds can always renew, which
 spends without asking within the standing approval; a check again that stopped, one the
 panel ran on its own included, reads **check stopped** beside it, with its
-reason in the readout, since what it would have changed (the list, or for a stop while
-saving the profile, the team) stays as it was. An adopted check measured nothing here,
+reason in the readout; until atomic promotion succeeds, the list in use and saved
+profile stay as they were. An adopted check measured nothing here,
 so nothing reads as left out after it.
 A staged list offers **use staged list**, which reviews at its revision and atomically
 promotes that exact catalog and selected profile, and **discard**. A compatible saved

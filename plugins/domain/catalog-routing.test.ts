@@ -52,6 +52,7 @@ describe("catalog capabilities and identity", () => {
     ] });
     const review = reviewCatalog(generic, defaultSelection(generic), daytime);
     expect(generic.families).toEqual(["vendor-example"]);
+    expect(review.selection).toMatchObject({ lane: { kind: "provider", family: "vendor-example", blend: "only" }, capability: 1 });
     expect(review.available.lanes).toEqual([{ kind: "provider", family: "vendor-example", blend: "only" }]);
     expect(review.routes.every(value => value.lead.key === "future" && value.lead.thinking === "minimal" && value.fallback.length === 0)).toBe(true);
     expect(compileOmpOverlay(generic, review.selection, review.routes).modelRoles?.default)
@@ -220,6 +221,53 @@ describe("default selection", () => {
     expect(() => defaultSelection(premiumOnly)).toThrow("code_invalid_selection");
   });
 
+  test("an authored served Sol profile precedes Haiku filling the missing Sonnet rung", () => {
+    const catalog = compileCatalog({ schemaVersion: 1, models: [
+      model("haiku", "anthropic", 1, { id: "claude-haiku-5-5" }),
+      model("opus", "anthropic", 3, { id: "claude-opus-5-5" }),
+      model("luna", "openai-codex", 1, { id: "gpt-6-luna" }),
+      model("sol", "openai-codex", 3, { id: "gpt-6.1-sol" }),
+    ] });
+    expect(catalog.model(catalog.rung("anthropic", 2)).tier).toBe(1);
+    const chosen = defaultSelection(catalog), review = reviewCatalog(catalog, chosen, daytime);
+    expect(chosen).toMatchObject({ lane: { kind: "provider", family: "openai", blend: "only" }, capability: 3, thinking: "medium" });
+    expect(catalog.model(route(review.routes, "default").lead.key)).toMatchObject({ provider: "openai-codex", id: "gpt-6.1-sol", tier: 3 });
+    expect(compileOmpOverlay(catalog, chosen, review.routes).modelRoles?.default).toBe("openai-codex/gpt-6.1-sol:medium");
+    expect(clampSelection(catalog, null)).toEqual(chosen);
+    const onlyAnthropic = (provider: string) => provider === "anthropic";
+    const lower = defaultSelection(catalog, onlyAnthropic), lowerReview = reviewCatalog(catalog, lower, daytime);
+    expect(lower).toMatchObject({ lane: { kind: "provider", family: "anthropic", blend: "only" }, capability: 1 });
+    expect(catalog.model(route(lowerReview.routes, "default").lead.key)).toMatchObject({ provider: "anthropic", id: "claude-haiku-5-5", tier: 1 });
+    const explicit = selectionForLane({ kind: "provider", family: "anthropic", blend: "only" }, 2);
+    expect(clampSelection(catalog, explicit)).toEqual(explicit);
+    expect(route(reviewCatalog(catalog, explicit, daytime).routes, "default").lead.key).toBe("haiku");
+  });
+
+  test("an unbounded preferred vision profile falls back to a complete lower authored rung", () => {
+    const catalog = compileCatalog({ schemaVersion: 1, models: [
+      model("a1", "anthropic", 1), model("a2", "anthropic", 2, { images: false }), model("a4", "anthropic", 4),
+    ] });
+    const explicit = selectionForLane({ kind: "provider", family: "anthropic", blend: "only" }, 2);
+    expect(route(reviewCatalog(catalog, explicit, daytime).routes, "vision").lead.key).toBe("a4");
+    const chosen = defaultSelection(catalog), review = reviewCatalog(catalog, chosen, daytime);
+    expect(chosen).toMatchObject({ lane: { kind: "provider", family: "anthropic", blend: "only" }, capability: 1 });
+    expect(review.routes.every(value => value.lead.key === "a1" && value.fallback.length === 0)).toBe(true);
+  });
+
+  test("an unserved Sol lead falls back to the actual served Terra tier", () => {
+    const catalog = compileCatalog({ schemaVersion: 1, models: [
+      model("luna", "openai-codex", 1, { id: "gpt-6-luna" }),
+      model("terra", "openai-codex", 2, { id: "gpt-5.6-terra" }),
+      model("sol", "openai", 3, { id: "gpt-6.1-sol" }),
+    ] });
+    const serves = (provider: string) => provider === "openai-codex";
+    const chosen = defaultSelection(catalog, serves), review = reviewCatalog(catalog, chosen, daytime);
+    expect(chosen).toMatchObject({ lane: { kind: "provider", family: "openai", blend: "only" }, capability: 2 });
+    expect(catalog.model(route(review.routes, "default").lead.key)).toMatchObject({ provider: "openai-codex", id: "gpt-5.6-terra", tier: 2 });
+    expect(routeService(catalog, review.routes, serves).lead).toBeNull();
+    expect(compileOmpOverlay(catalog, chosen, review.routes, serves).modelRoles?.default).toBe("openai-codex/gpt-5.6-terra:medium");
+  });
+
   test("sparse Sol coverage uses a declared lower tier instead of automatically selecting Astra", () => {
     const catalog = compileCatalog({ schemaVersion: 1, models: [model("o1", "openai", 1), model("o4", "openai", 4)] });
     expect(catalog.model(catalog.rung("openai", 3)).tier).toBe(4);
@@ -234,14 +282,18 @@ describe("default selection", () => {
   });
 
   test("lower-only provider and generic catalogs remain usable without manufacturing a premium rung", () => {
-    for (const provider of ["anthropic", "openai", "vendor-example"]) {
-      const catalog = compileCatalog({ schemaVersion: 1, models: [model("only", provider, 1)] });
+    for (const [provider, id, tier] of [
+      ["anthropic", "claude-haiku-5-5", 1], ["openai-codex", "gpt-6-luna", 1],
+      ["vendor-example", "generic-1", 1], ["vendor-example", "generic-2", 2], ["vendor-example", "generic-3", 3],
+    ] as const) {
+      const catalog = compileCatalog({ schemaVersion: 1, models: [model("only", provider, tier, { id })] });
       const serves = (candidate: string) => candidate === provider;
       const chosen = defaultSelection(catalog, serves), review = reviewCatalog(catalog, chosen, daytime);
-      expect(chosen).toMatchObject({ lane: { kind: "provider", family: provider, blend: "only" },
-        capability: provider === "anthropic" ? 2 : 3, thinking: "medium" });
+      expect(chosen).toMatchObject({ lane: { kind: "provider", family: providerPolicy(provider).family, blend: "only" },
+        capability: tier, thinking: "medium" });
+      expect(catalog.model(route(review.routes, "default").lead.key)).toMatchObject({ provider, id, tier });
       expect(review.routes.every(value => value.lead.key === "only" && value.fallback.length === 0)).toBe(true);
-      expect(compileOmpOverlay(catalog, chosen, review.routes, serves).modelRoles?.default).toBe(`${provider}/native-only:medium`);
+      expect(compileOmpOverlay(catalog, chosen, review.routes, serves).modelRoles?.default).toBe(`${provider}/${id}:medium`);
     }
   });
 
@@ -264,7 +316,7 @@ describe("default selection", () => {
         models: document().models.filter(value => providerPolicy(value.provider).family === family)
           .map(value => ({ ...value, images: true })) });
       expect(defaultSelection(single)).toMatchObject({
-        lane: { kind: "provider", family, blend: "only" }, capability: family === "anthropic" ? 2 : 3,
+        lane: { kind: "provider", family, blend: "only" }, capability: family === "openai" ? 3 : 2,
         advisor: "glance", thinking: "medium", spark: false,
       });
     }

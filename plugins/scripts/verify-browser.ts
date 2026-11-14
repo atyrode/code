@@ -18,6 +18,7 @@ import { catalogFromObservations, catalogFromMetadata, inventoryDraft } from "..
 import { providerPolicy } from "../domain/providers.ts";
 import { defaultSelection, reviewCatalog } from "../domain/routing.ts";
 import { displayAliases } from "../code/generator/aliases.ts";
+import { TIERS } from "../code/generator/sheets-model.ts";
 import { readStoredDraft, storedDraftKey, type StoredDraft } from "../code/generator/draft-store.ts";
 import { recentTeamsKey } from "../code/generator/recent-teams.ts";
 import { keptAnswersKey } from "../code/generator/run-dials.ts";
@@ -681,8 +682,8 @@ async function sharedDialScenario(browser: BrowserInstance, document: CatalogDoc
   selection = { ...selection, thinking: "medium" };
   await choose(browser, "tier", "smart");
   selection = { ...selection, capability: 3 };
-  await assertPolicy("An explicit strong choice");
-  await screenshot("strong");
+  await assertPolicy("An explicit smart choice");
+  await screenshot("smart");
   await focusRow(browser, "tier");
   await key(browser, "End", 35);
   await until(browser, "End explicitly selects elite", `${chosenKey("tier")} === 'elite'`);
@@ -2586,8 +2587,9 @@ async function starterWorkbenchScenario(browser: BrowserInstance, server: TestSe
       const initialDraft = await readProfile(browser, draftKey);
       assert.deepEqual(initialDraft.list, listOf(starter), "Models shows the starter the exact real OMP metadata response derives, each rung on its model");
       assert.equal(initialDraft.kept, null, "An untouched preview keeps no edit");
-      assert.deepEqual(await browser.evaluate(`[${chosenKey("thinking")}, ${chosenKey("advisor")}]`), [initialSelection.thinking, initialSelection.advisor],
-        "The rows show that list's default profile");
+      assert.deepEqual(await browser.evaluate(`[${chosenKey("lane")}, ${chosenKey("tier")}, ${chosenKey("thinking")}, ${chosenKey("advisor")}]`),
+        ["anthropic", "normal", "medium", initialSelection.advisor], "The untouched preview selects everyday Sonnet medium, not an automatic premium model");
+      assert.deepEqual(await routedRoles(browser), expectedRoutes(starter, initialSelection), "The mounted shared roles consume the preferred everyday default");
       await sharedDialScenario(browser, starter, initialSelection, initialized ? "initialized" : "first-use");
       assert.deepEqual(await readProfile(browser, draftKey), initialDraft, "Exercising all shared route dials restores the untouched preview without a kept edit");
       // The first workspace has one recent profile, which the panel reads as it mounts.
@@ -2653,6 +2655,7 @@ async function starterWorkbenchScenario(browser: BrowserInstance, server: TestSe
     await emptyPoolStarterScenario(browser, server, writer, metadata);
     await premiumStagedCatalogScenario(browser, server, writer, metadata);
     await premiumReplacementScenario(browser, server, writer, metadata);
+    await premiumDialSaveScenario(browser, server, writer, metadata, destination);
     await starterConflictScenario(browser, server, writer);
     assert(trace.requests.some(request => request.name === "atyrode.omp.readModelCatalog"), "The browser itself consumes the real public bundled source");
     for (const request of trace.requests.filter(request => request.name === "atyrode.omp.readModelCatalog")) {
@@ -2723,7 +2726,7 @@ async function premiumStagedCatalogScenario(browser: BrowserInstance, server: Te
   });
   try {
     for (const capability of [3, 4] as const) {
-      const tier = capability === 3 ? "strong" : "elite";
+      const tier = TIERS[capability - 1]!;
       const document: CatalogDocument = { schemaVersion: 1, models: source.models.filter(model => model.provider === "anthropic" && model.tier === capability) };
       assert.equal(document.models.length, 1, `The real metadata supplies one latest ${tier} model`);
       const premiumModel = document.models[0]!;
@@ -2747,7 +2750,7 @@ async function premiumStagedCatalogScenario(browser: BrowserInstance, server: Te
       const question = await questionOpens(browser, "premium", "using a premium-only list asks for a deliberate explicit profile");
       assert.equal(question.items.length, 1);
       assert(question.items[0]!.includes(`${premiumModel.provider}/${premiumModel.id}`) && question.items[0]!.includes(tier) &&
-        question.items[0]!.includes("configured medium"), "The question names the real model, explicit premium tier and configured effort");
+        question.items[0]!.includes("medium"), "The question names the real model, explicit premium tier and configured effort");
       assert.deepEqual(adoptions(), [], "Neither review nor promotion runs before premium confirmation");
       await questionGeometry(browser, `${tier} premium`);
       await questionCoarseTargets(browser, `${tier} premium`);
@@ -2859,7 +2862,7 @@ async function premiumReplacementScenario(browser: BrowserInstance, server: Test
       await click(browser, element(`${modelsSheet} [data-go]`));
       if (!unchanged) {
         const question = await questionOpens(browser, "premium", "a newly substituted Fable lead requires explicit actual-tier approval");
-        assert(question.items.some(item => item.includes(`${fable.provider}/${fable.id}`) && item.includes("elite") && item.includes("configured high")),
+        assert(question.items.some(item => item.includes(`${fable.provider}/${fable.id}`) && item.includes(TIERS[3]) && item.includes(selected.thinking)),
           "The replacement question names actual Fable, elite and the preserved configured effort");
         assert.deepEqual(adoptions(), [], "A compatible capability-2 preview cannot send a new Fable lead to review or promotion");
         if (screenshotDirectory !== undefined) {
@@ -2894,6 +2897,160 @@ async function premiumReplacementScenario(browser: BrowserInstance, server: Test
       await closeSheet(browser);
       await assertRoutes(browser, false);
       assert.deepEqual(await routedRoles(browser), expectedRoutes(replacement, selection), "The mounted routes consume the approved address without changing effort or other preferences");
+      noNativeEffects(trace.requests.slice(from));
+    }
+    fixture.check();
+  } finally {
+    await fixture.stop();
+    trace.stop();
+  }
+}
+
+/** Premium dial saves use the real select CAS on a recorded, synthetic check; no probe or native launch runs. */
+async function premiumDialSaveScenario(browser: BrowserInstance, server: TestServer, writer: TokenGrant,
+  metadata: OmpResult<"readModelCatalog">, destination: Target): Promise<void> {
+  const source = catalogFromMetadata(metadata, "any");
+  const codex = { reference: { kind: "credential" as const, scope: fixtureScope, provider: "openai-codex", credentialId: 3 }, credentialId: 3,
+    type: "api_key" as const, identityKey: null, email: null, disabled: false, blocks: [] };
+  const observation = (): OmpResult<"accounts"> => {
+    const claude = fixtureAccounts([1]);
+    return { ...claude, accounts: [...claude.accounts, codex] };
+  };
+  const trace = await watchActions(browser, server);
+  let refuseNextSave = false;
+  const fixture = await intercept(browser, server, name => {
+    if (name === "atyrode.omp.accounts.accounts") return { ok: true, result: observation() };
+    if (name === "atyrode.omp.accounts.usage") return { ok: true, result: fixtureUsage(observation()) };
+    if (name === "atyrode.code.select" && refuseNextSave) { refuseNextSave = false; return refused("code_invalid_selection"); }
+    return undefined;
+  });
+  try {
+    for (const [capability, via] of [[3, "pointer"], [4, "keyboard"], [3, "models"]] as const) {
+      const tier = TIERS[capability - 1]!, budget = via === "models" ? "free" : "any";
+      // The Models case is a manual zero-price fixture, so a free-budget save must keep its budget.
+      const document: CatalogDocument = { schemaVersion: 1, models: source.models
+        .filter(model => model.provider === "openai-codex" || model.provider === "anthropic" && model.tier === capability)
+        .map(model => budget === "free" ? { ...model, inputCostPerMillion: 0, outputCostPerMillion: 0 } : model) };
+      const premiumModel = document.models.find(model => model.provider === "anthropic")!;
+      const selected: Selection = { lane: { kind: "provider", family: "openai", blend: "only" }, capability: 2,
+        thinking: "high", advisor: "off", spark: false, priority: false, prewalk: true, planYolo: true, fallback: false, budget };
+      const workspace = await createContainer(server, `${via} ${tier} dial save`, "canvas");
+      const target = { containerId: workspace.id };
+      const initialized = await callAction(server, writer.token, "atyrode.code.initializeConfiguration", { ...target, expectedRevision: 0 });
+      assert(initialized.ok);
+      const revision = (initialized.result as Configuration).revision, accounts = observation();
+      const probe = await callAction(server, writer.token, "atyrode.code.composeProbe", { ...target, expectedRevision: revision, accounts });
+      assert(probe.ok);
+      const staged = await callAction(server, writer.token, "atyrode.code.stageCatalog", { ...target, expectedRevision: revision, document,
+        verification: { ompVersion: OMP_VERSION, inventoryArtifactSha256: pinnedOmpArtifact(), catalogRevision: metadata.revision,
+          inventoryObservedAt: Date.now() - 3_000, benchmarkCompletedAt: Date.now() - 2_000, accounts,
+          poolIdentityDigest: (probe.result as ActionResult<"composeProbe">).poolIdentityDigest, budget } });
+      assert(staged.ok);
+      const input = { ...target, expectedRevision: (staged.result as Configuration).revision, source: "draft" as const, selection: selected };
+      const review = await callAction(server, writer.token, "atyrode.code.reviewCatalog", input);
+      assert(review.ok);
+      const promoted = await callAction(server, writer.token, "atyrode.code.promoteCatalog",
+        { ...input, reviewDigest: (review.result as ActionResult<"reviewCatalog">).reviewDigest });
+      assert(promoted.ok);
+      if (via === "models") {
+        const next = await callAction(server, writer.token, "atyrode.code.stageCatalog",
+          { ...target, expectedRevision: (promoted.result as Configuration).revision, document });
+        assert(next.ok);
+      }
+      const before = await readConfiguration(server, writer, target), from = trace.requests.length;
+      const writes = () => trace.requests.slice(from).filter(request => /^atyrode\.code\.(initializeConfiguration|stageCatalog|reviewCatalog|promoteCatalog|select|changeAccounts)$/.test(request.name));
+      if (via === "models") await rememberTeam(browser, writer.principal.id, workspace.id,
+        { ...selected, lane: { kind: "provider", family: "deepseek", blend: "only" } });
+      await openGenerator(browser, server, workspace.id);
+      await chooseMachine(browser, destination.machineId, machineName);
+      await until(browser, "a recorded check reaches the active profile's launch without probing", launchIs("launch", "refused"));
+      if (via === "keyboard") {
+        await focusRow(browser, "lane");
+        await key(browser, "End", 35);
+        await until(browser, "the keyboard chooses the sparse premium provider", `${chosenKey("lane")} === 'anthropic'`);
+      } else await choose(browser, "lane", "anthropic");
+      const proposed: Selection = { ...selected, lane: { kind: "provider", family: "anthropic", blend: "only" } };
+      const draftKey = storedDraftKey(writer.principal.id, workspace.id), draft = await readProfile(browser, draftKey);
+      assert.deepEqual(keptEdit(draft).selection, proposed, "A lane edit previews the sparse model without reinterpreting its selected tier or preferences");
+      const save = async () => {
+        if (via === "models") {
+          if (!await browser.evaluate<boolean>(sheetOpen("Models"))) await openSheet(browser, "models");
+          await click(browser, goFix(modelsSheet, "save"));
+        } else {
+          await until(browser, "the edited profile offers Save & launch", launchIs("save & launch", "ready"));
+          if (via === "keyboard") await key(browser, "Enter", 13, { modifiers: CTRL });
+          else await click(browser, launchButton);
+        }
+      };
+      await save();
+      const question = await questionOpens(browser, "premium", `${via} save asks for the new model's actual tier`);
+      const explicit: Selection = { ...proposed, capability };
+      const effort = reviewCatalog(compileCatalog(document), explicit, Date.now()).routes.find(route => route.role === "default")!.lead.thinking;
+      assert(question.items.some(item => item.includes(`${premiumModel.provider}/${premiumModel.id}`) && item.includes(tier) && item.includes(effort)),
+        "The premium save question names the actual model, tier and configured effort");
+      assert.deepEqual(question.choices.map(([effect]) => effect), ["approve", "dismiss"]);
+      assert.deepEqual(writes(), [], "An unconfirmed save performs no workspace writes");
+      await questionGeometry(browser, `${via} premium save`);
+      await questionCoarseTargets(browser, `${via} premium save`);
+      if (via === "pointer") await answer(browser, "dismiss");
+      else await key(browser, "Escape", 27);
+      await until(browser, "cancelling closes only the premium save question", unasked);
+      assert.deepEqual(await readConfiguration(server, writer, target), before, "Cancellation leaves the workspace untouched");
+      assert.deepEqual(await readProfile(browser, draftKey), draft, "Cancellation leaves the exact current draft and its selected tier untouched");
+      assert.deepEqual(writes(), [], "Cancellation writes nothing");
+      if (via === "models") {
+        await closeSheet(browser);
+        await showView(browser, "sessions");
+        await key(browser, "1", 49);
+        await showView(browser, "main");
+        await until(browser, "an unrelated unavailable recent profile reports its own failure",
+          `${failureLine} && ${lineText}.includes('That profile cannot be formed')`);
+        await openSheet(browser, "models");
+        assert.equal(await browser.evaluate(`${goParts(modelsSheet)}.some(([text]) => text === 'not saved')`), false,
+          "A cancelled premium save cannot claim a later unrelated failure as its own failed save");
+        assert.equal(await browser.evaluate(`${goParts(modelsSheet)}.some(([text]) => text === 'unsaved profile edit')`), true);
+        assert.deepEqual(await readProfile(browser, draftKey), draft, "The unrelated failure leaves the cancelled premium edit intact");
+        assert.deepEqual(writes(), [], "Neither cancelling the save nor failing a recall attempts a save");
+      }
+      await save();
+      await questionOpens(browser, "premium", "a cancelled save needs a new explicit premium answer");
+      if (via === "models") refuseNextSave = true;
+      if (via === "keyboard") {
+        await firstChoiceByTab(browser, "premium");
+        assert.deepEqual(writes(), [], "Enter on the question title cannot authorize a premium save");
+        await Bun.sleep(DELIBERATE_MS);
+        await key(browser, "Enter", 13);
+      } else await answer(browser, "approve");
+      if (via === "models") {
+        await until(browser, "an actually confirmed save failure remains attributed to the Models save press",
+          `${unasked} && ${goParts(modelsSheet)}.some(([text]) => text === 'not saved')`);
+        assert.deepEqual(await readConfiguration(server, writer, target), before, "A refused confirmed save keeps its exact draft and shared record");
+        await save();
+        await questionOpens(browser, "premium", "retrying a refused confirmed save still needs its actual-tier choice");
+        await answer(browser, "approve");
+      }
+      await waitFor(async () => (await readConfiguration(server, writer, target)).revision === before.revision + 1, timeout, 50);
+      await until(browser, "the confirmed save selects its actual tier and drops the draft", `${unasked} && ${chosenKey("tier")} === ${JSON.stringify(tier)} && sessionStorage.getItem(${JSON.stringify(draftKey)}) === null`);
+      const saved = await readConfiguration(server, writer, target);
+      assert.deepEqual([saved.configuration?.accounts, saved.configuration?.active, saved.configuration?.draft, saved.configuration?.selection],
+        [before.configuration?.accounts, before.configuration?.active, before.configuration?.draft, explicit],
+        "Confirmation retains accounts, budget, catalogs and verification while saving the explicit actual-tier profile");
+      const expectedSave = { name: "atyrode.code.select", input: { ...target, expectedRevision: before.revision, selection: explicit } };
+      assert.deepEqual(writes(), via === "models" ? [expectedSave, expectedSave] : [expectedSave],
+        "Only confirmed actual-tier selections attempt CAS saves; a refused confirmed attempt is never mislabeled cancellation");
+      if (via === "models") await closeSheet(browser);
+      assert.deepEqual(await routedRoles(browser), expectedRoutes(document, explicit), "Mounted shared routes consume the confirmed actual-tier profile");
+      // The same active selected address may then retain capability 2 without asking again.
+      await choose(browser, "tier", "normal");
+      const legacyFrom = trace.requests.length;
+      await save();
+      await waitFor(async () => (await readConfiguration(server, writer, target)).revision === saved.revision + 1, timeout, 50);
+      await until(browser, "the unchanged active address saves its legacy tier without another premium question", unasked);
+      assert.deepEqual((await readConfiguration(server, writer, target)).configuration?.selection, proposed);
+      assert.deepEqual(trace.requests.slice(legacyFrom).filter(request => request.name === "atyrode.code.select"),
+        [{ name: "atyrode.code.select", input: { ...target, expectedRevision: saved.revision, selection: proposed } }],
+        "The unchanged active selected identity keeps every legacy preference");
+      if (via === "models") await closeSheet(browser);
       noNativeEffects(trace.requests.slice(from));
     }
     fixture.check();
@@ -4023,6 +4180,255 @@ async function modelsSheetScenario(browser: BrowserInstance, server: TestServer,
 }
 
 // ---------------------------------------------------------------- a person's checks across workspaces
+
+/** Advertised premium intent is chosen before spending; an unexpected measured replacement stays staged for exact adoption. */
+async function preSpendPremiumScenario(browser: BrowserInstance, server: TestServer, person: TokenGrant, destination: Target): Promise<void> {
+  const catalogRead = await callAction(server, person.token, "atyrode.omp.readModelCatalog", { providers: ["openai-codex"] });
+  assert(catalogRead.ok);
+  const metadata = ModelCatalogSnapshotSchema.parse(catalogRead.result), source = catalogFromMetadata(metadata, "any");
+  const normal = source.models.find(model => model.provider === "openai-codex" && model.tier === 2);
+  const premium = source.models.find(model => model.provider === "openai-codex" && model.tier === 3);
+  assert(normal && premium, "The pinned catalog supplies actual normal and smart named models");
+  const normalMetadata = metadata.models.find(model => model.provider === normal.provider && model.id === normal.id)!;
+  const premiumMetadata = metadata.models.find(model => model.provider === premium.provider && model.id === premium.id)!;
+  const elite = source.models.find(model => model.provider === "openai-codex" && model.tier === 4);
+  assert(elite, "The nullable case has an actual authored elite rung, not an invented lower-tier default");
+  const eliteMetadata = metadata.models.find(model => model.provider === elite.provider && model.id === elite.id)!;
+  const selected: Selection = { lane: { kind: "provider", family: "openai", blend: "only" }, capability: 2,
+    thinking: "high", advisor: "off", spark: false, priority: false, prewalk: true, planYolo: true, fallback: false, budget: "any" };
+  const explicit: Selection = { ...selected, capability: 3 };
+  const account = (credentialId: number) => ({ reference: { kind: "credential" as const, scope: fixtureScope, provider: "openai-codex", credentialId },
+    credentialId, type: "api_key" as const, identityKey: null, email: null, disabled: false, blocks: [] });
+  let observed: OmpResult<"accounts"> = { ...fixtureAccounts([]), accounts: [account(30)] };
+  let target: Target = destination, variant = "", held: string | null = null;
+  const pins = { installationRevision: "synthetic-ui-only", artifactSha256: "c".repeat(64), resourceBindingDigest: "c".repeat(64) };
+  const inventories = new Map<string, InventoryReceipt>();
+  const benchmarks = new Map<string, { request: OmpInput<"startBenchmark">; receipt: BenchmarkReceipt | null; startedAt: number }>();
+  await arrangeWorkbench(server, person);
+  const trace = await watchActions(browser, server);
+  const fixture = await intercept(browser, server, async (name, input) => {
+    switch (name) {
+      case "atyrode.omp.describeDestination": {
+        if (input.containerId !== target.containerId || input.machineId !== target.machineId) return undefined;
+        const result: OmpResult<"describeDestination"> = { ...target, pluginId: "atyrode.omp", state: "ready", reason: null, deployment: null, services: [],
+          operations: [INVENTORY_OPERATION_ID, BENCHMARK_OPERATION_ID].map(operationId =>
+            ({ operationId, pins, nativeReady: true, callerRefusal: null, state: "ready", reason: null })) };
+        return { ok: true, result };
+      }
+      case "atyrode.omp.accounts.accounts": return { ok: true, result: observed };
+      case "atyrode.omp.accounts.usage": return { ok: true, result: fixtureUsage(observed) };
+      case "atyrode.omp.readModelCatalog":
+        return variant === "nullable" ? { ok: true, result: { ...metadata, models: [eliteMetadata] } } : undefined;
+      case "atyrode.omp.startInventory": {
+        const jobId = `premium-inventory-${inventories.size + 1}`;
+        inventories.set(jobId, { schemaVersion: 1, kind: "inventory", ompVersion: OMP_VERSION, observedAt: Date.now() - 1_000,
+          models: variant === "nullable" ? [eliteMetadata] : ["known", "covered", "background"].includes(variant) ? [premiumMetadata] : [normalMetadata, premiumMetadata] });
+        return { ok: true, result: probeJob(target, jobId, INVENTORY_OPERATION_ID, person.principal.id) };
+      }
+      case "atyrode.omp.readInventory": {
+        const inventory = inventories.get(String(input.jobId));
+        assert(inventory);
+        return { ok: true, result: { job: probeJob(target, String(input.jobId), INVENTORY_OPERATION_ID, person.principal.id), inventory } };
+      }
+      case "atyrode.omp.startBenchmark": {
+        const request = ompActionSchemas.startBenchmark.input.parse(input);
+        assert.deepEqual(request.candidates, inventoryDraft(inventories.get(request.inventoryJobId)!, "any").benchmark);
+        if (variant === "failed") return refused("synthetic_benchmark_refused");
+        const jobId = `premium-benchmark-${benchmarks.size + 1}`;
+        benchmarks.set(jobId, { request, receipt: null, startedAt: Date.now() });
+        if (variant === "cancelled") held = jobId;
+        return { ok: true, result: probeJob(target, jobId, BENCHMARK_OPERATION_ID, person.principal.id, "started") };
+      }
+      case "engine.jobs.status": {
+        const { node } = input as { node: { jobId: string; operationId: string } };
+        assert(inventories.has(node.jobId) || benchmarks.has(node.jobId));
+        return { ok: true, result: probeJob(target, node.jobId, node.operationId, person.principal.id, node.jobId === held ? "started" : "exited") };
+      }
+      case "atyrode.omp.readBenchmark": {
+        const run = benchmarks.get(String(input.jobId));
+        assert(run && held !== input.jobId);
+        run.receipt ??= { schemaVersion: 1, kind: "benchmark", ompVersion: OMP_VERSION, inventoryObservedAt: run.request.candidates.inventoryObservedAt,
+          startedAt: run.startedAt, completedAt: Date.now(), results: run.request.candidates.candidates.map(candidate =>
+            candidate.id === normal.id ? { ...candidate, status: "client_blocked" as const, tokensPerSecond: null, timeToFirstTokenMs: null }
+              : { ...candidate, status: "reachable" as const, tokensPerSecond: 42, timeToFirstTokenMs: 250 }) };
+        return { ok: true, result: { job: probeJob(target, String(input.jobId), BENCHMARK_OPERATION_ID, person.principal.id), benchmark: run.receipt } };
+      }
+      case "engine.jobs.cancel": {
+        const node = input.node;
+        assert(node && typeof node === "object" && "jobId" in node);
+        assert.equal(node.jobId, held);
+        held = null;
+        return { ok: true, result: { accepted: true } };
+      }
+      default: return undefined;
+    }
+  });
+  const effects = (from: number) => trace.requests.slice(from).filter(request =>
+    /^atyrode\.(?:code\.(?:approveChecks|stageCatalog|reviewCatalog|promoteCatalog|adoptCheck|select|changeAccounts)|omp\.(?:startInventory|startBenchmark))$/.test(request.name));
+  try {
+    for (const [index, kind] of ["known", "covered", "unexpected", "failed", "cancelled", "background"].entries()) {
+      variant = kind;
+      observed = { ...fixtureAccounts([]), accounts: [account(30 + index * 2)] };
+      const workspace = await createContainer(server, `${kind} premium model check`, "canvas");
+      target = { containerId: workspace.id, machineId: destination.machineId };
+      const initialized = await callAction(server, person.token, "atyrode.code.initializeConfiguration", { containerId: workspace.id, expectedRevision: 0 });
+      assert(initialized.ok);
+      const base = initialized.result as Configuration;
+      const pool = await callAction(server, person.token, "atyrode.code.composeProbe",
+        { containerId: workspace.id, expectedRevision: base.revision, accounts: observed });
+      assert(pool.ok);
+      const staged = await callAction(server, person.token, "atyrode.code.stageCatalog", { containerId: workspace.id, expectedRevision: base.revision,
+        document: { schemaVersion: 1, models: [normal] }, ...kind === "background" ? {
+          verification: { ompVersion: OMP_VERSION, inventoryArtifactSha256: pins.artifactSha256, catalogRevision: metadata.revision,
+            inventoryObservedAt: Date.now() - 3_000, benchmarkCompletedAt: Date.now() - 2_000, accounts: observed,
+            poolIdentityDigest: (pool.result as ActionResult<"composeProbe">).poolIdentityDigest, budget: "any" },
+        } : {} });
+      assert(staged.ok);
+      const input = { containerId: workspace.id, expectedRevision: (staged.result as Configuration).revision, source: "draft" as const, selection: selected };
+      const review = await callAction(server, person.token, "atyrode.code.reviewCatalog", input);
+      assert(review.ok);
+      const promoted = await callAction(server, person.token, "atyrode.code.promoteCatalog",
+        { ...input, reviewDigest: (review.result as ActionResult<"reviewCatalog">).reviewDigest });
+      assert(promoted.ok);
+      const checks = await readChecks(server, person);
+      const approval = await callAction(server, person.token, "atyrode.code.approveChecks",
+        { expectedRevision: checks.revision, requests: kind === "covered" || kind === "background" ? 100 : 0 });
+      assert(approval.ok);
+      const before = await readConfiguration(server, person, target), from = trace.requests.length, spent = benchmarks.size, listed = inventories.size;
+      if (kind === "background") observed = { ...observed, accounts: [...observed.accounts, account(31 + index * 2)] };
+      await openGenerator(browser, server, workspace.id);
+      await chooseMachine(browser, destination.machineId, machineName);
+      await openSheet(browser, "models");
+      if (kind === "background") {
+        await waitFor(() => inventories.size === listed + 1, timeout, 50);
+        await until(browser, "a background check stops without asking about advertised premium intent",
+          `${unasked} && ${goIs(modelsSheet, "check models")} && ${element(modelsSheet)}.dataset.phase === 'unverified'`);
+        assert.equal(benchmarks.size, spent, "Even standing-covered background intent stops before any benchmark");
+        assert.deepEqual(effects(from).map(request => request.name), ["atyrode.omp.startInventory"]);
+        assert.deepEqual(await readConfiguration(server, person, target), before, "Unasked intent changes no active profile or staged facts");
+        continue;
+      }
+      await until(browser, "Models offers the deliberate check", goIs(modelsSheet, "check models"));
+      await click(browser, element(`${modelsSheet} [data-go]`));
+      if (kind === "known" || kind === "covered") {
+        const question = await questionOpens(browser, "premium", "advertised premium intent asks before any paid benchmark");
+        assert(question.items.some(item => item.includes(`${premium.provider}/${premium.id}`) && item.includes(TIERS[2]!) && item.includes("high")));
+        assert(question.text.some(text => text.includes("unmeasured") && text.includes("not yet been performed")));
+        assert.equal(benchmarks.size, spent, "A covered spending approval never silently selects an advertised premium tier");
+        assert.deepEqual(effects(from).map(request => request.name), ["atyrode.omp.startInventory"]);
+        await questionGeometry(browser, `${kind} advertised premium`);
+        await questionCoarseTargets(browser, `${kind} advertised premium`);
+        await key(browser, "Escape", 27);
+        await until(browser, "cancelling advertised intent returns to the unchecked list", `${unasked} && ${goIs(modelsSheet, "check models")}`);
+        assert.deepEqual(await readConfiguration(server, person, target), before, "Cancelling known intent writes nothing");
+        assert.equal(benchmarks.size, spent, "Cancelling known intent spends no benchmark request");
+        await click(browser, element(`${modelsSheet} [data-go]`));
+        await questionOpens(browser, "premium", "a fresh check needs a fresh actual-tier choice");
+        await answer(browser, "approve");
+        await questionOpens(browser, "charge", "choosing an actual tier asks ordinary charge approval separately");
+        assert.equal(benchmarks.size, spent, "Choosing the actual tier does not approve model spending");
+        assert.equal(effects(from).filter(request => request.name === "atyrode.code.approveChecks").length, 0);
+        assert.deepEqual(await readConfiguration(server, person, target), before, "Tier intent is not a workspace write");
+        await answer(browser, "approve");
+        await until(browser, "the independently approved check puts the chosen profile in use", `${unasked} && ${element(modelsSheet)}.dataset.phase === 'verified'`);
+        const after = await readConfiguration(server, person, target);
+        assert.deepEqual(after.configuration?.selection, explicit, "Actual-tier confirmation preserves every other preference and budget");
+        assert(after.configuration?.active?.provenance);
+        assert.equal(benchmarks.size, spent + 1);
+        continue;
+      }
+      await questionOpens(browser, "charge", "ordinary advertised intent asks only for the benchmark charge");
+      await answer(browser, "approve");
+      if (kind === "cancelled") {
+        await waitFor(() => held !== null, timeout, 50);
+        await click(browser, goFix(modelsSheet, "cancel"));
+        await until(browser, "a cancelled benchmark returns without a verified claim",
+          `${unasked} && ${goIs(modelsSheet, "check models")} && ${goParts(modelsSheet)}.some(([text]) => text === 'check cancelled')`);
+      } else if (kind === "failed") {
+        await until(browser, "a failed benchmark returns without a verified claim",
+          `${unasked} && ${goIs(modelsSheet, "check models")} && ${goParts(modelsSheet)}.some(([text]) => text === 'check stopped')`);
+      } else {
+        await until(browser, "an unexpected measured premium replacement is retained as an actionable staged list",
+          `${unasked} && ${goIs(modelsSheet, "use staged list")}`);
+        const retained = await readConfiguration(server, person, target), document = retained.configuration?.draft;
+        assert(document?.provenance && retained.configuration, "Only the completed benchmark supplies retained verification");
+        assert.deepEqual([retained.configuration.active, retained.configuration.selection, retained.configuration.accounts],
+          [before.configuration?.active, selected, before.configuration?.accounts], "Retaining measured facts never promotes premium or changes account choices");
+        const run = [...benchmarks.values()].at(-1)!;
+        assert(run.receipt);
+        assert.deepEqual(document.document, catalogFromObservations(inventories.get(run.request.inventoryJobId)!, run.receipt, { budget: "any" }).document);
+        assert((await readChecks(server, person)).checks.some(check => check.digest === document.digest &&
+          check.poolIdentityDigest === document.provenance!.poolIdentityDigest), "The exact verified check is kept, not discarded for another paid run");
+        const measured = benchmarks.size;
+        await click(browser, element(`${modelsSheet} [data-go]`));
+        await questionOpens(browser, "premium", "using retained evidence asks its actual measured tier");
+        const cancellation = trace.requests.length;
+        await key(browser, "Escape", 27);
+        await until(browser, "cancelling leaves the same measured list staged", `${unasked} && ${goIs(modelsSheet, "use staged list")}`);
+        assert.deepEqual(trace.requests.slice(cancellation).filter(request =>
+          /^(?:atyrode\.code\.(?:readConfiguration|readChecks|stageCatalog|reviewCatalog|promoteCatalog|select)|atyrode\.omp\.(?:startInventory|startBenchmark))$/.test(request.name)), [],
+        "Cancelling the retained premium question makes no additional model RPC or write");
+        assert.deepEqual(await readConfiguration(server, person, target), retained);
+        await openGenerator(browser, server, workspace.id);
+        await chooseMachine(browser, destination.machineId, machineName);
+        await until(browser, "the retained record keeps adoption actionable after reopening", launchIs("review in models", "ready"));
+        await click(browser, launchButton);
+        await until(browser, "the launch opens the real retained staged list rather than checking again", goIs(modelsSheet, "use staged list"));
+        assert.equal(benchmarks.size, measured, "Reopening retained evidence starts no second benchmark");
+        await click(browser, element(`${modelsSheet} [data-go]`));
+        await questionOpens(browser, "premium", "a fresh press can adopt the already measured evidence");
+        await answer(browser, "approve");
+        await until(browser, "actual-tier confirmation adopts retained evidence without a second benchmark",
+          `${unasked} && ${element(modelsSheet)}.dataset.phase === 'verified'`);
+        const adopted = await readConfiguration(server, person, target);
+        assert.deepEqual([adopted.configuration?.active?.digest, adopted.configuration?.active?.provenance, adopted.configuration?.selection],
+          [document.digest, document.provenance, explicit], "Adoption retains the exact document digest, original scoped provenance and preferences");
+        assert.equal(benchmarks.size, measured, "A retained verified premium replacement never enters a discard-and-repay loop");
+        const adoption = effects(cancellation);
+        assert.deepEqual(adoption.map(request => request.name), ["atyrode.code.reviewCatalog", "atyrode.code.promoteCatalog"]);
+        assert(adoption.every(request => JSON.stringify(request.input.selection) === JSON.stringify(explicit)));
+        continue;
+      }
+      const stopped = await readConfiguration(server, person, target);
+      assert.deepEqual(stopped, before, "A failed or cancelled run retains no newly verified document or selection");
+      assert.equal(effects(from).filter(request => /^atyrode\.code\.(?:stageCatalog|promoteCatalog)$/.test(request.name)).length, 0);
+      assert(!(await readChecks(server, person)).checks.some(check =>
+        check.poolIdentityDigest === (pool.result as ActionResult<"composeProbe">).poolIdentityDigest), "Failed and cancelled checks keep no verified claim");
+    }
+    // A valid advertised list with no everyday default is not permission to invent a lower-tier
+    // selection, or to spend under the approval. Existing Models repair stays one press away.
+    variant = "nullable";
+    observed = { ...fixtureAccounts([]), accounts: [account(99)] };
+    const nullable = await createContainer(server, "No automatic premium profile", "canvas");
+    target = { containerId: nullable.id, machineId: destination.machineId };
+    const initialized = await callAction(server, person.token, "atyrode.code.initializeConfiguration", { containerId: nullable.id, expectedRevision: 0 });
+    assert(initialized.ok);
+    const checks = await readChecks(server, person);
+    assert((await callAction(server, person.token, "atyrode.code.approveChecks", { expectedRevision: checks.revision, requests: 100 })).ok);
+    const before = await readConfiguration(server, person, target), from = trace.requests.length, spent = benchmarks.size;
+    await openGenerator(browser, server, nullable.id);
+    await chooseMachine(browser, destination.machineId, machineName);
+    await openSheet(browser, "models");
+    await until(browser, "Models remains reachable without an automatic premium profile", goIs(modelsSheet, "check models"));
+    await click(browser, element(`${modelsSheet} [data-go]`));
+    await until(browser, "a nullable profile with only an advertised premium rung stops unspent",
+      `${unasked} && ${goIs(modelsSheet, "check models")} && ${goParts(modelsSheet)}.some(([text]) => text === 'check stopped')`);
+    assert.equal(benchmarks.size, spent, "Standing approval cannot make up a nullable premium profile and spend it");
+    assert.deepEqual(effects(from).map(request => request.name), ["atyrode.omp.startInventory"]);
+    assert.deepEqual(await readConfiguration(server, person, target), before);
+    await closeSheet(browser);
+    const repair = element(`${generator} [data-fix="actual-tier"]`);
+    await until(browser, "the unspent stop offers explicit Models repair rather than a generic cannot-form loop",
+      `${repair} !== null && ${lineText}.includes('actual-tier profile')`);
+    await click(browser, repair);
+    await until(browser, "the repair opens Models with its import action usable",
+      `${sheetOpen("Models")} && ${element(`${modelsSheet} [data-cue="import"]`)}?.getAttribute('aria-disabled') === null`);
+    fixture.check();
+  } finally {
+    await fixture.stop();
+    trace.stop();
+  }
+}
 
 /**
  * Model checks belong to the person who ran them (checks.ts): what one workspace checked or approved reaches the others.
@@ -8097,6 +8503,8 @@ async function run(): Promise<void> {
     await asNewPerson(writerBrowser, server, writer, "Code models checker", person => modelsSheetScenario(writerBrowser, server, person, target));
     phase = "a person's checks across workspaces: the approval their first Approve records, a check within it that asks nothing, a narrowed stop's question, a kept check adopted on a press and on its own, Launch kept ready while changed accounts are checked again, a stopped renewal never retried and ask first cancelling a renewal that spends";
     await asNewPerson(writerBrowser, server, writer, "Code check keeper", person => keptChecksScenario(writerBrowser, server, person, target));
+    phase = "premium intent before spending, independent charge approval, retained measured evidence and unspent background intent";
+    await asNewPerson(writerBrowser, server, writer, "Code premium checker", person => preSpendPremiumScenario(writerBrowser, server, person, target));
     phase = "tiered usage windows are their own rows and judge no pool";
     await tieredUsageScenario(writerBrowser, server, writer);
     phase = "struck leads and the only box say why";

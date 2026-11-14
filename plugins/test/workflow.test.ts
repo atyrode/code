@@ -7,9 +7,10 @@ import { PublicJobSchema, type PublicJob, type TerminalSummary } from "@manifold
 import { actionSchemas, type ActionResult, type Configuration } from "../code/contract.ts";
 import { compileCatalog } from "../domain/catalog.ts";
 import type { Selection } from "../domain/contracts.ts";
+import { inventoryPlan } from "../domain/probe.ts";
 import { compileOmpOverlay, defaultSelection, reviewCatalog, routedModels, unpublishedModels } from "../domain/routing.ts";
 import { handlers } from "../code/server.ts";
-import type { CodeContext } from "../code/context.ts";
+import { digestOf, type CodeContext } from "../code/context.ts";
 import { z } from "zod";
 
 const target = { containerId: "workspace", machineId: "destination" };
@@ -52,9 +53,11 @@ function row(provider: string, id: string, input: number, context: number, level
  */
 function verificationFixture() {
   const store = new Map<string, string>(), calls: string[] = [], cancelled: string[] = [], benchmarked: BenchmarkInput[] = [];
+  const derived: ActionResult<"deriveCatalog">[] = [];
   const hooks: Partial<Record<string, () => void | Promise<void>>> = {};
   const states = new Map<string, PublicJob["state"][]>();
   const exitCodes = new Map<string, number>();
+  const omitted = new Set<string>();
   const verdicts: Record<string, "not_found" | "client_blocked" | "unresolved" | "unmatched"> = {};
   // Who calls: a person with an unconfined token unless a test says otherwise, as a session would carry them. `ceiling` is a
   // credential confined by an authority ceiling: still unscoped, but refused at the workspace root.
@@ -124,7 +127,7 @@ function verificationFixture() {
       const candidates = benchmarked[Number(jobId.slice("benchmark-".length)) - 1]!.candidates;
       return { job: probeJob(jobId, BENCHMARK_OPERATION_ID, "exited"), benchmark: { schemaVersion: 1, kind: "benchmark", ompVersion: OMP_VERSION,
         inventoryObservedAt: omp.inventory.observedAt, startedAt: 7_000 + benchmarks, completedAt: 8_000 + benchmarks,
-        results: candidates.map(candidate => verdicts[candidate.id]
+        results: candidates.filter(candidate => !omitted.has(candidate.id)).map(candidate => verdicts[candidate.id]
           ? { ...candidate, status: verdicts[candidate.id], tokensPerSecond: null, timeToFirstTokenMs: null }
           : { ...candidate, status: "reachable", tokensPerSecond: 50, timeToFirstTokenMs: 300 }) } };
     }
@@ -140,11 +143,15 @@ function verificationFixture() {
   const workflow = createCodeWorkflowClient(async (door, raw) => {
     calls.push(door);
     const result = await answer(door, raw);
+    if (door === "atyrode.code.deriveCatalog") {
+      const document = actionSchemas.deriveCatalog.result.safeParse(result);
+      if (document.success) derived.push(document.data);
+    }
     await hooks[door]?.();
     return result;
   });
   const configuration = async (at: typeof target = target) => actionSchemas.readConfiguration.result.parse(await handlers.readConfiguration!(ctx, { containerId: at.containerId }));
-  return { workflow, store, calls, cancelled, benchmarked, hooks, states, exitCodes, verdicts, omp, ctx, caller, configuration, slot };
+  return { workflow, store, calls, cancelled, benchmarked, derived, hooks, states, exitCodes, omitted, verdicts, omp, ctx, caller, configuration, slot };
 }
 /** The operator's preview, made against a catalog with OpenAI and a fourth rung. */
 const preview: Selection = { lane: { kind: "mixed" }, capability: 4, thinking: "high", advisor: "review", spark: true,
@@ -185,8 +192,8 @@ test("verification prepares a charge without spending, and one confirmation save
 });
 
 test("null selections verify and adopt everyday served Sonnet, otherwise served Sol, using only the exact pool", async () => {
-  for (const withAnthropic of [true, false]) {
-    const f = verificationFixture();
+  for (const source of ["anthropic", "sol-with-haiku", "sol-only"] as const) {
+    const f = verificationFixture(), withAnthropic = source !== "sol-only", choosesAnthropic = source === "anthropic";
     f.omp.accounts.accounts = [f.slot("openai-codex", 3), ...(withAnthropic ? [f.slot("anthropic", 1)] : [])];
     const levels = ["low", "medium", "high", "max"] as const;
     f.omp.inventory.models = [
@@ -201,16 +208,17 @@ test("null selections verify and adopt everyday served Sonnet, otherwise served 
       row("openai-codex", "gpt-6.1-sol", 2, 200_000, levels, true),
       row("openai-codex", "gpt-6-astra", 10, 200_000, levels, true),
     ];
+    if (source === "sol-with-haiku") f.verdicts["claude-sonnet-5-5"] = "not_found";
     const pending = await prepared(f, 0), verified = await pending.confirm(null);
     const selection = verified.configuration.selection!;
     expect(selection).toMatchObject({
-      lane: { kind: "provider", family: withAnthropic ? "anthropic" : "openai", blend: "only" },
-      capability: withAnthropic ? 2 : 3, thinking: "medium",
+      lane: { kind: "provider", family: choosesAnthropic ? "anthropic" : "openai", blend: "only" },
+      capability: choosesAnthropic ? 2 : 3, thinking: "medium",
     });
     const catalog = compileCatalog(verified.configuration.active!.document);
     const review = reviewCatalog(catalog, selection, 10_000);
     expect(catalog.model(review.routes.find(route => route.role === "default")!.lead.key).id)
-      .toBe(withAnthropic ? "claude-sonnet-5-5" : "gpt-6.1-sol");
+      .toBe(choosesAnthropic ? "claude-sonnet-5-5" : "gpt-6.1-sol");
     expect(verified.provenance.providers).toEqual(withAnthropic ? ["anthropic", "openai-codex"] : ["openai-codex"]);
     const from = f.calls.length;
     const adopted = await f.workflow.verifyModels(second, { expectedRevision: 0, budget: "any", selection: null });
@@ -221,30 +229,163 @@ test("null selections verify and adopt everyday served Sonnet, otherwise served 
   }
 });
 
-test("verification promotes an explicit elite selection with its premium-only derived list in one write", async () => {
-  for (const capability of [4, 2, null] as const) {
+test("verification requires the actual premium tier before spending and promotes that selection atomically", async () => {
+  for (const model of [{ provider: "anthropic", id: "claude-opus-5", family: "anthropic", tier: 3 },
+    { provider: "openai-codex", id: "gpt-6-astra", family: "openai", tier: 4 }] as const) for (const capability of [model.tier, 2, null] as const) {
     const f = verificationFixture();
-    f.omp.accounts.accounts = [f.slot("openai-codex", 3)];
-    f.omp.inventory.models = [row("openai-codex", "gpt-6-astra", 10, 200_000, ["low", "medium", "high", "max"], true)];
-    const pending = await prepared(f, 0);
-    const selection: Selection = { ...preview, lane: { kind: "provider", family: "openai", blend: "only" },
-      capability: capability ?? 4, thinking: "max", advisor: "off", spark: false };
-    if (capability !== 4) {
+    f.omp.accounts.accounts = [f.slot(model.provider, 3)];
+    f.omp.inventory.models = [row(model.provider, model.id, 10, 200_000, ["low", "medium", "high", "max"], true)];
+    const pending = await prepared(f, 0), from = f.calls.length, before = [...f.store];
+    const selection: Selection = { ...preview, lane: { kind: "provider", family: model.family, blend: "only" },
+      capability: capability ?? model.tier, thinking: "max", advisor: "off", spark: false };
+    if (capability !== model.tier) {
       const stopped = await stopOf(pending.confirm(capability === null ? null : selection));
-      expect([stopped.step, stopped.reason]).toEqual(["derive", "code_invalid_selection"]);
-      expect(f.calls).not.toContain("atyrode.code.stageCatalog");
+      expect([stopped.step, stopped.reason]).toEqual(["benchmark", "code_invalid_selection"]);
+      expect(stopped.evidence).toEqual({ inventoryJobId: "inventory-1", benchmarkJobIds: [], revision: 1 });
+      expect(f.calls.slice(from).filter(door => effects.includes(door))).toEqual([]);
+      expect(f.benchmarked).toEqual([]);
+      expect([...f.store]).toEqual(before);
       expect((await f.configuration()).configuration).toMatchObject({ revision: 1, selection: null, active: null, draft: null });
       continue;
     }
     const verified = await pending.confirm(selection);
     expect(verified.configuration.selection).toEqual(selection);
-    expect(verified.configuration.active?.document.models.map(model => [model.tier, model.id])).toEqual([[4, "gpt-6-astra"]]);
+    expect(verified.configuration.active?.document.models.map(value => [value.tier, value.id])).toEqual([[model.tier, model.id]]);
     expect(verified.configuration.active?.provenance).toEqual(verified.provenance);
-    expect(verified.provenance.providers).toEqual(["openai-codex"]);
+    expect(verified.provenance.providers).toEqual([model.provider]);
     expect(verified.configuration.revision).toBe(3);
     expect(f.calls.filter(door => effects.includes(door))).toEqual(["atyrode.code.initializeConfiguration", actionDoor("startInventory"),
       actionDoor("startBenchmark"), "atyrode.code.stageCatalog", "atyrode.code.promoteCatalog"]);
     expect(f.calls).not.toContain("atyrode.code.select");
+  }
+});
+
+test("standing spend approval never approves a known premium tier, and freshness and cancellation still stop first", async () => {
+  for (const change of ["covered", "withdrawn", "cancelled", "defaults", "accounts", "omp", "revision"] as const) {
+    const f = verificationFixture(), controller = new AbortController();
+    f.omp.accounts.accounts = [f.slot("openai-codex", 3)];
+    f.omp.inventory.models = [row("openai-codex", "gpt-6-astra", 10, 200_000, ["low", "medium", "high", "max"], true)];
+    await f.workflow.approveChecks(0, 1);
+    const pending = await prepared(f, 0);
+    if (change === "withdrawn") await f.workflow.approveChecks(1, 0);
+    if (change === "cancelled") controller.abort();
+    if (change === "defaults") f.omp.defaults.revision++;
+    if (change === "accounts") f.omp.accounts.accounts = [f.slot("openai-codex", 4)];
+    if (change === "omp") f.omp.artifact = "d".repeat(64);
+    if (change === "revision") await f.workflow.code("changeAccounts", { containerId: target.containerId, expectedRevision: pending.charge.revision,
+      change: { kind: "create-preset", preset: { id: "other", name: "Other", disabled: [] } } });
+    const from = f.calls.length, before = [...f.store];
+    const stopped = await stopOf(pending.confirm(null, { unasked: true, signal: controller.signal }));
+    expect(stopped.reason).toBe({ covered: "code_invalid_selection", withdrawn: "code_approval_withdrawn",
+      cancelled: "code_verification_cancelled", defaults: "omp_defaults_changed", accounts: "code_accounts_changed",
+      omp: "code_omp_changed", revision: "code_stale_preferences" }[change]);
+    expect(f.calls.slice(from).filter(door => effects.includes(door))).toEqual([]);
+    expect(f.benchmarked).toEqual([]);
+    expect([...f.store]).toEqual(before);
+  }
+});
+
+test("an invalid provisional ladder is not mistaken for an unreachable real check", async () => {
+  const f = verificationFixture();
+  f.omp.accounts.accounts = [f.slot("anthropic", 1)];
+  f.omp.inventory.models = [
+    row("anthropic", "claude-haiku-5", 1, 200_000, ["low", "high", "max"], true),
+    row("anthropic", "claude-sonnet-5", 3, 200_000, ["low", "high"], true),
+  ];
+  expect(() => inventoryPlan(f.omp.inventory, "any")).toThrow("code_ladder_regression");
+  f.verdicts["claude-haiku-5"] = "not_found";
+  const verified = await (await prepared(f, 0)).confirm(null);
+  expect(f.benchmarked).toHaveLength(1);
+  expect(verified.configuration.active?.document.models.map(model => model.id)).toEqual(["claude-sonnet-5"]);
+  expect(verified.configuration.selection?.capability).toBe(2);
+  expect(verified.provenance.providers).toEqual(["anthropic"]);
+});
+
+test("a real default failure without a complete premium profile retains the existing no-stage failure semantics", async () => {
+  const f = verificationFixture(), levels = ["low", "medium", "high", "max"] as const;
+  f.omp.accounts.accounts = [f.slot("anthropic", 1)];
+  f.omp.inventory.models = [
+    row("anthropic", "claude-sonnet-5", 3, 200_000, levels, true),
+    row("anthropic", "claude-opus-5", 5, 200_000, levels, false),
+  ];
+  const pending = await prepared(f, 0), before = [...f.store];
+  f.verdicts["claude-sonnet-5"] = "not_found";
+  const stopped = await stopOf(pending.confirm(null));
+  expect([stopped.step, stopped.reason]).toEqual(["derive", "code_invalid_selection"]);
+  expect(f.benchmarked).toHaveLength(1);
+  expect(f.derived.at(-1)?.document.models.map(model => model.id)).toEqual(["claude-opus-5"]);
+  expect(f.calls).not.toContain("atyrode.code.stageCatalog");
+  expect([...f.store]).toEqual(before);
+  expect((await f.workflow.readChecks()).checks).toEqual([]);
+});
+
+test("unexpected premium reachability keeps the exact completed check without promotion, then adopts or promotes without repeating spend", async () => {
+  for (const existing of [false, true]) for (const adoption of ["kept", "staged"] as const) {
+    const f = verificationFixture(), controller = new AbortController(), levels = ["low", "medium", "high", "max"] as const;
+    f.omp.accounts.accounts = [f.slot("openai-codex", 3)];
+    f.omp.inventory.models = [
+      row("openai-codex", "gpt-6-luna", 0.1, 200_000, levels, true),
+      row("openai-codex", "gpt-6.1-terra", 1, 200_000, levels, true),
+      row("openai-codex", "gpt-6.1-sol", 2, 200_000, levels, true),
+      row("openai-codex", "gpt-6-astra", 10, 200_000, levels, true),
+    ];
+    const everyday: Selection = { ...preview, lane: { kind: "provider", family: "openai", blend: "only" },
+      capability: 2, thinking: "medium", advisor: "off", spark: false };
+    const first = existing ? await (await prepared(f, 0)).confirm(everyday) : null;
+    const pending = await prepared(f, first?.configuration.revision ?? 0), before = (await f.configuration()).configuration!;
+    for (const id of ["gpt-6-luna", "gpt-6.1-terra", "gpt-6.1-sol"]) f.verdicts[id] = "not_found";
+    const from = f.calls.length;
+    const stopped = await stopOf(pending.confirm(existing ? everyday : null, { signal: controller.signal }));
+    expect([stopped.step, stopped.reason]).toEqual(["review", "code_invalid_selection"]);
+    expect(stopped.evidence).toEqual({ inventoryJobId: pending.charge.inventoryJobId,
+      benchmarkJobIds: [`benchmark-${existing ? 2 : 1}`], revision: before.revision + 1 });
+    expect(f.calls.slice(from).filter(door => effects.includes(door))).toEqual([actionDoor("startBenchmark"), "atyrode.code.stageCatalog"]);
+    expect(f.calls.slice(from)).not.toContain("atyrode.code.reviewCatalog");
+    const retained = (await f.configuration()).configuration!, draft = retained.draft!;
+    expect({ ...retained, revision: before.revision, draft: before.draft }).toEqual(before);
+    expect(draft.document).toEqual(f.derived.at(-1)!.document);
+    expect(draft.digest).toBe(digestOf(draft.document));
+    expect(draft.document.models).toEqual([expect.objectContaining({ provider: "openai-codex", id: "gpt-6-astra", tier: 4,
+      tokensPerSecond: 50, timeToFirstTokenMs: 300 })]);
+    expect(draft.provenance).toEqual({ ompVersion: pending.charge.inventory.ompVersion,
+      inventoryArtifactSha256: pending.charge.inventoryArtifactSha256, catalogRevision: pending.charge.catalogRevision,
+      inventoryObservedAt: pending.charge.inventory.observedAt, benchmarkCompletedAt: 8_000 + f.benchmarked.length,
+      providers: ["openai-codex"], poolIdentityDigest: pending.charge.pool.poolIdentityDigest });
+    expect((await f.workflow.readChecks()).checks).toEqual([{ poolIdentityDigest: pending.charge.pool.poolIdentityDigest,
+      budget: pending.charge.budget, digest: draft.digest, provenance: draft.provenance, recordedAt: 10_000, models: ["openai-codex/gpt-6-astra"] }]);
+    const kept = JSON.parse([...f.store].find(([key]) => key.startsWith("checks/"))![1]);
+    expect(kept).toMatchObject({ document: draft.document, digest: draft.digest, provenance: draft.provenance,
+      poolIdentityDigest: pending.charge.pool.poolIdentityDigest, budget: pending.charge.budget });
+    // Leaving a later premium decision cancels only the caller's intent, not these retained facts.
+    const after = [...f.store], calls = [...f.calls], benchmarks = f.benchmarked.length;
+    controller.abort();
+    await Promise.resolve();
+    expect(f.calls).toEqual(calls);
+    expect([...f.store]).toEqual(after);
+    // An ordinary retry encounters the kept premium boundary before preparing another charge.
+    const refused = await stopOf(f.workflow.verifyModels(target, { expectedRevision: retained.revision, budget: "any",
+      selection: existing ? everyday : null }));
+    expect([refused.step, refused.reason]).toEqual(["adopt", "code_invalid_selection"]);
+    expect((await f.configuration()).configuration).toEqual(retained);
+    const actual: Selection = { ...everyday, capability: 4 };
+    const resume = f.calls.length;
+    let configuration: Configuration;
+    if (adoption === "kept") {
+      const adopted = await f.workflow.verifyModels(target, { expectedRevision: retained.revision, budget: "any", selection: actual });
+      if (adopted.kind !== "adopted") throw new Error("expected the retained check without another charge");
+      configuration = adopted.verified.configuration;
+    } else {
+      const input = { containerId: target.containerId, expectedRevision: retained.revision, source: "draft" as const, selection: actual };
+      const review = await f.workflow.code("reviewCatalog", input);
+      configuration = await f.workflow.code("promoteCatalog", { ...input, reviewDigest: review.reviewDigest });
+    }
+    expect(configuration.selection).toEqual(actual);
+    expect(configuration.active).toEqual(draft);
+    expect(configuration.accounts).toEqual(before.accounts);
+    expect(f.benchmarked).toHaveLength(benchmarks);
+    expect(f.calls.slice(resume).filter(door => effects.includes(door) || door === "atyrode.code.adoptCheck"))
+      .toEqual(adoption === "kept" ? ["atyrode.code.adoptCheck"] : ["atyrode.code.promoteCatalog"]);
+    expect(f.calls.slice(from).filter(door => door === actionDoor("startInventory"))).toEqual([]);
   }
 });
 
@@ -266,8 +407,8 @@ test("a model merely listed in the old catalog cannot become an over-ceiling mai
   f.omp.inventory.models = f.omp.inventory.models.filter(model => model.id === "gpt-6-astra");
   const pending = await prepared(f, first.configuration.revision), from = f.calls.length;
   const stopped = await stopOf(pending.confirm(selection));
-  expect([stopped.step, stopped.reason]).toEqual(["derive", "code_invalid_selection"]);
-  expect(f.calls.slice(from)).not.toContain("atyrode.code.stageCatalog");
+  expect([stopped.step, stopped.reason]).toEqual(["benchmark", "code_invalid_selection"]);
+  expect(f.calls.slice(from).filter(door => effects.includes(door))).toEqual([]);
   expect((await f.configuration()).configuration).toEqual(first.configuration);
   const chosen = await (await prepared(f, first.configuration.revision)).confirm({ ...selection, capability: 4 });
   expect(chosen.configuration.selection?.capability).toBe(4);
@@ -289,8 +430,8 @@ test("verification retains the same legacy premium identity through metadata ref
     const pending = await prepared(f, legacy.revision), from = f.calls.length;
     if (change !== "metadata") {
       const stopped = await stopOf(pending.confirm(legacy.selection));
-      expect([stopped.step, stopped.reason]).toEqual(["derive", "code_invalid_selection"]);
-      expect(f.calls.slice(from)).not.toContain("atyrode.code.stageCatalog");
+      expect([stopped.step, stopped.reason]).toEqual(["benchmark", "code_invalid_selection"]);
+      expect(f.calls.slice(from).filter(door => effects.includes(door))).toEqual([]);
       expect((await f.configuration()).configuration).toEqual(legacy);
       continue;
     }
@@ -298,6 +439,12 @@ test("verification retains the same legacy premium identity through metadata ref
     expect(refreshed.configuration.selection).toEqual(legacy.selection);
     expect(refreshed.configuration.active?.document.models[0]).toMatchObject({ provider: "openai-codex", id: "gpt-6-astra", tier: 4, contextWindow: 199_999 });
     expect(refreshed.configuration.active?.digest).not.toBe(legacy.active?.digest);
+    // Asking for a new balanced default never inherits this already selected premium identity.
+    const reset = await prepared(f, refreshed.configuration.revision), resetFrom = f.calls.length;
+    const stopped = await stopOf(reset.confirm(null));
+    expect([stopped.step, stopped.reason]).toEqual(["benchmark", "code_invalid_selection"]);
+    expect(f.calls.slice(resetFrom).filter(door => effects.includes(door))).toEqual([]);
+    expect((await f.configuration()).configuration).toEqual(refreshed.configuration);
   }
 });
 
@@ -409,6 +556,42 @@ test("a stop cancels the probe job in flight, and a failed one names its step an
   expect([failed.step, failed.reason]).toEqual(["benchmark", "job benchmark-2 exited with exit code 1"]);
   expect(failed.evidence.benchmarkJobIds).toEqual(["benchmark-1", "benchmark-2"]);
   expect((await failing.configuration()).configuration).toMatchObject({ revision: 1, active: null, draft: null });
+});
+
+test("partial receipts, failed jobs and cancelled jobs never stage or keep a verified premium list", async () => {
+  for (const outcome of ["partial", "failed", "cancelled", "before-write"] as const) {
+    const f = verificationFixture(), controller = new AbortController(), levels = ["low", "medium", "high", "max"] as const;
+    f.omp.accounts.accounts = [f.slot("anthropic", 1), f.slot("openai-codex", 3)];
+    f.omp.inventory.models = [...f.omp.inventory.models.slice(0, 2),
+      row("openai-codex", "gpt-6-luna", 0.1, 200_000, levels, true),
+      row("openai-codex", "gpt-6.1-terra", 1, 200_000, levels, true),
+      row("openai-codex", "gpt-6.1-sol", 2, 200_000, levels, true),
+      row("openai-codex", "gpt-6-astra", 10, 200_000, levels, true),
+    ];
+    for (const id of ["gpt-6-luna", "gpt-6.1-terra", "gpt-6.1-sol"]) f.verdicts[id] = "not_found";
+    if (outcome === "partial") f.omitted.add("gpt-6-astra");
+    if (outcome === "failed") f.exitCodes.set("benchmark-2", 1);
+    if (outcome === "cancelled") {
+      f.states.set("benchmark-2", ["started"]);
+      f.hooks[actionDoor("startBenchmark")] = () => { if (f.benchmarked.length === 2) controller.abort(); };
+    }
+    const pending = await prepared(f, 0), before = [...f.store];
+    const wanted: Selection = { ...preview, lane: { kind: "provider", family: "openai", blend: "only" },
+      capability: 2, advisor: "off", spark: false };
+    const stopped = await stopOf(pending.confirm(wanted, { signal: controller.signal,
+      beforeWrite: async () => { if (outcome === "before-write") controller.abort(); } }));
+    expect([stopped.step, stopped.reason]).toEqual(outcome === "partial" ? ["derive", "code_probe_missing_probe"]
+      : outcome === "before-write" ? ["derive", "code_verification_cancelled"]
+        : ["benchmark", outcome === "failed" ? "job benchmark-2 exited with exit code 1" : "code_verification_cancelled"]);
+    expect(stopped.evidence).toEqual({ inventoryJobId: "inventory-1", benchmarkJobIds: ["benchmark-1", "benchmark-2"], revision: 1 });
+    expect(f.benchmarked).toHaveLength(2);
+    expect(f.calls).not.toContain("atyrode.code.stageCatalog");
+    expect(f.calls).not.toContain("atyrode.code.promoteCatalog");
+    expect([...f.store]).toEqual(before);
+    expect((await f.configuration()).configuration).toMatchObject({ revision: 1, active: null, draft: null, selection: null });
+    expect((await f.workflow.readChecks()).checks).toEqual([]);
+    expect(f.cancelled).toEqual(outcome === "cancelled" ? ["benchmark-2"] : []);
+  }
 });
 
 test("a status read that fails while a probe runs cancels the probe, and a cancellation that fails is named", async () => {

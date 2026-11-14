@@ -3,7 +3,7 @@ import type { HostServices } from "@manifold/plugin";
 import { formatManifoldUri, type MachineSummary } from "@manifold/protocol";
 import { compileCatalog, type CompiledCatalog } from "../../domain/catalog.ts";
 import { initialAccountChoices, servedProviders } from "../../domain/accounts.ts";
-import { defaultSelection, routeService, routedModels, type Review, type ServiceGap } from "../../domain/routing.ts";
+import { defaultSelection, newPremiumLead, routeService, routedModels, type Review, type ServiceGap } from "../../domain/routing.ts";
 import { catalogFromMetadata } from "../../domain/probe.ts";
 import type { AccountChoiceChange, CatalogDocument, Selection } from "../../domain/contracts.ts";
 import type { ActionResult, Configuration, Target } from "../contract.ts";
@@ -86,8 +86,10 @@ export type WorkbenchActions = {
   next: () => void;
   /** Prepare a verification: inventory, then the charge, which spends nothing until `confirmCharge`. */
   verify: () => void;
-  /** CAS-save a local edit of the active profile, without launching it. */
-  save: () => Promise<void>;
+  /** CAS-save a local edit of the active profile; an explicit selection answers its pending premium question. */
+  save: (explicitSelection?: Selection) => Promise<void>;
+  /** Leave a premium save question without changing the workspace or its local draft. */
+  dismissPremiumSave: () => void;
   /** Spend the verification charge the control showed (model-verification.ts `confirm`). */
   confirmCharge: (activation: ConfirmActivation, shown: ChargeReview) => void;
   /** Leave a held review unlaunched (its dialog's Not now): the next press reviews again. */
@@ -141,6 +143,8 @@ export type WorkbenchModel = {
   launchReview: SessionReview | null;
   /** The review a press stopped on, with what the panel showed, while it stands (`HeldReview`). */
   held: HeldReview | null;
+  /** A save waiting for an explicit actual-tier choice, bound to the unchanged press and policy scope. */
+  premiumSave: { readonly selection: Selection; readonly model: string; readonly tier: Selection["capability"]; readonly effort: string; readonly launchAfterSave: boolean } | null;
   configurationCurrent: boolean;
   unsaved: boolean;
   /** The rows hold a real edit not yet saved or discarded (draft-store.ts `editedDraft`); the panel's reads on their own wait for it. */
@@ -267,6 +271,10 @@ export function useWorkbench({ host, target, machine, rosterError, available }: 
   const [inFlight, setInFlight] = useState<WorkbenchStep | null>(null);
   const [chaining, setChaining] = useState(false);
   const [writingCatalog, setWritingCatalog] = useState(false);
+  const [pendingPremiumSave, setPendingPremiumSave] = useState<{
+    readonly selection: Selection; readonly model: string; readonly tier: Selection["capability"]; readonly effort: string;
+    readonly pressEpoch: number; readonly policyEpoch: number; readonly launchAfterSave: boolean;
+  } | null>(null);
   const [message, setMessage] = useState<WorkbenchMessage | null>(null);
   const [outcome, setOutcome] = useState<WorkbenchOutcome | null>(null);
   // Once Manifold refused this caller's sponsorship of Code's Agent here, launches are the reviewed session (workflow.ts `sponsorRefused`).
@@ -390,7 +398,8 @@ export function useWorkbench({ host, target, machine, rosterError, available }: 
       if (mode === "manual") setMessage({ text: adopted ? "Your earlier model check is in use here." : "Models checked with your accounts, and the profile saved for the workspace.", failed: false });
     },
     // A stopped first verification leaves the choices it created and nothing else (launch-step.ts `followInitialization`).
-    onInitialized: (from, to) => setDials(previous => followInitialization(previous, from, to)) });
+    onInitialized: (from, to) => setDials(previous => followInitialization(previous, from, to)),
+    onRetained: saved => { setSavedPolicy(saved); setDials(null); setHeld(null); } });
   const authority = useRef({ client: host.client, authoring: host.authoring, writable, epoch: 0 });
   if (authority.current.client !== host.client || authority.current.authoring !== host.authoring || authority.current.writable !== writable)
     authority.current = { client: host.client, authoring: host.authoring, writable, epoch: authority.current.epoch + 1 };
@@ -465,6 +474,9 @@ export function useWorkbench({ host, target, machine, rosterError, available }: 
   }
   const step = nextLaunchStep(facts);
   const verb: GateVerdict = step.step === "blocked" ? { open: false, refusal: step.reason } : actionGate(facts, step.step);
+  const premiumSave = pendingPremiumSave && pendingPremiumSave.pressEpoch === pressEpoch &&
+    pendingPremiumSave.policyEpoch === policyEpoch && actionGate(facts, "save").open ? pendingPremiumSave : null;
+  useEffect(() => { if (pendingPremiumSave && !premiumSave) setPendingPremiumSave(null); }, [pendingPremiumSave, premiumSave]);
   function policyCurrent() {
     return mounted.current && policyScope.current.epoch === policyEpoch && current.current.host.client === host.client &&
       current.current.host.principal.id === host.principal.id && current.current.host.containerId === host.containerId &&
@@ -501,12 +513,35 @@ export function useWorkbench({ host, target, machine, rosterError, available }: 
     if (!allowed("edit-team")) return;
     setDials(null); setSavedPolicy(null); setHeld(null); setMessage(null);
   }
-  async function save() {
+  async function save(explicitSelection?: Selection, launchAfterSave = false) {
     // Only a local edit of a verified active profile saves here; the bundled preview has no save.
-    if (!profile || !allowed("save")) return;
+    if (!profile || !compiled || !allowed("save")) return;
+    let selected = profile.selection;
+    if (explicitSelection !== undefined) {
+      if (!premiumSave || explicitSelection !== premiumSave.selection || premiumSave.pressEpoch !== pressScope.current.epoch ||
+        premiumSave.policyEpoch !== policyScope.current.epoch) return;
+      selected = explicitSelection;
+      launchAfterSave = premiumSave.launchAfterSave;
+      setPendingPremiumSave(null);
+    } else {
+      const previous = record?.active && record.selection ? { catalog: compileCatalog(record.active.document), selection: record.selection } : null;
+      const lead = newPremiumLead(compiled, selected, previous);
+      if (lead) {
+        const candidate: Selection = { ...selected, capability: lead.tier };
+        const review = previewSelection(compiled, candidate);
+        if (!review) {
+          setMessage({ text: "This model cannot retain the profile at its actual tier. Choose another model or review the list in Models.", failed: true });
+          return;
+        }
+        setPendingPremiumSave({ selection: candidate, model: `${lead.provider}/${lead.id}`, tier: lead.tier,
+          effort: review.routes.find(route => route.role === "default")!.lead.thinking, pressEpoch, policyEpoch, launchAfterSave });
+        return;
+      }
+    }
+    setChaining(launchAfterSave);
     await perform("save", async () => {
       const saved = await codeWorkflow(host, policyCurrent).code("select", {
-        containerId: host.containerId!, expectedRevision: profile.revision, selection: profile.selection,
+        containerId: host.containerId!, expectedRevision: profile.revision, selection: selected,
       });
       if (!policyCurrent()) throw new WorkflowError("The workspace changed while saving. Nothing was retried.");
       setSavedPolicy(saved); setDials(null); setHeld(null);
@@ -624,7 +659,7 @@ export function useWorkbench({ host, target, machine, rosterError, available }: 
     if (pending.current || step.step === "blocked" || !verb.open) return;
     switch (step.step) {
       case "verify": void verification.prepare("launch"); return;
-      case "save": setChaining(placeable); void save(); return;
+      case "save": void save(undefined, placeable); return;
       case "launch": void launch(); return;
     }
   }
@@ -717,7 +752,7 @@ export function useWorkbench({ host, target, machine, rosterError, available }: 
   return {
     queries: { configuration, metadata, setup, defaults, skillCatalog, accounts },
     observed, record, machineId, rosterError, document, starterError: starter.error, compiled, selection,
-    profile, localDraft: dials, review: shownReview, localReview, controlsReview, launchReview: standing?.review ?? null, held: standing,
+    profile, localDraft: dials, review: shownReview, localReview, controlsReview, launchReview: standing?.review ?? null, held: standing, premiumSave,
     configurationCurrent, unsaved, edited, stale, writable, placeable, available, accounts: accountState, accountsProblem,
     configurationFailed: configuration.error !== null, ompMissing: setup.code === "omp_operation_unavailable", launchReady, busy, inFlight, chaining,
     profileState, stateLabel, launchStatus: launchStatusText(facts), message,
@@ -726,7 +761,8 @@ export function useWorkbench({ host, target, machine, rosterError, available }: 
     skillChoice, setSkillChoice: changeSkillChoice, skillProblems,
     automation, setAutomation: changeAutomation,
     savedSessionId, setSavedSessionId,
-    actions: { updateSelection, recallTeam, discardChanges, next, verify, save, confirmCharge, dropHeld: () => setHeld(null), resume, changeAccounts: edit => void changeAccounts(edit),
+    actions: { updateSelection, recallTeam, discardChanges, next, verify, save, dismissPremiumSave: () => setPendingPremiumSave(null),
+      confirmCharge, dropHeld: () => setHeld(null), resume, changeAccounts: edit => void changeAccounts(edit),
       writingCatalog: setWritingCatalog, catalogWritten, refresh, readUsage: reading.refresh },
     verification, recentTeams, agentRuns,
     launchDials: standing ? dialsFor(standing.review) ?? "run" : null,

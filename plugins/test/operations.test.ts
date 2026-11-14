@@ -699,6 +699,32 @@ describe("verified catalogs and launch-time honesty", () => {
     expect((await accepted(f, "stageCatalog", { ...workspace, expectedRevision: promoted.revision, document: document() })).draft?.provenance).toBeNull();
   });
 
+  test("refusing a premium promotion preserves the staged verification and active workspace choices until actual-tier review", async () => {
+    const f = fixture(), original = await active(f);
+    const catalog: CatalogDocument = { schemaVersion: 1, models: [{ ...document().models[0]!,
+      key: "fable", id: "claude-fable-5-2", tier: 4 }] };
+    const verified = await verification(f, original.revision);
+    const staged = await accepted(f, "stageCatalog", { ...workspace, expectedRevision: original.revision, document: catalog, verification: verified });
+    const input = { ...workspace, expectedRevision: staged.revision, source: "draft" as const }, before = [...f.store];
+    expect(await invoke(f, "reviewCatalog", { ...input, selection: original.selection! })).toEqual({ refused: "code_invalid_selection" });
+    expect([...f.store]).toEqual(before);
+    expect(await configuration(f)).toEqual(staged);
+    expect(staged.active).toEqual(original.active);
+    expect(staged.selection).toEqual(original.selection);
+    expect(staged.accounts).toEqual(original.accounts);
+    expect(staged.draft?.document).toEqual(catalog);
+    expect(staged.draft?.digest).toBe(digestOf(catalog));
+    expect(staged.draft?.provenance).toMatchObject({ inventoryArtifactSha256: verified.inventoryArtifactSha256,
+      catalogRevision: verified.catalogRevision, poolIdentityDigest: verified.poolIdentityDigest,
+      inventoryObservedAt: verified.inventoryObservedAt, benchmarkCompletedAt: verified.benchmarkCompletedAt });
+    const selection = { ...original.selection!, capability: 4 as const };
+    const review = await accepted(f, "reviewCatalog", { ...input, selection });
+    const promoted = await accepted(f, "promoteCatalog", { ...input, selection, reviewDigest: review.reviewDigest });
+    expect(promoted.active).toEqual(staged.draft);
+    expect(promoted.selection).toEqual(selection);
+    expect(promoted.accounts).toEqual(original.accounts);
+  });
+
   test("an unverified preview names catalog models without manufacturing verified account coverage", async () => {
     const f = fixture(), record = await staged(f);
     const review = await accepted(f, "reviewCatalog", { ...workspace, expectedRevision: record.revision, source: "draft" });

@@ -23,6 +23,7 @@ import { strandsNote } from "./earlier-model.ts";
 import type { RecentTeam } from "./recent-teams.ts";
 import { profileGroups, type LedgerRow } from "./routing-model.ts";
 import { Profile, rippleTeam } from "./routing-pane.tsx";
+import { TIERS } from "./sheets-model.ts";
 import { generatorRows, ROW_EXTRAS, type GeneratorRow, type RowId, type RowWord } from "./rows-model.ts";
 import {
   changeSentence, commitKind, estimateReadouts, fixView, launchLine, launchReadout, laneFix, poolCounts, quotaParts, refusalView, reviewDifferences,
@@ -195,7 +196,9 @@ export function GeneratorPane(props: GeneratorPaneProps) {
   const estimates = useMemo(() => catalog && shown ? estimateReadouts(catalog, shown) : null, [catalog, shown]);
   const groups = useMemo(() => profile && ledger ? profileGroups(ledger) : null, [profile, ledger]);
 
-  const verb = verbView({
+  const verb = model.record?.draft?.provenance != null && verification.phase === null && !model.busy && !model.chaining
+    ? { label: "Review in Models", state: "ready" as const, refusal: null, saves: false, checks: false, opens: "models" as const }
+    : verbView({
     step: model.step, verdict: model.verb, busy: model.busy, inFlight: model.inFlight, chaining: model.chaining, unsaved: model.unsaved,
     draft: model.localDraft !== null, edited: model.edited, phase: verification.phase, mode: verification.mode,
     serves: listServes({ verification, unservedLead: model.unservedLead }),
@@ -212,7 +215,8 @@ export function GeneratorPane(props: GeneratorPaneProps) {
   // The other machine a fix offers: one where OMP answers, else any other online one.
   const others = machines?.filter(entry => entry.id !== model.machineId && entry.online && entry.revoked !== true) ?? [];
   const other = others.find(entry => presence?.get(entry.id) === "ok") ?? (presence ? null : others[0] ?? null);
-  const charge = verification.phase === "charge" ? verification.charge : null;
+  const premium = verification.premium;
+  const charge = verification.phase === "charge" && premium === null ? verification.charge : null;
   const progress = verification.progress?.providers.reduce((sum, entry) => ({ done: sum.done + entry.done, total: sum.total + entry.total }), { done: 0, total: 0 }) ?? null;
   // A check that stopped says so until the next one starts; the verb, Launch again, is its retry. One the panel ran on its own
   // stopped beside a launch it never held up, so it is said in Models only.
@@ -242,7 +246,11 @@ export function GeneratorPane(props: GeneratorPaneProps) {
     nobodyServes: served !== null && served.size === 0, listFailure,
     ompMissing: model.ompMissing || presence?.get(model.machineId) === "absent", accountsProblem: model.accountsProblem, configurationFailed: model.configurationFailed,
   };
-  const line = launchLine(status, vocab);
+  const launchStatusLine = launchLine(status, vocab);
+  const line: StatusLine | null = stoppedVerifying && selection === null
+    ? { parts: launchStatusLine?.parts ?? [], actions: [...(launchStatusLine?.actions ?? []),
+      { kind: "fix", key: "actual-tier", label: "Choose a profile in Models", fix: { kind: "open", place: "models" } }] }
+    : launchStatusLine;
   // A refused press's question goes with its refusal: a refusal that lifted or changed, even within its kind, is not asked
   // again without a press.
   const refusal = verb.state === "refused" && verb.refusal ? refusalView(verb.refusal, status, vocab) : null;
@@ -608,7 +616,19 @@ export function GeneratorPane(props: GeneratorPaneProps) {
         </span>
       </div>
     </div>
-    <DecisionDialog decision={decision} onChoose={decide} />
+    <DecisionDialog decision={premium ? {
+      kind: "premium", title: "Check this premium profile?",
+      text: ["Inventory advertises the model below at its actual tier. It is unmeasured: the model check has not yet been performed, and account access is not verified.",
+        "The proposed profile carries your preferences and budget into the advertised list; any changes are listed below. You must approve the check's spending separately, even if standing approval covers it."],
+      items: [`${premium.model} · ${TIERS[premium.tier - 1]!} · configured ${premium.effort}`,
+        ...selection ? teamEdits(selection, premium.selection, familyWord).map(edit => `${WORD_NAMES[edit.word].toLowerCase()} ${edit.from} → ${edit.to}`) : []],
+      choices: [{ label: `Choose ${TIERS[premium.tier - 1]!} profile`, does: { kind: "approve" } }, { label: "Not now", does: { kind: "cancel" } }],
+    } : decision} onChoose={(choice, detail) => {
+      if (premium) {
+        if (choice.does.kind === "approve") verification.choosePremium(premium);
+        else verification.cancel();
+      } else decide(choice, detail);
+    }} />
   </section>;
 }
 

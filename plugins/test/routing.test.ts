@@ -4,7 +4,7 @@ import { initialAccountChoices, reduceAccountChoices, servedProviders } from "..
 import { compileCatalog } from "../domain/catalog.ts";
 import type { CatalogModel, Selection } from "../domain/contracts.ts";
 import { quotaPools, roleOutcomes, type QuotaReading } from "../domain/quota.ts";
-import { reviewCatalog, type Review } from "../domain/routing.ts";
+import { defaultSelection, reviewCatalog, type Review } from "../domain/routing.ts";
 import { projectUsage } from "../domain/usage.ts";
 import { displayAliases } from "../code/generator/aliases.ts";
 import { modelListFailure } from "../code/generator/board-model.ts";
@@ -109,6 +109,28 @@ describe("the routing", () => {
     expect(off.find(row => row.role === "default")?.lead).toMatchObject({ alias: "o2", thinking: "medium", family: "openai", id: "openai-codex/native-o2" });
     expect(off.find(row => row.role === "widget")).toMatchObject({ lead: { alias: "o1", thinking: "low" }, fallback: [] });
     expect(off.find(row => row.role === "memory")).toMatchObject({ lead: { alias: "o1", thinking: "medium" }, fallback: [] });
+  });
+
+  test("everyday defaults reach the ledger and groups on the served preferred family without premium helper effort", () => {
+    for (const [excluded, family, key, cheap] of [
+      [[], "anthropic", "a2", "a1"],
+      [["carol"], "openai", "o3", "o1"],
+    ] as const) {
+      const options: Options = { excluded: [...excluded] }, accountReading = reading(options);
+      const selection = defaultSelection(catalog, provider => accountReading.served!.has(provider));
+      expect(selection.lane).toEqual({ kind: "provider", family, blend: "only" });
+      expect(selection.thinking).toBe("medium");
+      const rows = ledger(reviewCatalog(catalog, selection, now), options);
+      const groups = profileGroups(rows);
+      for (const [role, thinking] of [["default", "medium"], ["task", "medium"], ["plan", "high"], ["slow", "high"]] as const) {
+        expect(rows.find(row => row.role === role)?.lead).toMatchObject({ key, thinking });
+        expect(groups.find(group => group.roles.some(entry => entry.role === role))?.lead).toMatchObject({ key, thinking });
+      }
+      for (const [role, thinking] of [["smol", "medium"], ["memory", "medium"], ["widget", "low"], ["tiny", "low"], ["commit", "low"], ["advisor", "low"]] as const) {
+        expect(rows.find(row => row.role === role)?.lead).toMatchObject({ key: cheap, thinking });
+      }
+      expect(rows.find(row => row.role === "vision")?.lead?.thinking).toBe("low");
+    }
   });
 
   test("the ledger and grouped profile retain deliberative effort extremes on the selected rung", () => {

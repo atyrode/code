@@ -414,6 +414,19 @@ export function inventoryDraft(inventoryValue: unknown, budget: Selection["budge
     exclusions: [...unstableExclusions(inventory, options.budget), ...unprobed].sort((a, b) => compare(probeAddress(a), probeAddress(b))) };
 }
 /**
+ * An unmeasured advertised-candidate ladder for source planning, never reachability or entitlement
+ * evidence. Keep the benchmark's candidate bounds and identity checks, but supply no probe facts.
+ */
+export function inventoryPlan(inventoryValue: unknown, budget: Selection["budget"]): CatalogDocument {
+  const inventory = parse(InventoryReceiptSchema, inventoryValue);
+  if (budget === undefined) throw new ProbeError("invalid_input");
+  const options = parse(ScaffoldOptionsSchema, { budget }, "invalid_input");
+  unique(inventory.models);
+  const { models } = probeSet(inventory, options.budget);
+  benchmarkInput(inventory, models);
+  return scaffold(models, []).document;
+}
+/**
  * Every probed candidate (`probeSet`) must have an exact probe, before superseding older versions.
  * Only a reachable model enters the catalog. One whose probe was inconclusive is left out and named,
  * like a refused one, rather than refusing the whole catalog: a provider that could not be checked

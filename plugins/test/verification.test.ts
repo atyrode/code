@@ -1,13 +1,15 @@
 import { describe, expect, test } from "bun:test";
-import { LAUNCH_OPERATION_ID, OMP_VERSION } from "@atyrode/manifold-omp";
+import { LAUNCH_OPERATION_ID, OMP_VERSION, type InventoryReceipt } from "@atyrode/manifold-omp";
 import type { VerificationProvenance } from "../code/contract.ts";
 import { operationReady } from "../code/permission-plan.ts";
 import type { Selection } from "../domain/contracts.ts";
+import { compileCatalog } from "../domain/catalog.ts";
+import { inventoryPlan } from "../domain/probe.ts";
 import { editedDraft } from "../code/generator/draft-store.ts";
 import { draftStale, editHoldsCatalogWrite, followCatalogWrite, followInitialization, followRecord, launchStatusText, nextLaunchStep,
   type CatalogWrite, type DraftBase, type LaunchFacts, type SharedBase } from "../code/generator/launch-step.ts";
 import type { ProfileDraft } from "../code/generator/workbench-model.ts";
-import { adoptsOnly, backgroundCheckDue, CHECKING_HOLD_MS, confirmsCharge, ownInitialization, spendsWithoutAsking, verificationState,
+import { adoptsOnly, backgroundCheckDue, CHECKING_HOLD_MS, confirmsCharge, inventoryPremium, ownInitialization, spendsWithoutAsking, verificationState,
   type BackgroundFacts, type VerificationStatus } from "../code/generator/verification.ts";
 
 const runtime = "c".repeat(64), catalog = "e".repeat(64);
@@ -301,6 +303,48 @@ describe("approving a check's charge", () => {
     expect(confirmsCharge(press, charge, null, later)).toBe(false);
     const nothing = { requests: 0 };
     expect(confirmsCharge(press, nothing, { charge: nothing, preparedAt: prepared.preparedAt }, later)).toBe(false);
+  });
+});
+
+describe("advertised premium intent before any model spending", () => {
+  const normal: InventoryReceipt["models"][number] = { provider: "openai-codex", id: "gpt-6.1-terra", api: "openai-codex-responses",
+    inputCostPerMillion: 0, outputCostPerMillion: 0, contextWindow: 200_000, maxTokens: 64_000,
+    reasoning: true, thinkingLevels: ["low", "medium", "high"], images: true, quotaTier: null };
+  const premium = { ...normal, id: "gpt-6.1-sol" };
+  const inventory: InventoryReceipt = { schemaVersion: 1, kind: "inventory", ompVersion: OMP_VERSION, observedAt: 10,
+    models: [{ ...premium, thinkingLevels: [...premium.thinkingLevels] }] };
+  const wanted: Selection = { lane: { kind: "provider", family: "openai", blend: "only" }, capability: 2,
+    thinking: "high", advisor: "off", spark: false, priority: true, prewalk: true, planYolo: true, fallback: false, budget: "free" };
+  const charge = { inventory, budget: "free" as const, pool: { providers: ["openai-codex"], poolIdentityDigest: "a".repeat(64) } };
+  const previous = { catalog: compileCatalog(inventoryPlan({ ...inventory, models: [normal] }, "free")), selection: wanted };
+
+  test("the choice names the actual advertised model and tier while preserving every other preference and budget", () => {
+    const planned = inventoryPremium(charge, wanted, previous);
+    expect(planned).toEqual({ selection: { ...wanted, capability: 3 }, model: "openai-codex/gpt-6.1-sol", tier: 3, effort: "high" });
+    expect(wanted.capability).toBe(2);
+    expect(inventoryPlan(inventory, "free").models.every(model => model.tokensPerSecond === null && model.timeToFirstTokenMs === null)).toBe(true);
+    // A budget authority is not profile authority, including a charge standing approval covers.
+    expect(spendsWithoutAsking("manual", false, 100, 1)).toBe(true);
+    expect(inventoryPremium(charge, wanted, previous)).not.toBeNull();
+    expect(inventoryPremium(charge, { ...wanted, capability: 3 }, previous)).toBeNull();
+  });
+
+  test("a missing wanted family keeps its narrowed lane when asking about the new actual premium tier", () => {
+    const missing: Selection = { ...wanted, lane: { kind: "provider", family: "anthropic", blend: "only" } };
+    const planned = inventoryPremium(charge, missing, previous);
+    expect(planned).toEqual({ selection: { ...missing, lane: wanted.lane, capability: 3 },
+      model: "openai-codex/gpt-6.1-sol", tier: 3, effort: "high" });
+    expect(missing).toEqual({ ...wanted, lane: { kind: "provider", family: "anthropic", blend: "only" } });
+    expect(planned?.selection.budget).toBe("free");
+    expect(inventoryPlan(inventory, "free").models.every(model => model.tokensPerSecond === null && model.timeToFirstTokenMs === null)).toBe(true);
+  });
+
+  test("only the old active selected identity is grandfathered, never membership elsewhere in its document", () => {
+    const selectedPremium = { catalog: compileCatalog(inventoryPlan(inventory, "free")), selection: wanted };
+    expect(inventoryPremium(charge, wanted, selectedPremium)).toBeNull();
+    const elsewhere = { catalog: compileCatalog(inventoryPlan({ ...inventory, models: [normal, premium] }, "free")), selection: wanted };
+    expect(inventoryPremium(charge, wanted, elsewhere)?.tier).toBe(3);
+    expect(inventoryPremium({ ...charge, inventory: { ...inventory, models: [normal, premium] } }, wanted, previous)).toBeNull();
   });
 });
 

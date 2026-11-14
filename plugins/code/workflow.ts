@@ -1,5 +1,5 @@
 import { createOmpClient, OmpHarnessProfileSchema, OmpSessionRefSchema, OMP_PLUGIN_ID, LAUNCH_OPERATION_ID, MATERIAL_SESSION_OPERATION_ID, RESUME_OPERATION_ID, skillInputBindings, PREPARE_WORKSPACE_OPERATION_ID, VALIDATE_WORKSPACE_OPERATION_ID,
-  INVENTORY_OPERATION_ID, BENCHMARK_OPERATION_ID, ThinkingSelectorSchema, probeAddress,
+  INVENTORY_OPERATION_ID, BENCHMARK_OPERATION_ID, ThinkingSelectorSchema, ProbeError, probeAddress,
   type BenchmarkInput, type BenchmarkReceipt, type InventoryReceipt, type OmpHarnessProfile, type OmpSessionRef, type OmpAction, type RunDials, type ThinkingSelector,
   type ActionInput as OmpInput, type ActionResult as OmpResult } from "@atyrode/manifold-omp";
 import { JobDeploymentApplyArgsSchema, JobDeploymentListArgsSchema, JobDeploymentListResultSchema,
@@ -15,8 +15,8 @@ import { selectedAccountPool } from "../domain/accounts.ts";
 import { compileCatalog, type CompiledCatalog } from "../domain/catalog.ts";
 import { projectUsage } from "../domain/usage.ts";
 import { providerPolicy } from "../domain/providers.ts";
-import type { Exclusion } from "../domain/probe.ts";
-import { clampSelection, laneFamilies, newPremiumLead } from "../domain/routing.ts";
+import { inventoryPlan, type Exclusion } from "../domain/probe.ts";
+import { clampSelection, laneFamilies, newPremiumLead, reviewCatalog, selectionForLane } from "../domain/routing.ts";
 import { DomainError, type AccountChoices, type Selection } from "../domain/contracts.ts";
 
 export type Dispatch = (door: string, input: unknown) => Promise<unknown>;
@@ -175,6 +175,22 @@ function unansweredNeeds(exclusions: readonly Exclusion[], inUse: ReadonlySet<st
   const lost = wanted ? laneFamilies(wanted.lane).filter(family => !families.includes(family)) : [];
   return exclusions.filter(exclusion => exclusion.reason === "inconclusive" &&
     (inUse.has(probeAddress(exclusion)) || lost.includes(providerPolicy(exclusion.provider).family))).map(probeAddress);
+}
+
+/** A missing balanced default needs an actual-tier choice only when a complete authored
+ * premium profile exists under the same budget and exact pool. This never selects it. */
+function hasPremiumProfile(catalog: CompiledCatalog, budget: Selection["budget"], serves: (provider: string) => boolean): boolean {
+  for (const model of catalog.models) {
+    if (model.tier !== 3 && model.tier !== 4) continue;
+    const selection: Selection = { ...selectionForLane({ kind: "provider", family: catalog.family(model.key), blend: "only" }, model.tier), budget };
+    try {
+      const review = reviewCatalog(catalog, selection, 0);
+      if (review.routes.every(route => serves(catalog.model(route.lead.key).provider))) return true;
+    } catch (error) {
+      if (!(error instanceof DomainError)) throw error;
+    }
+  }
+  return false;
 }
 
 /** The steps of a model verification, in the order they run; a failure names the one it stopped at. `adopt` replaces
@@ -676,6 +692,25 @@ export function createCodeWorkflowClient(transport: Dispatch) {
     run.enter("benchmark");
     await unchangedCharge(charge, run);
     if (unasked && !approvalCovers((await run.call(() => code("readChecks", {}))).approvedRequests, charge.requests)) throw run.fail("code_approval_withdrawn");
+    // An advertised ladder can reveal premium intent before spending, but cannot establish
+    // reachability: a plan that cannot be formed leaves that question to the real receipts.
+    let plannedPremium = false, missingDefault = false;
+    try {
+      const catalog = compileCatalog(inventoryPlan(charge.inventory, charge.budget));
+      try {
+        const selection = clampSelection(catalog, wanted, provider => charge.pool.providers.includes(provider));
+        plannedPremium = newPremiumLead(catalog, selection, previous) !== null;
+      } catch (error) {
+        if (wanted !== null || !(error instanceof DomainError)) throw error;
+        // A valid advertised list with no balanced default requires deliberate tier intent,
+        // not a benchmark that might charge the same unanswered question again.
+        missingDefault = true;
+      }
+    } catch (error) {
+      if (!(error instanceof DomainError) && !(error instanceof ProbeError))
+        throw run.fail(error instanceof Error ? error.message : "code_invalid_selection");
+    }
+    if (plannedPremium || missingDefault) throw run.fail("code_invalid_selection");
     const progress: ProviderProgress[] = charge.providers.map(({ provider, requests }) => ({ provider, done: 0, total: requests }));
     run.progress(progress);
     const receipts: BenchmarkReceipt[] = [];
@@ -704,12 +739,19 @@ export function createCodeWorkflowClient(transport: Dispatch) {
     const unanswered = unansweredNeeds(derived.exclusions, inUse, wanted, families);
     if (unanswered.length > 0)
       throw run.fail(`code_models_unanswered: ${unanswered.slice(0, 8).join(", ")}${unanswered.length > 8 ? ` and ${unanswered.length - 8} more` : ""}`);
-    // Narrow before anything is written, so an unsupported selection stops without staging a list.
-    let selection: Selection;
+    // Invalid selections still write nothing. A newly discovered premium lead instead keeps
+    // the completed check, but cannot promote it without an actual-tier selection.
+    let selection: Selection | null = null, premium = false;
     try {
       const catalog = compileCatalog(derived.document);
-      selection = clampSelection(catalog, wanted, provider => charge.pool.providers.includes(provider));
-      if (newPremiumLead(catalog, selection, previous)) throw new DomainError("invalid_selection");
+      try {
+        selection = clampSelection(catalog, wanted, provider => charge.pool.providers.includes(provider));
+        premium = newPremiumLead(catalog, selection, previous) !== null;
+      } catch (error) {
+        if (wanted !== null || !(error instanceof DomainError) ||
+          !hasPremiumProfile(catalog, charge.budget, provider => charge.pool.providers.includes(provider))) throw error;
+        premium = true;
+      }
     } catch (error) { throw run.fail(error instanceof Error ? error.message : "code_invalid_selection"); }
     await run.hold();
     run.enter("stage");
@@ -720,6 +762,7 @@ export function createCodeWorkflowClient(transport: Dispatch) {
         poolIdentityDigest: charge.pool.poolIdentityDigest, budget: charge.budget } }));
     run.evidence.revision = staged.revision;
     run.enter("review");
+    if (premium || selection === null) throw run.fail("code_invalid_selection");
     const review = await run.call(() => code("reviewCatalog", { containerId: target.containerId, expectedRevision: staged.revision, source: "draft", selection }));
     if (review.catalogDigest !== staged.draft?.digest || canonicalJobJson(review.provenance) !== canonicalJobJson(staged.draft.provenance))
       throw run.fail("code_preview_changed");
