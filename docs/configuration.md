@@ -56,10 +56,13 @@ All Code actions are `atyrode.code.<name>`:
 
 `initializeConfiguration`, `stageCatalog`, `promoteCatalog`, `discardCatalog`, `select`,
 `adoptCheck` and `changeAccounts` take `expectedRevision`. A catalog review takes
-`{ containerId, expectedRevision, source: "active" | "draft" }` and returns the
-exact catalog digest, compiled route/estimate review and `reviewDigest`.
-Promotion supplies that digest against the same source and revision. Discarding clears
-the staged list at the revision it was seen in and refuses `code_catalog_missing`
+`{ containerId, expectedRevision, source: "active" | "draft", selection? }` and returns
+the exact catalog digest, compiled route/estimate review and `reviewDigest`. An explicit
+selection is validated and bound into that digest; promotion supplies the same selection,
+digest, source and revision. Omission uses the balanced default (or saved active selection),
+never a silent premium upgrade. This lets an explicitly selected strong/elite profile
+promote a sparse premium-only catalog without first applying a temporary default.
+Discarding clears the staged list at the revision it was seen in and refuses `code_catalog_missing`
 when none is staged; the active list, the saved team and the account choices stay as
 they are.
 
@@ -279,13 +282,15 @@ stage refused after it leaves the draft resting on that initialization, as a sto
 first verification does. A write that replaces the list a draft was made on (using the
 staged list replaces the list in use and the staged one, discarding or importing
 replaces the staged one, and an import replaces the bundled list a workspace without
-one previews) never drops an unsaved edit. A list put in use brings its own default
-team, so no team made on the replaced list carries over; instead Models holds that
-write and says which list the edit is on, what the write does to that list and what
-each fix does: **save**, for an edit of the team in use, keeps the edit on the list in
-use, and **discard edit**, which the import dialog offers too, drops it. Once a staged
-list is put in use, the readout says **the profile is the new list's default now** when the
-saved team gave way to it. While a Models write is in flight the gate counts it as a step in
+one previews) never drops an unsaved edit. A staged list keeps a compatible saved
+profile; otherwise it uses its balanced default. Models holds a write that would
+replace the list an unsaved edit rests on and says which list the edit is on and what
+each fix does: **save**, for an edit of the team in use, keeps the edit on that list;
+**discard edit**, offered by the import dialog too, drops it. If only a premium profile
+can be formed, adopting it requires a deliberate question naming its actual model,
+strong/elite tier and configured effort; canceling writes nothing. The readout says
+when the saved profile was replaced rather than silently reinterpreting it. While a
+Models write is in flight the gate counts it as a step in
 progress, so no edit lands before its receipt does. Only an untouched draft gives way
 to the record, as the bundled preview does to a list imported into a workspace
 without one. A draft
@@ -488,17 +493,35 @@ or quota bucket, and a stored selection with the Spark flag reads as off.
 The **routing** pane lists OMP's shared roles on one line each: the role and its lead
 as `model:thinking` in the provider's hue, with the advisor's line held while it is off
 so turning it on adds a value rather than a line. Code configures only `default`,
-`task`, `plan`, `slow`, `advisor`, `vision`, `smol`, `tiny` and `commit`; it emits no
-named-agent model overrides. OMP's bundled agents keep their prompts, restrictions,
-model selectors and inheritance: task uses `@task`, scout and sonic use `@smol`
-at medium, reviewer uses `@slow`, and security-reviewer and seance inherit natively.
+`task`, `plan`, `slow`, `advisor`, `vision`, `smol`, `memory`, `widget`, `tiny` and `commit`; it emits no
+named-agent model overrides. These are configured shared-role preferences, not a claim
+that every native agent runs the suffix's effort. OMP's bundled agents keep their prompts,
+restrictions and native resolution: task declares `@task` and `thinking: auto`, scout and
+sonic declare `@smol` and medium, reviewer declares `@slow`, and security-reviewer and
+seance inherit natively. Those frontmatter values are defaults, not guaranteed effective
+effort: OMP considers caller effort, then an explicit role suffix, then agent frontmatter
+and resolved defaults, with per-call ceilings applied natively. Code does not install
+per-agent thinking overrides.
 A fresh profile chooses a complete served Sonnet lane at medium, otherwise served Sol
-at medium. With no included accounts, the bundled starter remains an explicitly
+at medium, or a real lower rung when the everyday target is unavailable. It never
+fills upward to a premium default. With no included accounts, the bundled starter remains an explicitly
 render-only preview: dials can be explored, but the no-account launch refusal stays.
 Saved explicit choices remain visible. Planning and slow use the selected tier at
 high, without a hidden premium tier; explicit strong/elite selections remain available.
-Smol stays on the cheap first rung at medium, tiny/commit at low, and vision at low,
-even when main thinking is max.
+Automatic fallbacks stay at or below both that role's explicitly selected tier and
+its lead tier; a sparse ladder cannot quietly substitute a premium model. An explicitly
+selected advisor review/audit has its own tier, independent of the main model dial.
+Smol and memory stay on the cheap first rung at medium, widget/tiny/commit at low,
+and vision at low, even when main thinking is max. Memory and widget each have their
+own explicit empty fallback chain, including while ordinary fallbacks are off, so
+neither inherits OMP's one-shot main fill or a built-in premium retry chain. Widget's
+native background-job author/caption consumer disables reasoning; its low suffix is
+not an assertion of effective reasoning effort. Managed native memory extraction
+passes configured medium effort through model-metadata clamping; the adapter does not
+disable reasoning or impose a fixed lower effort. The bundled sleep consolidation is
+deterministic and reports no LLM use; an available summarizer callback is not proof it
+invoked one. Code does not enable memory or change backend, retention or autolearn
+preferences: the native off backend remains dormant.
 
 A change rolls each value that moves and flashes its row, top to bottom; a launch lights the rows in
 turn. A lead that quota leaves out (its pool blocked, maxed or served by no included
@@ -1028,11 +1051,13 @@ panel ran on its own included, reads **check stopped** beside it, with its
 reason in the readout, since what it would have changed (the list, or for a stop while
 saving the profile, the team) stays as it was. An adopted check measured nothing here,
 so nothing reads as left out after it.
-A staged list offers **use staged list**, which reviews the staged list at its revision
-and promotes exactly that review with the list's own default team, and **discard**. An
-unsaved edit made on the list a write would replace holds it, saying what the write does
-to that list (putting a staged list in use resets the profile to the staged list's default), with **save**
-(an edit of the team in use, kept on the list in use) and **discard edit** beside it.
+A staged list offers **use staged list**, which reviews at its revision and atomically
+promotes that exact catalog and selected profile, and **discard**. A compatible saved
+selection is retained; otherwise adoption uses a balanced default, or asks explicitly
+before choosing a premium-only profile. An unsaved edit made on a list the write
+would replace holds it, with **save** (an edit of the team in use, kept on that list)
+and **discard edit** beside it. Review and promotion bind the same selection and digest;
+there is no temporary default profile or later extra selection write.
 Checking refused for want of
 discovery offers **enable in setup**; another refusal names itself with its fix (show
 accounts, retry, open Setup, use theirs). Esc cancels a run that can still be stopped,

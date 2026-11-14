@@ -9,6 +9,29 @@ cross-repository integration. The
 [architecture's section 6](manifold-transition.md#6-transition-steps) is the sole
 transition ledger. This page records constraints, not another roadmap.
 
+## Native shared-role cutover
+
+[#286](https://github.com/atyrode/code/issues/286) owns the native routing refresh.
+The typed caller package is 0.2.0 and the root action plugin is 0.5.0 because the
+strict public route result no longer contains `agentBacked`; the generator is 0.4.0.
+There is no compatibility alias. Code configures only shared native roles and does
+not replace bundled agents or emit `task.agentModelOverrides`. The
+[routing contract](configuration.md#routing-cost-and-speed) distinguishes configured
+role effort from native agent thinking and bounds automatic fallbacks below premium
+tiers unless explicitly selected. Widget and memory stay on the cheap first rung with
+their own empty retry chains, including while ordinary fallbacks are off. Shared
+memory routing does not change its enabled/backend/retention/autolearn preferences.
+
+The source gate uses Bun 1.4.4 and Manifold
+[`a7c2237`](https://github.com/atyrode/manifold/commit/a7c2237b7cf8829ca93928339703c699300d6937),
+protocol 59. Exact OMP source is pinned in both package manifests and resolved
+lockfiles; the gate prepares that source rather than installed CLI or branch bytes.
+Disposable browser and synthetic native proof do not establish live activation,
+native owner binding, credential migration, provider availability or production
+acceptance. Operational follow-through stays open at the owning issue until the
+authorized owner supplies and reviews native authority and exercises the deployed
+surface. No production action is part of this source cutover.
+
 ## Integrated source and preview acceptance
 
 The integrated source contains four Code bundles: container-CAS

@@ -49,7 +49,7 @@ const CHECK = "M3 8.5 6.5 12 13 4.5";
 const STEP_WORDS: Readonly<Record<VerificationStep, string>> = {
   observe: "reading the accounts", initialize: "setting up the workspace", adopt: "using your earlier check", inventory: "listing models",
   draft: "preparing the charge", benchmark: "measuring models", derive: "building the model list", stage: "saving the model list",
-  review: "reviewing the model list", promote: "putting the model list in use", select: "saving the profile",
+  review: "reviewing the model list", promote: "putting the model list in use",
 };
 /** What the cost meter is, said in the readout while it is pointed. */
 const COST_NOTE = "a relative list-price index; subscriptions spend quota windows, which usage shows";

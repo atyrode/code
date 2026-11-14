@@ -1,6 +1,6 @@
 {
   "id": "atyrode.code",
-  "version": "0.4.0",
+  "version": "0.5.0",
   "title": "code",
   "description": "Shared catalogs, routing, account choices, reviewed session composition and job-shaped session runs over the native OMP plugin.",
   "capabilities": [

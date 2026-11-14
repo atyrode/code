@@ -7,7 +7,7 @@ import { actionDoor, actionSchemas, createCodeClient, CODE_PLUGIN_ID,
 import { digestOf, type CodeContext } from "../code/context.ts";
 import plugin, { handlers } from "../code/server.ts";
 import { configurationMigration } from "../code/state.ts";
-import type { CatalogDocument } from "../domain/contracts.ts";
+import type { CatalogDocument, Selection } from "../domain/contracts.ts";
 import { buildCodeServices } from "../code/service-policies.ts";
 
 const target: Target = { containerId: "container-a", machineId: "machine-a" };
@@ -349,6 +349,30 @@ describe("container-owned policy configuration", () => {
       .toEqual({ refused: "code_stale_preferences" });
   });
 
+  test("an explicit elite selection reviews and promotes a premium-only list without creating an automatic premium default", async () => {
+    const f = fixture(), catalog: CatalogDocument = { schemaVersion: 1, models: [{ ...document().models[0]!,
+      key: "astra", provider: "openai-codex", id: "gpt-6-astra", api: "openai-codex-responses", tier: 4 }] };
+    const record = await staged(f, catalog);
+    const input = { ...workspace, expectedRevision: record.revision, source: "draft" as const };
+    const selection: Selection = { lane: { kind: "provider", family: "openai", blend: "only" }, capability: 4, thinking: "max", advisor: "off",
+      spark: false, priority: false, prewalk: false, planYolo: false, fallback: true, budget: "any" };
+    expect(await invoke(f, "reviewCatalog", input)).toEqual({ refused: "code_invalid_selection" });
+    const review = await accepted(f, "reviewCatalog", { ...input, selection });
+    expect(review.review.selection).toEqual(selection);
+    expect(review.review.routes.find(route => route.role === "default")?.lead).toEqual({ key: "astra", thinking: "max" });
+    expect(await invoke(f, "promoteCatalog", { ...input, reviewDigest: review.reviewDigest }))
+      .toEqual({ refused: "code_invalid_selection" });
+    expect(await invoke(f, "promoteCatalog", { ...input, selection: { ...selection, prewalk: true }, reviewDigest: review.reviewDigest }))
+      .toEqual({ refused: "code_preview_changed" });
+    expect(await configuration(f)).toEqual(record);
+    const promoted = await accepted(f, "promoteCatalog", { ...input, selection, reviewDigest: review.reviewDigest });
+    expect(promoted.revision).toBe(record.revision + 1);
+    expect(promoted.selection).toEqual(selection);
+    expect(promoted.active).toEqual(record.draft);
+    expect(promoted.draft).toBeNull();
+    expect((await accepted(f, "reviewCatalog", { ...workspace, expectedRevision: promoted.revision, source: "active" })).review.selection).toEqual(selection);
+  });
+
   test("discarding a staged list clears it at the revision it was seen in, keeping the list in use and the team", async () => {
     const f = fixture(), promoted = await active(f);
     const changed = document(); changed.models[0]!.contextWindow = 199_999;
@@ -388,6 +412,7 @@ describe("pure client-supplied policy composition", () => {
     const composed = await accepted(f, "composeSession", input);
     expect(composed.review.selection).toEqual(record.selection!);
     expect(composed.overlay.modelRoles?.default).toContain("anthropic/native-model");
+    expect(composed.overlay.task).toEqual({});
     expect(Object.keys(composed).sort()).toEqual(["accountPool", "compositionDigest", "overlay", "planYolo", "prompt", "review", "revision"]);
     expect(await accepted(f, "composeSession", input)).toEqual(composed);
     expect((await accepted(f, "composeSession", { ...input, prompt: "A different change" })).compositionDigest).not.toBe(composed.compositionDigest);
@@ -404,7 +429,7 @@ describe("pure client-supplied policy composition", () => {
   test("composition emits only native shared roles, bounds helpers and buys a premium rung only when selected", async () => {
     const f = fixture();
     let record = await active(f);
-    const roles = ["default", "task", "plan", "slow", "advisor", "vision", "smol", "tiny", "commit"];
+    const roles = ["default", "task", "plan", "slow", "advisor", "vision", "smol", "memory", "widget", "tiny", "commit"];
     for (const capability of [2, 3] as const) {
       record = await accepted(f, "select", { ...workspace, expectedRevision: record.revision,
         selection: { ...record.selection!, capability, thinking: "max", advisor: "glance", prewalk: true, fallback: true } });
@@ -413,15 +438,17 @@ describe("pure client-supplied policy composition", () => {
       expect(Object.keys(composed.overlay.modelRoles!)).toEqual(roles);
       expect(Object.keys(composed.overlay.retry!.fallbackChains!)).toEqual(roles);
       expect(composed.overlay.task).toEqual({ prewalk: true });
+      expect(Object.hasOwn(composed.overlay, "memory")).toBe(false);
       expect(composed.overlay.modelRoles).toEqual({
         default: `anthropic/native-model${capability}:max`, task: `anthropic/native-model${capability}:max`,
         plan: `anthropic/native-model${capability}:high`, slow: `anthropic/native-model${capability}:high`,
         advisor: "anthropic/native-model1:low", vision: `anthropic/native-model${capability}:low`,
-        smol: "anthropic/native-model1:medium", tiny: "anthropic/native-model1:low", commit: "anthropic/native-model1:low",
+        smol: "anthropic/native-model1:medium", memory: "anthropic/native-model1:medium", widget: "anthropic/native-model1:low",
+        tiny: "anthropic/native-model1:low", commit: "anthropic/native-model1:low",
       });
       expect(composed.overlay.retry!.fallbackChains!.plan).toEqual(capability === 2
         ? ["anthropic/native-model1:high"] : ["anthropic/native-model2:high", "anthropic/native-model1:high"]);
-      for (const role of ["advisor", "smol", "tiny", "commit"])
+      for (const role of ["advisor", "smol", "memory", "widget", "tiny", "commit"])
         expect(composed.overlay.retry!.fallbackChains![role]).toEqual([]);
     }
     record = await accepted(f, "select", { ...workspace, expectedRevision: record.revision, selection: { ...record.selection!, advisor: "off" } });
@@ -429,6 +456,12 @@ describe("pure client-supplied policy composition", () => {
     expect(Object.keys(off.overlay.modelRoles!)).toEqual(roles.filter(role => role !== "advisor"));
     expect(Object.keys(off.overlay.retry!.fallbackChains!)).toEqual(roles.filter(role => role !== "advisor"));
     expect(off.overlay.advisor).toEqual({ enabled: false });
+    record = await accepted(f, "select", { ...workspace, expectedRevision: record.revision, selection: { ...record.selection!, fallback: false } });
+    const noFallback = await accepted(f, "composeSession", { ...workspace, expectedRevision: record.revision, accounts: accounts(), prompt: "" });
+    expect(noFallback.overlay.retry?.modelFallback).toBe(false);
+    expect(noFallback.overlay.retry?.fallbackChains?.memory).toEqual([]);
+    expect(Object.hasOwn(noFallback.overlay, "memory")).toBe(false);
+    expect(noFallback.overlay.task).toEqual({ prewalk: true });
   });
 
   test("a free profile composes routine work without promoting to a paid premium rung, but refuses that explicit rung", async () => {

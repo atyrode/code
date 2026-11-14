@@ -179,7 +179,7 @@ function unansweredNeeds(exclusions: readonly Exclusion[], inUse: ReadonlySet<st
 
 /** The steps of a model verification, in the order they run; a failure names the one it stopped at. `adopt` replaces
  * every step from `inventory` on when the caller keeps a newer check of the workspace's pool. */
-export type VerificationStep = "observe" | "initialize" | "adopt" | "inventory" | "draft" | "benchmark" | "derive" | "stage" | "review" | "promote" | "select";
+export type VerificationStep = "observe" | "initialize" | "adopt" | "inventory" | "draft" | "benchmark" | "derive" | "stage" | "review" | "promote";
 /** Requests a provider's benchmark has answered out of those it was charged. */
 export type ProviderProgress = { provider: string; done: number; total: number };
 export type VerificationProgress = { step: VerificationStep; providers: ProviderProgress[] };
@@ -588,7 +588,7 @@ export function createCodeWorkflowClient(transport: Dispatch) {
    * nothing has been probed or paid for yet; an `adoptOnly` run instead ends with `none`, having
    * started and written nothing (and it never initializes an absent workspace). Only `confirm`
    * spends: one benchmark job per provider, then derive, stage (which also keeps the list as the
-   * caller's check of that pool and budget), review, promote, and save the caller's selection
+   * caller's check of that pool and budget), review, and promote with the caller's selection
    * narrowed to what the verified catalog hosts.
    *
    * Every step re-observes before it acts and stops, naming itself, on a moved revision, pool,
@@ -703,8 +703,7 @@ export function createCodeWorkflowClient(transport: Dispatch) {
     const unanswered = unansweredNeeds(derived.exclusions, inUse, wanted, families);
     if (unanswered.length > 0)
       throw run.fail(`code_models_unanswered: ${unanswered.slice(0, 8).join(", ")}${unanswered.length > 8 ? ` and ${unanswered.length - 8} more` : ""}`);
-    // Narrowed before anything is written, so a selection the verified catalog cannot serve stops
-    // here with nothing staged, rather than after a promotion saved its default instead.
+    // Narrow before anything is written, so an unsupported selection stops without staging a list.
     let selection: Selection;
     try { selection = clampSelection(compileCatalog(derived.document), wanted, provider => charge.pool.providers.includes(provider)); }
     catch (error) { throw run.fail(error instanceof Error ? error.message : "code_invalid_selection"); }
@@ -717,15 +716,12 @@ export function createCodeWorkflowClient(transport: Dispatch) {
         poolIdentityDigest: charge.pool.poolIdentityDigest, budget: charge.budget } }));
     run.evidence.revision = staged.revision;
     run.enter("review");
-    const review = await run.call(() => code("reviewCatalog", { containerId: target.containerId, expectedRevision: staged.revision, source: "draft" }));
+    const review = await run.call(() => code("reviewCatalog", { containerId: target.containerId, expectedRevision: staged.revision, source: "draft", selection }));
     if (review.catalogDigest !== staged.draft?.digest || canonicalJobJson(review.provenance) !== canonicalJobJson(staged.draft.provenance))
       throw run.fail("code_preview_changed");
     run.enter("promote");
-    const promoted = await run.call(() => code("promoteCatalog", { containerId: target.containerId, expectedRevision: staged.revision, source: "draft", reviewDigest: review.reviewDigest }));
-    run.evidence.revision = promoted.revision;
-    run.enter("select");
-    const configuration = canonicalJobJson(promoted.selection) === canonicalJobJson(selection) ? promoted
-      : await run.call(() => code("select", { containerId: target.containerId, expectedRevision: promoted.revision, selection }));
+    const configuration = await run.call(() => code("promoteCatalog", { containerId: target.containerId, expectedRevision: staged.revision,
+      source: "draft", selection, reviewDigest: review.reviewDigest }));
     run.evidence.revision = configuration.revision;
     if (!configuration.active?.provenance) throw run.fail("code_preview_changed");
     return { configuration, exclusions: derived.exclusions, provenance: configuration.active.provenance };

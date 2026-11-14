@@ -59,7 +59,7 @@ export const ConfigurationSchema = WorkspaceSchema.extend({
 });
 export type Configuration = z.infer<typeof ConfigurationSchema>;
 export const ConfigurationReadSchema = z.strictObject({ revision, configuration: ConfigurationSchema.nullable(), legacyMachineId: id.nullable() });
-export const CatalogReviewInputSchema = RevisionWorkspaceSchema.extend({ source: z.enum(["active", "draft"]) });
+export const CatalogReviewInputSchema = RevisionWorkspaceSchema.extend({ source: z.enum(["active", "draft"]), selection: SelectionSchema.optional() });
 export const CatalogReviewSchema = z.strictObject({
   revision, source: z.enum(["active", "draft"]), catalogDigest: digest, provenance: VerificationProvenanceSchema.nullable(),
   review: ReviewSchema, reviewDigest: digest,

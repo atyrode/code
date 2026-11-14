@@ -98,7 +98,7 @@ const ledger = (team: Review, options: Options = {}) => routeLedger(catalog, tea
 describe("the routing", () => {
   test("only native shared roles appear in stable order, with the off advisor held after slow", () => {
     const off = ledger(review());
-    expect(off.map(row => row.role)).toEqual(["default", "task", "plan", "slow", "advisor", "vision", "smol", "tiny", "commit"]);
+    expect(off.map(row => row.role)).toEqual(["default", "task", "plan", "slow", "advisor", "vision", "smol", "memory", "widget", "tiny", "commit"]);
     const at = off.findIndex(row => row.role === "advisor");
     expect(off[at - 1]?.role).toBe("slow");
     expect(off[at]).toMatchObject({ off: true, lead: null });
@@ -107,6 +107,8 @@ describe("the routing", () => {
     expect(on.map(row => row.role)).toEqual(off.map(row => row.role));
     expect(on[at]).toMatchObject({ off: false, lead: { alias: expect.any(String) } });
     expect(off.find(row => row.role === "default")?.lead).toMatchObject({ alias: "o2", thinking: "medium", family: "openai", id: "openai-codex/native-o2" });
+    expect(off.find(row => row.role === "widget")).toMatchObject({ lead: { alias: "o1", thinking: "low" }, fallback: [] });
+    expect(off.find(row => row.role === "memory")).toMatchObject({ lead: { alias: "o1", thinking: "medium" }, fallback: [] });
   });
 
   test("a lead whose pool is out is struck with that pool's reopening and what the role does meanwhile; the rest stand", () => {
@@ -139,6 +141,8 @@ describe("the routing", () => {
       row("default", "anthropic", "a2", 2, "high"), row("task", "anthropic", "a2", 2, "high"),
       row("plan", "anthropic", "a3", 3, "medium"), row("slow", "openai", "o3", 3, "xhigh"),
       row("vision", "anthropic", "a2", 2, "low"), row("smol", "openai", "o1", 1, "medium"),
+      row("memory", "openai", "o1", 1, "medium"),
+      row("widget", "openai", "o1", 1, "low"),
       row("tiny", "deepseek", "d1", 1, "low"), row("commit", "openai", "o1", 1, "low"),
       { role: "advisor", off: true, lead: null, down: null, fallback: [] },
     ]);
@@ -146,6 +150,7 @@ describe("the routing", () => {
       "a3:medium", "a2:high", "a2:low", "o3:xhigh", "o1:medium", "o1:low", "d1:low",
     ]);
     expect(groups[1]?.roles.map(role => role.role)).toEqual(["default", "task"]);
+    expect(groups.find(group => group.lead.alias === "o1" && group.lead.thinking === "low")?.roles.map(role => role.role)).toEqual(["widget", "commit"]);
   });
 });
 

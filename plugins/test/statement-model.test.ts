@@ -310,10 +310,10 @@ describe("the launch line, in precedence", () => {
 
   test("roles with no route say so with the fix that routes them, which commits through a team fix", () => {
     const stop = { roles: ["plan", "slow"], waits: [] };
-    const fix = { label: "GPT only", result: "keeps all 8 on Codex", selection: team(), review: review() };
+    const fix = { label: "GPT only", result: "keeps all 10 on Codex", selection: team(), review: review() };
     const line = said({ stop, fix });
     expect(line.parts.some(part => part.tone === "attention")).toBe(true);
-    expect(line.actions).toEqual([{ kind: "fix", key: "rescue", label: "GPT only keeps all 8 on Codex", fix: { kind: "team", selection: fix.selection, review: fix.review } }]);
+    expect(line.actions).toEqual([{ kind: "fix", key: "rescue", label: "GPT only keeps all 10 on Codex", fix: { kind: "team", selection: fix.selection, review: fix.review } }]);
     expect(said({ stop }).actions).toEqual([]);
   });
 
@@ -360,7 +360,7 @@ describe("the launch line, in precedence", () => {
     expect(refused.parts.at(-1)!.tone).toBe("warn");
     expect(keys(refused)).toEqual(["accounts-read", ...listFixes]);
     // Routes beside the failure with roles that have no route: the rescue stays beside its stop.
-    const fix = { label: "GPT only", result: "keeps all 8 on Codex", selection: team(), review: review() };
+    const fix = { label: "GPT only", result: "keeps all 10 on Codex", selection: team(), review: review() };
     expect(keys(said({ stop: { roles: ["slow"], waits: [] }, fix, listFailure: "beside" }))).toEqual(["rescue", ...listFixes]);
     // At rest the failure is the whole line.
     expect(keys(said({ listFailure: "beside" }))).toEqual(listFixes);

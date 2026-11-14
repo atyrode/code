@@ -113,7 +113,7 @@ type Session = {
 };
 
 /** The steps at which a check writes the workspace's choices or model list. */
-const WRITE_STEPS: ReadonlySet<VerificationStep> = new Set(["initialize", "adopt", "stage", "review", "promote", "select"]);
+const WRITE_STEPS: ReadonlySet<VerificationStep> = new Set(["initialize", "adopt", "stage", "review", "promote"]);
 /**
  * The model checks of `createCodeWorkflowClient().verifyModels`, for the workbench. Mounting
  * observes — OMP's account observation and Code's pool composition, the person's own checks and

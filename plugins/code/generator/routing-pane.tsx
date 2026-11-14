@@ -1,4 +1,4 @@
-import { Fragment, useLayoutEffect, useRef, useState, type CSSProperties, type ReactNode } from "react";
+import { Fragment, useId, useLayoutEffect, useRef, useState, type CSSProperties, type ReactNode } from "react";
 import { prefersReducedMotion } from "@manifold/ui";
 import { Check, hueOf } from "../ui.tsx";
 import type { LedgerRow, ProfileGroup, RouteToken } from "./routing-model.ts";
@@ -6,6 +6,8 @@ import type { LedgerRow, ProfileGroup, RouteToken } from "./routing-model.ts";
 /** Generator-panel class prefix; every part hangs from the generator root (styles.css). */
 const G = "plugin-atyrode_code_generator__";
 const EASE = "cubic-bezier(.2, .8, .2, 1)";
+/** Shared-role suffixes are inputs to OMP's native effective-effort resolution. */
+const NATIVE_THINKING = "Shared-role model and effort suffixes are configuration inputs. OMP resolves effective effort from caller settings, an explicit role suffix, or agent frontmatter and resolved defaults, subject to any per-call ceiling. Bundled frontmatter defaults: task auto; scout and sonic medium. Widget disables reasoning.";
 
 /** A pointed routing value, and why quota leaves it out when it does. */
 type Pointed = { readonly value: RouteToken; readonly reason: string | null };
@@ -112,7 +114,8 @@ export type RoutingPaneProps = {
  */
 export function RoutingPane({ ledger, chains, fallbacks, onChains, hide, hidden }: RoutingPaneProps) {
   const [pointed, setPointed] = useState<Pointed | null>(null);
-  return <section className={`${G}pane`} data-pane="routing" aria-label="routing" hidden={hidden} tabIndex={-1}>
+  const preferencesId = useId();
+  return <section className={`${G}pane`} data-pane="routing" aria-label="routing" aria-describedby={preferencesId} hidden={hidden} tabIndex={-1}>
     <header className={`${G}head`}>
       <h2 className={`${G}title`}>routing</h2>
       {/* While fallbacks are off there are no chains: the toggle stays, refused, and a press points at the fallbacks row. */}
@@ -125,10 +128,13 @@ export function RoutingPane({ ledger, chains, fallbacks, onChains, hide, hidden 
     {ledger ? <ol className={`${G}routes`} onPointerLeave={() => setPointed(null)}>
       {ledger.map((row, index) => <RouteRow key={row.role} row={row} index={index} chains={chains && fallbacks} onPoint={setPointed} />)}
     </ol> : <p className={`${G}pane-note`}>no routes yet</p>}
+    <span id={preferencesId} hidden>{NATIVE_THINKING}</span>
     <div className={`${G}routefoot`}>
       <div className={`${G}route-readout`} data-tone={pointed?.reason ? "warn" : undefined} aria-live="off"
+        title={pointed ? `${pointed.value.id} · configured ${pointed.value.effort}${pointed.reason ? ` · ${pointed.reason}` : ""}` : NATIVE_THINKING}
         style={pointed ? { "--rc": `var(--code-${hueOf(pointed.value.family)})` } as CSSProperties : undefined}>
-        {pointed && <><b>{pointed.value.alias}:{pointed.value.thinking}</b> · {pointed.reason ?? `${pointed.value.id} · ${pointed.value.effort}`}</>}
+        {pointed ? <><b>{pointed.value.alias}:{pointed.value.thinking}</b> · {pointed.reason ?? `${pointed.value.id} · ${pointed.value.effort}`}</>
+          : "shared role preferences · native effort precedence"}
       </div>
     </div>
   </section>;

@@ -2,7 +2,8 @@ import { createHash, randomUUID } from "node:crypto";
 import { readFile } from "node:fs/promises";
 import { resolve } from "node:path";
 import { canonicalJobJson, ListJobRunsResultSchema } from "@manifold/protocol";
-import { actionDoor as ompActionDoor } from "@atyrode/manifold-omp";
+import { actionDoor as ompActionDoor, actionSchemas as ompActionSchemas, type OmpAction,
+  type ActionInput as OmpInput, type ActionResult as OmpResult } from "@atyrode/manifold-omp";
 import { installBundle } from "../../../manifold/packages/plugin-kit/src/install.ts";
 import { dispatch, ownerAction, roster } from "../../../manifold/packages/plugin-kit/src/hub.ts";
 import type { NativeToolConsumer, NativeToolConsumerContext } from "../.integration/omp/plugins/scripts/verify-consumer-types.ts";
@@ -33,6 +34,11 @@ export async function createNativeToolConsumer(context: NativeToolConsumerContex
     check(result.ok, `${name.replace(/[A-Z]/g, letter => `-${letter.toLowerCase()}`)}-refused`);
     return actionSchemas[name].result.parse(result.result) as ActionResult<K>;
   }
+  async function omp<K extends OmpAction>(name: K, input: OmpInput<K>): Promise<OmpResult<K>> {
+    const result = await dispatch(hub, hub.ownerKey, ompActionDoor(name), ompActionSchemas[name].input.parse(input));
+    check(result.ok, `omp-${name.replace(/[A-Z]/g, letter => `-${letter.toLowerCase()}`)}-refused`);
+    return ompActionSchemas[name].result.parse(result.result) as OmpResult<K>;
+  }
   const workspace = { containerId: target.containerId };
   const empty = await call("readConfiguration", workspace);
   check(empty.configuration === null, "configuration-not-empty");
@@ -62,15 +68,38 @@ export async function createNativeToolConsumer(context: NativeToolConsumerContex
   const composed = await call("composeSession", { ...workspace, expectedRevision: configuration.revision,
     accounts, prompt: context.input.prompt });
   check(canonicalJobJson(composed.accountPool) === canonicalJobJson(context.input.accountPool), "account-choice-broadened");
-  const roles = ["default", "task", "plan", "slow", "vision", "smol", "tiny", "commit"];
+  const roles = ["default", "task", "plan", "slow", "vision", "smol", "memory", "widget", "tiny", "commit"];
   check(canonicalJobJson(composed.review.routes.map(route => route.role)) === canonicalJobJson(roles), "shared-route-order-changed");
   check(canonicalJobJson(Object.keys(composed.overlay.modelRoles ?? {}).sort()) === canonicalJobJson([...roles].sort()), "shared-role-keys-changed");
   check(!Object.hasOwn(composed.overlay.task ?? {}, "agentModelOverrides"), "named-agent-overrides-emitted");
+  check(canonicalJobJson(composed.overlay.task) === canonicalJobJson({}), "task-defaults-not-replaced");
+  check(!Object.hasOwn(composed.overlay, "memory"), "memory-execution-enabled");
+  check(canonicalJobJson(composed.overlay.retry?.fallbackChains?.memory) === canonicalJobJson([]), "memory-retry-chain-inherited");
   check(canonicalJobJson(composed.overlay.modelRoles) === canonicalJobJson({
     default: "openai/gpt-5:low", task: "openai/gpt-5:low", plan: "openai/gpt-5:high", slow: "openai/gpt-5:high",
-    vision: "openai/gpt-5:low", smol: "openai/gpt-5-mini:medium", tiny: "openai/gpt-5-mini:low", commit: "openai/gpt-5-mini:low",
+    vision: "openai/gpt-5:low", smol: "openai/gpt-5-mini:medium", memory: "openai/gpt-5-mini:medium", widget: "openai/gpt-5-mini:low",
+    tiny: "openai/gpt-5-mini:low", commit: "openai/gpt-5-mini:low",
   }), "shared-role-effort-or-premium-boundary-changed");
-  const input = sessionInput(target, composed, context.input.expectedDefaultsRevision, { skills: { mode: "disabled" } });
+  // Exercise the real OMP defaults merge without launching inference. Only the disposable proof's
+  // defaults move, and restoring them supplies the revision the later native session must fence.
+  const originalDefaults = await omp("readDefaults", {});
+  check(originalDefaults.revision === context.input.expectedDefaultsRevision, "defaults-before-proof-changed");
+  const inherited = await omp("writeDefaults", { expectedRevision: originalDefaults.revision,
+    overlay: { ...originalDefaults.overlay, task: { prewalk: true, agentAdvisor: { task: "on" } },
+      defaultThinkingLevel: "medium", advisor: { enabled: false } } });
+  let defaultsRevision: number;
+  try {
+    const review = await omp("reviewSession", { ...sessionInput(target, composed, inherited.revision, { skills: { mode: "disabled" } }),
+      overlay: { modelRoles: composed.overlay.modelRoles, retry: composed.overlay.retry, task: composed.overlay.task } });
+    check(canonicalJobJson(review.effectiveOverlay.task) === canonicalJobJson({}), "task-preferences-inherited");
+    check(review.effectiveOverlay.defaultThinkingLevel === "medium"
+      && canonicalJobJson(review.effectiveOverlay.advisor) === canonicalJobJson({ enabled: false }), "unrelated-defaults-replaced");
+  } finally {
+    const restored = await omp("writeDefaults", { expectedRevision: inherited.revision, overlay: originalDefaults.overlay });
+    check(canonicalJobJson(restored.overlay) === canonicalJobJson(originalDefaults.overlay), "defaults-not-restored");
+    defaultsRevision = restored.revision;
+  }
+  const input = sessionInput(target, composed, defaultsRevision, { skills: { mode: "disabled" } });
   const request = { ...target, expectedRevision: configuration.revision, prompt: input.prompt, skills: input.skills };
   const before = ListJobRunsResultSchema.parse(await ownerAction(hub, "engine.jobs.listRuns", {
     machineId: target.machineId, pluginId: "atyrode.omp", operationId: "atyrode.omp.session",

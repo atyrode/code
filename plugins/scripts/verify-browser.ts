@@ -464,7 +464,7 @@ async function reviewStands(browser: BrowserInstance, root: string, description:
  * or a refused press. It is mounted while it asks and gone once it is answered.
  */
 const decision = element(`${layers} dialog.${G}decision`);
-type Question = "charge" | "differs" | "narrowed" | "refused";
+type Question = "charge" | "differs" | "narrowed" | "refused" | "premium";
 /** The open question asks `kind`. */
 function asks(kind: Question): string {
   return `(${decision}?.dataset.decision === '${kind}')`;
@@ -515,7 +515,7 @@ const setupSheet = `${generator} [data-sheet="setup"]`;
 const importDialog = `${layers} dialog[aria-labelledby="${G}import-title"]`;
 const routeRows = `${generator} [data-pane="routing"] .${G}route`;
 const starterProviders = ["anthropic", "deepseek", "openai-codex"];
-const profileRoles = ["default", "task", "plan", "slow", "advisor", "vision", "smol", "tiny", "commit"];
+const profileRoles = ["default", "task", "plan", "slow", "advisor", "vision", "smol", "memory", "widget", "tiny", "commit"];
 /** The generator's rows, top to bottom: the dials, then fallbacks as an on/off row; the other profile switches live in the session options. */
 type RowId = "lane" | "tier" | "thinking" | "advisor" | "fallbacks";
 const ROWS: readonly RowId[] = ["lane", "tier", "thinking", "advisor", "fallbacks"];
@@ -581,7 +581,7 @@ async function still(browser: BrowserInstance): Promise<void> {
   await until(browser, "every animation has finished", `${running} === 0`);
 }
 
-/** The routing beside the generator: each routed role's lead, its model alias and the thinking it runs at. */
+/** The routing beside the generator: each shared role's configured lead, model alias and effort suffix, not a named agent's effective effort. */
 type Routed = { role: string; alias: string; thinking: string };
 async function routedRoles(browser: BrowserInstance): Promise<Routed[]> {
   return browser.evaluate<Routed[]>(`[...document.querySelectorAll(${JSON.stringify(`${routeRows}:not([data-off])`)})].map(route => {
@@ -606,7 +606,7 @@ async function assertRoutes(browser: BrowserInstance, advisor: boolean): Promise
     "Only native shared roles are routed, in native order");
   assert.deepEqual(await browser.evaluate(`[...document.querySelectorAll(${JSON.stringify(routeRows)})].map(route => route.dataset.role)`), profileRoles,
     "The advisor's row stays after slow even while it is off");
-  assert(routed.every(entry => entry.alias && entry.thinking), "Every routed role names its model and supported effort");
+  assert(routed.every(entry => entry.alias && entry.thinking), "Every routed role names its model and configured supported effort");
 }
 
 /** Real pointer and keyboard dial commits update shared-role consumers, not just the selected words. */
@@ -633,8 +633,8 @@ async function sharedDialScenario(browser: BrowserInstance, document: CatalogDoc
     };
     for (const role of ["default", "task"]) expectLead(role, selection.capability, selection.thinking);
     for (const role of ["plan", "slow"]) expectLead(role, selection.capability, "high");
-    expectLead("smol", 1, "medium");
-    for (const role of ["tiny", "commit"]) expectLead(role, 1, "low");
+    for (const role of ["smol", "memory"]) expectLead(role, 1, "medium");
+    for (const role of ["widget", "tiny", "commit"]) expectLead(role, 1, "low");
     assert.equal(shown.find(route => route.role === "vision")?.thinking, compiled.clampThinking(compiled.rung("anthropic", selection.capability), "low"),
       `${description}: vision stays low even under main max`);
     if (selection.advisor !== "off") {
@@ -648,6 +648,23 @@ async function sharedDialScenario(browser: BrowserInstance, document: CatalogDoc
   await choose(browser, "thinking", "medium");
   await choose(browser, "advisor", "glance");
   await assertPolicy("Routine capable medium");
+  const routingReadout = element(`${generator} .${G}route-readout`);
+  const preferenceNote = `${routingReadout}.querySelector('b') === null && ${routingReadout}.textContent.trim().length > 0`;
+  await pointAway(browser);
+  await until(browser, "the unpointed routing visibly explains shared-role preferences", preferenceNote);
+  const preferencesDescription = await browser.evaluate<string>(`(() => {
+    const pane = ${element(`${generator} [data-pane="routing"]`)};
+    return document.getElementById(pane.getAttribute('aria-describedby'))?.textContent ?? '';
+  })()`);
+  assert(preferencesDescription.trim().length > 0, "The routing pane exposes its effort-precedence explanation as an accessible description");
+  assert.equal(await browser.evaluate(`${routingReadout}.title`), preferencesDescription,
+    "The unpointed readout exposes the same full explanation through its tooltip");
+  const routineModel = compiled.model(compiled.rung("anthropic", 2));
+  await pointOf(browser, element(`${routeRows}[data-role="default"] .${G}chain > .${G}tok`));
+  await until(browser, "pointing at a shared route still reads its exact model address",
+    `${routingReadout}.textContent.includes(${JSON.stringify(`${routineModel.provider}/${routineModel.id}`)})`);
+  await pointAway(browser);
+  await until(browser, "leaving the route restores the effort-precedence explanation", preferenceNote);
   await screenshot("everyday");
   await choose(browser, "tier", "smart");
   selection = { ...selection, capability: 3 };
@@ -664,6 +681,22 @@ async function sharedDialScenario(browser: BrowserInstance, document: CatalogDoc
   await until(browser, "End explicitly selects maximum main effort", `${chosenKey("thinking")} === 'max'`);
   selection = { ...selection, thinking: "max" };
   await assertPolicy("Maximum main effort keeps utility budgets low");
+  const fallbackToggle = element(`${generator} [data-chains]`);
+  const chainsShown = await browser.evaluate<boolean>(`${fallbackToggle}.getAttribute('aria-checked') === 'true'`);
+  if (!chainsShown) await click(browser, fallbackToggle);
+  await until(browser, "the maximum-effort profile shows its fallback chains", `${fallbackToggle}.getAttribute('aria-checked') === 'true'`);
+  await still(browser);
+  assert(await browser.evaluate<boolean>(`${element(`${routeRows}[data-role="default"]`)}.querySelectorAll('.${G}chain-step').length > 0`),
+    "Configured default fallbacks render when chains are shown");
+  for (const role of ["memory", "widget"]) {
+    assert.equal(await browser.evaluate(`${element(`${routeRows}[data-role="${role}"]`)}.querySelectorAll('.${G}chain-step').length`), 0,
+      `The native ${role} role has no configured fallback chain, even under main max`);
+  }
+  if (!chainsShown) {
+    await click(browser, fallbackToggle);
+    await until(browser, "the fallback display returns to its initial state", `${fallbackToggle}.getAttribute('aria-checked') !== 'true'`);
+    await still(browser);
+  }
   await screenshot("main-max");
   try {
     await panelWidth(browser, 390, 2400);
@@ -2595,6 +2628,7 @@ async function starterWorkbenchScenario(browser: BrowserInstance, server: TestSe
       assert((native.result as OmpResult<"describeDestination">).operations.every(operation => !operation.nativeReady));
     }
     await emptyPoolStarterScenario(browser, server, writer, metadata);
+    await premiumStagedCatalogScenario(browser, server, writer, metadata);
     await starterConflictScenario(browser, server, writer);
     assert(trace.requests.some(request => request.name === "atyrode.omp.readModelCatalog"), "The browser itself consumes the real public bundled source");
     for (const request of trace.requests.filter(request => request.name === "atyrode.omp.readModelCatalog")) {
@@ -2642,6 +2676,91 @@ async function emptyPoolStarterScenario(browser: BrowserInstance, server: TestSe
       await until(browser, "account repair stays reachable from the empty-pool preview", shownView("accounts"));
       assert.deepEqual(await readConfiguration(server, writer, target), before, "Empty-pool exploration and refusal save no workspace policy");
       assert.deepEqual(trace.requests.slice(from).filter(request => /^atyrode\.code\.(initializeConfiguration|adoptStarterProfile|stageCatalog|promoteCatalog|select|changeAccounts)$/.test(request.name)), []);
+      noNativeEffects(trace.requests.slice(from));
+    }
+    fixture.check();
+  } finally {
+    await fixture.stop();
+    trace.stop();
+  }
+}
+
+/** Sparse premium lists remain staged until a deliberate choice binds the same explicit profile to review and promotion. */
+async function premiumStagedCatalogScenario(browser: BrowserInstance, server: TestServer, writer: TokenGrant, metadata: OmpResult<"readModelCatalog">): Promise<void> {
+  const source = catalogFromMetadata(metadata, "any");
+  const trace = await watchActions(browser, server);
+  const reviews: ActionResult<"reviewCatalog">[] = [];
+  const fixture = await intercept(browser, server, async (name, input) => {
+    if (name !== "atyrode.code.reviewCatalog") return undefined;
+    const outcome = await callAction(server, writer.token, name, input);
+    if (!outcome.ok) return { ok: false, denial: outcome.denial };
+    reviews.push(outcome.result as ActionResult<"reviewCatalog">);
+    return { ok: true, result: outcome.result };
+  });
+  try {
+    for (const capability of [3, 4] as const) {
+      const tier = capability === 3 ? "strong" : "elite";
+      const document: CatalogDocument = { schemaVersion: 1, models: source.models.filter(model => model.provider === "anthropic" && model.tier === capability) };
+      assert.equal(document.models.length, 1, `The real metadata supplies one latest ${tier} model`);
+      const premiumModel = document.models[0]!;
+      const workspace = await createContainer(server, `Explicit ${tier} staged profile`, "canvas");
+      const target = { containerId: workspace.id };
+      const initialized = await callAction(server, writer.token, "atyrode.code.initializeConfiguration", { ...target, expectedRevision: 0 });
+      assert(initialized.ok);
+      const staged = await callAction(server, writer.token, "atyrode.code.stageCatalog", { ...target, expectedRevision: (initialized.result as Configuration).revision, document });
+      assert(staged.ok);
+      const before = await readConfiguration(server, writer, target), from = trace.requests.length;
+      const adoptions = () => trace.requests.slice(from).filter(request => /^atyrode\.code\.(reviewCatalog|promoteCatalog|select)$/.test(request.name));
+      await openGenerator(browser, server, workspace.id);
+      await until(browser, "a premium-only staged list keeps Models reachable", `${launchButton} !== null && ${launchButton}.dataset.state === 'ready'`);
+      assert.equal(await browser.evaluate(`document.querySelector(${JSON.stringify(routeRows)}) === null`), true,
+        "A premium-only catalog never fabricates an automatic premium default");
+      assert.equal(before.configuration?.selection, null);
+      await click(browser, launchButton);
+      await until(browser, "the premium-only list is reviewed in Models before adoption", `${sheetOpen("Models")} && ${goIs(modelsSheet, "use staged list")}`);
+      assert.deepEqual(await browser.evaluate(modelList), listOf(document), "Models exposes the actual declared premium rung");
+      await click(browser, element(`${modelsSheet} [data-go]`));
+      const question = await questionOpens(browser, "premium", "using a premium-only list asks for a deliberate explicit profile");
+      assert.equal(question.items.length, 1);
+      assert(question.items[0]!.includes(`${premiumModel.provider}/${premiumModel.id}`) && question.items[0]!.includes(tier) &&
+        question.items[0]!.includes("configured medium"), "The question names the real model, explicit premium tier and configured effort");
+      assert.deepEqual(adoptions(), [], "Neither review nor promotion runs before premium confirmation");
+      if (screenshotDirectory !== undefined) {
+        assert(isAbsolute(screenshotDirectory), "CODE_VERIFY_SCREENSHOTS must name an absolute artifact directory");
+        mkdirSync(screenshotDirectory, { recursive: true });
+        const { result } = await browser.send("Page.captureScreenshot", { format: "png", fromSurface: true, captureBeyondViewport: false });
+        const data = result?.data;
+        assert(typeof data === "string");
+        writeFileSync(join(screenshotDirectory, `premium-${tier}-confirmation.png`), Buffer.from(data, "base64"));
+      }
+      await key(browser, "Escape", 27);
+      await until(browser, "cancelling leaves the premium list staged and usable in Models", `${unasked} && ${goIs(modelsSheet, "use staged list")}`);
+      assert.deepEqual(await readConfiguration(server, writer, target), before, "Cancelling a premium choice writes nothing");
+      assert.deepEqual(adoptions(), [], "Cancellation never reviews, promotes or saves a premium profile");
+      assert.equal(await browser.evaluate(`${element(`${modelsSheet} [data-cue="import"]`)}.getAttribute('aria-disabled')`), null,
+        "The import repair action remains reachable after cancellation");
+      await click(browser, element(`${modelsSheet} [data-go]`));
+      await questionOpens(browser, "premium", "a new press asks again rather than remembering a cancelled premium approval");
+      await firstChoiceByTab(browser, "premium");
+      assert.deepEqual(adoptions(), [], "An Enter intended for the question's title never approves premium adoption");
+      await answer(browser, "approve");
+      await until(browser, "explicit confirmation puts the premium list in use without checking it",
+        `${unasked} && ${element(modelsSheet)}.dataset.phase !== 'staged' && ${sheetState(modelsSheet)}.includes('not checked')`);
+      const review = reviews.at(-1);
+      assert(review);
+      const selection: Selection = { lane: { kind: "provider", family: "anthropic", blend: "only" }, capability, thinking: "medium", advisor: "glance",
+        spark: false, priority: false, prewalk: false, planYolo: false, fallback: true, budget: "any" };
+      assert.deepEqual(review.review.selection, selection, "Only the deliberately named premium tier is selected, with visible configured effort");
+      assert.deepEqual(adoptions(), [
+        { name: "atyrode.code.reviewCatalog", input: { ...target, expectedRevision: before.revision, source: "draft", selection } },
+        { name: "atyrode.code.promoteCatalog", input: { ...target, expectedRevision: before.revision, source: "draft", reviewDigest: review.reviewDigest, selection } },
+      ], "Review and promotion receive the same explicit selection; there is no later profile-changing select");
+      const used = await readConfiguration(server, writer, target);
+      assert.deepEqual([used.configuration?.active?.document, used.configuration?.active?.provenance, used.configuration?.selection, used.configuration?.draft],
+        [document, null, selection, null], "Promotion atomically adopts exactly the reviewed unverified premium list and explicit profile");
+      await closeSheet(browser);
+      await assertRoutes(browser, true);
+      assert.deepEqual(await routedRoles(browser), expectedRoutes(document, selection), "The mounted shared routes consume the deliberately adopted premium profile");
       noNativeEffects(trace.requests.slice(from));
     }
     fixture.check();
@@ -3700,8 +3819,8 @@ async function modelsSheetScenario(browser: BrowserInstance, server: TestServer,
 
     // An unsaved edit of the team in use holds putting a staged list in use, which would replace the list it was made on:
     // the next action says so, and what each fix does, with save and discard edit beside it; a press writes nothing. Saving
-    // the edit on the list it was made on lifts the hold. The edit is one the staged list's own default team does not
-    // repeat, so the reset that follows is seen.
+    // the edit on the list it was made on lifts the hold. Its compatible saved selection then carries
+    // over to the staged list instead of being silently replaced by a default.
     const slower: CatalogDocument = { ...again.document, models: again.document.models.map((model, index) => index === 1 ? { ...model, tokensPerSecond: 77 } : model) };
     const stagedDefault = defaultSelection(compileCatalog(slower));
     const draftKey = storedDraftKey(writer.principal.id, workspace.id);
@@ -3717,7 +3836,7 @@ async function modelsSheetScenario(browser: BrowserInstance, server: TestServer,
     from = trace.requests.length;
     await click(browser, goButton);
     await until(browser, "a held press says what using the staged list and each fix do", `${sheetSays(modelsSheet)} === ${JSON.stringify(
-      "use staged list · Your unsaved edit is on the list in use, and using the staged list resets the profile to the staged list's default. Save keeps the edit on the list in use; discard edit drops it.")}`);
+      "use staged list · Your unsaved edit is on the list in use, and using the staged list replaces the list this edit was made on. Save keeps the edit on the list in use; discard edit drops it.")}`);
     assert.deepEqual(writes(from), [], "A held press writes nothing");
     await click(browser, goFix(modelsSheet, "save"));
     await until(browser, "saved, the edit lets the staged list be used", `${goIs(modelsSheet, "use staged list")} && JSON.stringify(${goFixes(modelsSheet)}) === '["discard"]'`);
@@ -3727,7 +3846,7 @@ async function modelsSheetScenario(browser: BrowserInstance, server: TestServer,
       "Save writes exactly the edit at the revision shown");
 
     // Use staged list reviews the staged list at the revision shown and promotes exactly that review; the list in use is then
-    // the staged one with its own default team, not checked, and checking it is the next action. While those writes are in
+    // the staged one with its compatible saved team, not checked, and checking it is the next action. While those writes are in
     // flight the main view takes no edit, so their receipt never lands on one: Esc goes back to Code, a row press there is
     // refused, and nothing is kept.
     from = trace.requests.length;
@@ -3743,21 +3862,21 @@ async function modelsSheetScenario(browser: BrowserInstance, server: TestServer,
       "No edit lands, or is kept, while Models' writes are in flight");
     await openSheet(browser, "models");
     heldReview.release();
-    await until(browser, "use staged list puts it in use with its own default team, not checked, and says so", `${phaseIs("unverified")} && ${goIs(modelsSheet, "check models")} &&
+    await until(browser, "use staged list keeps the compatible saved profile, not checked, and says so", `${phaseIs("unverified")} && ${goIs(modelsSheet, "check models")} &&
       ${sheetState(modelsSheet)} === ${JSON.stringify(`${listOf(slower).length} models · not checked`)} &&
-      ${sheetSays(modelsSheet)} === ${JSON.stringify("in use · the staged list replaced the one in use; the profile is the new list's default now; check it next")}`);
+      ${sheetSays(modelsSheet)} === ${JSON.stringify("in use · the staged list replaced the one in use; check it next")}`);
     const review = reviews.at(-1);
     assert(review, "The real server reviewed the staged list");
     assert.equal(review.catalogDigest, before.configuration?.draft?.digest, "The review is of exactly the staged list");
     assert.deepEqual(writes(from), [
-      { name: "atyrode.code.reviewCatalog", input: { containerId: target.containerId, expectedRevision: before.revision, source: "draft" } },
-      { name: "atyrode.code.promoteCatalog", input: { containerId: target.containerId, expectedRevision: before.revision, source: "draft", reviewDigest: review.reviewDigest } },
+      { name: "atyrode.code.reviewCatalog", input: { containerId: target.containerId, expectedRevision: before.revision, source: "draft", selection: before.configuration?.selection } },
+      { name: "atyrode.code.promoteCatalog", input: { containerId: target.containerId, expectedRevision: before.revision, source: "draft", reviewDigest: review.reviewDigest, selection: before.configuration?.selection } },
     ], "Use staged list reviews the staged list at the revision shown, then promotes exactly that review");
     const used = await readConfiguration(server, writer, target);
     assert.deepEqual([used.configuration?.active?.document, used.configuration?.active?.provenance, used.configuration?.draft], [slower, null, null],
       "The staged list is in use, not checked, and nothing is staged");
-    assert.deepEqual(used.configuration?.selection, review.review.selection, "The staged list goes in use with the team its review chose, its own default");
-    assert.notEqual(used.configuration?.selection?.advisor, advisor, "The saved edit does not carry over to the staged list");
+    assert.deepEqual(used.configuration?.selection, review.review.selection, "The staged list adopts exactly the explicit profile its review bound");
+    assert.deepEqual(used.configuration?.selection, before.configuration?.selection, "A compatible saved explicit choice carries over to the staged list");
     await closeSheet(browser);
     fixture.check();
   } finally {

@@ -69,12 +69,12 @@ const productHandlers: ProductHandlers = {
   },
   async reviewCatalog(ctx, args) {
     const previous = await readConfiguration(ctx, args); expectRevision(previous, args.expectedRevision);
-    return catalogReview(ctx, requireConfiguration(previous), args.source);
+    return catalogReview(ctx, requireConfiguration(previous), args.source, args.selection);
   },
   async promoteCatalog(ctx, args) {
     const previous = await readConfiguration(ctx, args, true); expectRevision(previous, args.expectedRevision);
     const record = requireConfiguration(previous);
-    const reviewed = catalogReview(ctx, record, args.source);
+    const reviewed = catalogReview(ctx, record, args.source, args.selection);
     if (reviewed.reviewDigest !== args.reviewDigest) throw new CodeRefusal("preview_changed");
     return commitConfiguration(ctx, previous, { ...record, active: record[args.source],
       draft: args.source === "draft" ? null : record.draft, selection: reviewed.review.selection });

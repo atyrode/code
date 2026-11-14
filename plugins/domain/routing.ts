@@ -26,12 +26,13 @@ export const ReviewSchema = z.strictObject({
 export type Review = z.infer<typeof ReviewSchema>;
 
 /** The roles Code routes, in its order. Advisor is omitted while the advisor is off. */
-export const ROLES = ["default", "task", "plan", "slow", "advisor", "vision", "smol", "tiny", "commit"] as const;
+export const ROLES = ["default", "task", "plan", "slow", "advisor", "vision", "smol", "memory", "widget", "tiny", "commit"] as const;
 type Role = typeof ROLES[number];
-const utilityThinking: Partial<Record<Role, ThinkingLevel>> = { smol: "medium", tiny: "low", commit: "low" };
+// OMP disables widget reasoning; its explicit cheap route also avoids one-shot main-model inheritance.
+const utilityThinking: Partial<Record<Role, ThinkingLevel>> = { smol: "medium", memory: "medium", widget: "low", tiny: "low", commit: "low" };
 const weights: Record<Role, number> = {
   default: 10, task: 6, plan: 3, slow: 2,
-  advisor: 4, vision: 0.5, smol: 1, tiny: 0.5, commit: 0.5,
+  advisor: 4, vision: 0.5, smol: 1, memory: 0.5, widget: 0.5, tiny: 0.5, commit: 0.5,
 };
 const thinkingCost: Record<ThinkingLevel, number> = { minimal: 0.6, low: 0.8, medium: 1, high: 1.3, xhigh: 1.6, max: 2 };
 const thinkingSpeed: Record<ThinkingLevel, number> = { minimal: 1.4, low: 1.2, medium: 1, high: 0.8, xhigh: 0.65, max: 0.5 };
@@ -88,6 +89,14 @@ function selectionFacts(catalog: CompiledCatalog, input: Selection): { selection
   return { selection: { ...selection, spark: false }, available };
 }
 
+/** Preferences for an explicitly chosen lane and tier; callers review availability before adoption. */
+export function selectionForLane(lane: Lane, capability: Selection["capability"]): Selection {
+  return {
+    lane, capability, thinking: "medium", advisor: "glance", spark: false, priority: false,
+    prewalk: false, planYolo: false, fallback: true, budget: "any",
+  };
+}
+
 /**
  * Everyday work starts on Sonnet's second rung, otherwise Sol's third rung, at medium effort.
  * Only the supplied account pool determines whether a provider is served; catalog-only previews
@@ -96,11 +105,18 @@ function selectionFacts(catalog: CompiledCatalog, input: Selection): { selection
 export function defaultSelection(catalog: CompiledCatalog, serves: (provider: string) => boolean = () => true): Selection {
   let completeProfile = false;
   for (const family of orderedFamilies(catalog.families, ["anthropic", "openai"])) {
-    const selection: Selection = {
-      lane: { kind: "provider", family, blend: "only" }, capability: family === "anthropic" ? 2 : 3,
-      thinking: "medium", advisor: "glance", spark: false, priority: false,
-      prewalk: false, planYolo: false, fallback: true, budget: "any",
-    };
+    let capability: Selection["capability"] = family === "anthropic" ? 2 : 3;
+    // Nearest-rung filling remains visible for explicit choices, never an automatic premium default.
+    if (catalog.model(catalog.rung(family, capability)).tier > capability) {
+      let lower: Selection["capability"] | null = null;
+      for (const model of catalog.models) {
+        if (model.tier === 0 || model.tier > capability || catalog.family(model.key) !== family) continue;
+        if (lower === null || model.tier > lower) lower = model.tier;
+      }
+      if (lower === null) continue;
+      capability = lower;
+    }
+    const selection = selectionForLane({ kind: "provider", family, blend: "only" }, capability);
     let routes: Route[];
     try {
       // Resolve the whole profile: an image-capable lead is required even for a pure lane.
@@ -109,6 +125,8 @@ export function defaultSelection(catalog: CompiledCatalog, serves: (provider: st
       if (!(error instanceof DomainError) || error.code !== "invalid_selection") throw error;
       continue;
     }
+    // The automatic ceiling covers vision and helpers too, not merely the main model.
+    if (routes.some(route => catalog.model(route.lead.key).tier > capability)) continue;
     completeProfile = true;
     if (routes.every(route => serves(catalog.model(route.lead.key).provider))) return selection;
   }
@@ -159,6 +177,7 @@ function selectedRoutes(catalog: CompiledCatalog, selection: Selection): Route[]
   for (const role of ROLES) {
     let lead: string;
     let level = thinking;
+    let roleCapability: number = capability;
     let fallbacks: (string | undefined)[] = [];
     let fallbackLevels: ThinkingLevel[] | undefined;
     if (role === "advisor") {
@@ -166,6 +185,7 @@ function selectedRoutes(catalog: CompiledCatalog, selection: Selection): Route[]
       const family = pure ? primary : orderedFamilies(catalog.families, advisorFamilyOrder).find(candidate => candidate !== primary);
       if (!family) throw new DomainError("invalid_selection");
       const tiers = selection.advisor === "glance" ? [1] : selection.advisor === "review" ? [2, 1] : [3, 2, 1];
+      roleCapability = tiers[0]!;
       const levels: ThinkingLevel[] = selection.advisor === "glance" ? ["low"] : selection.advisor === "review" ? ["medium", "low"] : ["high", "high", "low"];
       lead = catalog.rung(family, tiers[0]!);
       level = levels[0]!;
@@ -187,6 +207,7 @@ function selectedRoutes(catalog: CompiledCatalog, selection: Selection): Route[]
       fallbacks = chain(lead).filter(key => key !== undefined && catalog.model(key).images);
     } else if (utilityThinking[role]) {
       lead = catalog.rung(primary, 1);
+      roleCapability = 1;
       level = utilityThinking[role]!;
     } else {
       const deliberative = role === "plan" || role === "slow";
@@ -196,12 +217,15 @@ function selectedRoutes(catalog: CompiledCatalog, selection: Selection): Route[]
       fallbacks = chain(lead);
     }
     if (!admits(lead)) throw new DomainError("budget_unsatisfiable");
+    // Sparse ladders may fill a rung upward; a fallback never escalates beyond its lead or selected role tier.
+    // Advisor intensity is its own explicit tier choice, independent of the main capability dial.
+    const fallbackCeiling = Math.min(roleCapability, catalog.model(lead).tier);
     const seen = new Set([lead]);
     const fallback: ModelChoice[] = [];
     if (selection.fallback) {
       for (let index = 0; index < fallbacks.length; index++) {
         const key = fallbacks[index];
-        if (!key || seen.has(key) || !admits(key)) continue;
+        if (!key || seen.has(key) || catalog.model(key).tier > fallbackCeiling || !admits(key)) continue;
         seen.add(key);
         fallback.push(choice(key, fallbackLevels?.[index] ?? level));
       }
@@ -369,7 +393,9 @@ export function compileOmpOverlay(catalog: CompiledCatalog, input: Selection, ro
     modelRoles,
     retry: selection.fallback
       ? { enabled: true, modelFallback: true, fallbackRevertPolicy: "cooldown-expiry", fallbackChains }
-      : { enabled: true, modelFallback: false },
+      : { enabled: true, modelFallback: false, fallbackChains: { memory: [], widget: [] } },
+    // OMP shallowly replaces namespaces; an empty task object keeps disabled task options off.
+    task: {},
     defaultThinkingLevel: selection.thinking,
     advisor: { enabled: selection.advisor !== "off" },
   };

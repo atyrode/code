@@ -2,7 +2,7 @@ import { describe, expect, test } from "bun:test";
 import { compileCatalog } from "./catalog.ts";
 import { type CatalogDocument, type CatalogModel, type Route, type Selection } from "./contracts.ts";
 import { familyPolicy, providerPolicy } from "./providers.ts";
-import { clampSelection, compileOmpOverlay, defaultSelection, reviewCatalog, ReviewSchema, routedModels, routeService, servedRoutes, unpublishedModels } from "./routing.ts";
+import { clampSelection, compileOmpOverlay, defaultSelection, reviewCatalog, ReviewSchema, routedModels, routeService, selectionForLane, servedRoutes, unpublishedModels } from "./routing.ts";
 
 function model(key: string, provider: string, tier: CatalogModel["tier"], changes: Partial<CatalogModel> = {}): CatalogModel {
   return {
@@ -134,7 +134,8 @@ describe("default selection", () => {
     for (const roleName of ["plan", "slow"]) expect(route(review.routes, roleName).lead).toEqual({ key: "a2", thinking: "high" });
     expect(route(review.routes, "advisor").lead).toEqual({ key: "a1", thinking: "low" });
     expect(route(review.routes, "smol").lead).toEqual({ key: "a1", thinking: "medium" });
-    for (const roleName of ["tiny", "commit"]) expect(route(review.routes, roleName).lead).toEqual({ key: "a1", thinking: "low" });
+    expect(route(review.routes, "memory").lead).toEqual({ key: "a1", thinking: "medium" });
+    for (const roleName of ["widget", "tiny", "commit"]) expect(route(review.routes, roleName).lead).toEqual({ key: "a1", thinking: "low" });
     expect(catalog.models.some(model => model.key === "spark")).toBe(false);
   });
 
@@ -183,6 +184,80 @@ describe("default selection", () => {
     expect(() => defaultSelection(noVision, serves)).toThrow("code_invalid_selection");
   });
 
+  test("a premium-only Anthropic vision route cannot promote an automatic Sonnet profile", () => {
+    const input = document();
+    input.models = input.models.filter(value => value.provider !== "deepseek")
+      .map(value => ({ ...value, images: value.provider !== "anthropic" || value.key === "a4" }));
+    const catalog = compileCatalog(input), serves = (provider: string) => provider !== "openai-codex";
+    const explicit = selectionForLane({ kind: "provider", family: "anthropic", blend: "only" }, 2);
+    const explicitReview = reviewCatalog(catalog, explicit, daytime);
+    expect(route(explicitReview.routes, "default").lead).toEqual({ key: "a2", thinking: "medium" });
+    expect(route(explicitReview.routes, "vision").lead).toEqual({ key: "a4", thinking: "low" });
+    expect(clampSelection(catalog, explicit, serves)).toEqual(explicit);
+    expect(compileOmpOverlay(catalog, explicit, explicitReview.routes, serves).modelRoles?.vision).toBe("anthropic/native-a4:low");
+    const chosen = defaultSelection(catalog, serves), review = reviewCatalog(catalog, chosen, daytime);
+    expect(chosen).toMatchObject({ lane: { kind: "provider", family: "openai", blend: "only" }, capability: 3 });
+    expect(review.routes.every(value => catalog.model(value.lead.key).tier <= 3)).toBe(true);
+    expect(compileOmpOverlay(catalog, chosen, servedRoutes(catalog, review.routes, serves), serves).modelRoles?.vision)
+      .toBe("openai/native-o3:low");
+  });
+
+  test("a missing Sonnet rung never silently turns the balanced default into premium Anthropic", () => {
+    const input = document();
+    input.models = input.models.filter(value => value.provider !== "deepseek" &&
+      (value.provider !== "anthropic" || value.tier >= 3));
+    const catalog = compileCatalog(input), chosen = defaultSelection(catalog);
+    expect(catalog.short).toContain("anthropic");
+    expect(catalog.model(catalog.rung("anthropic", 2)).tier).toBe(3);
+    expect(chosen).toMatchObject({ lane: { kind: "provider", family: "openai", blend: "only" }, capability: 3, thinking: "medium" });
+    expect(clampSelection(catalog, null)).toEqual(chosen);
+    const explicit = selection({ lane: { kind: "provider", family: "anthropic", blend: "only" } });
+    expect(clampSelection(catalog, explicit)).toEqual(explicit);
+    const review = reviewCatalog(catalog, explicit, daytime);
+    expect(route(review.routes, "default").lead).toEqual({ key: "a3", thinking: "medium" });
+    expect(compileOmpOverlay(catalog, explicit, review.routes).modelRoles?.default).toBe("anthropic/native-a3:medium");
+    const premiumOnly = compileCatalog({ ...input, models: input.models.filter(value => value.provider === "anthropic") });
+    expect(() => defaultSelection(premiumOnly)).toThrow("code_invalid_selection");
+  });
+
+  test("sparse Sol coverage uses a declared lower tier instead of automatically selecting Astra", () => {
+    const catalog = compileCatalog({ schemaVersion: 1, models: [model("o1", "openai", 1), model("o4", "openai", 4)] });
+    expect(catalog.model(catalog.rung("openai", 3)).tier).toBe(4);
+    const chosen = defaultSelection(catalog);
+    expect(chosen).toMatchObject({ lane: { kind: "provider", family: "openai", blend: "only" }, capability: 1, thinking: "medium" });
+    const review = reviewCatalog(catalog, chosen, daytime);
+    expect(review.routes.every(value => value.lead.key === "o1" && value.fallback.length === 0)).toBe(true);
+    expect(compileOmpOverlay(catalog, chosen, review.routes).modelRoles?.default).toBe("openai/native-o1:medium");
+    const explicit = selectionForLane({ kind: "provider", family: "openai", blend: "only" }, 3);
+    expect(clampSelection(catalog, explicit)).toEqual(explicit);
+    expect(route(reviewCatalog(catalog, explicit, daytime).routes, "default").lead.key).toBe("o4");
+  });
+
+  test("lower-only provider and generic catalogs remain usable without manufacturing a premium rung", () => {
+    for (const provider of ["anthropic", "openai", "vendor-example"]) {
+      const catalog = compileCatalog({ schemaVersion: 1, models: [model("only", provider, 1)] });
+      const serves = (candidate: string) => candidate === provider;
+      const chosen = defaultSelection(catalog, serves), review = reviewCatalog(catalog, chosen, daytime);
+      expect(chosen).toMatchObject({ lane: { kind: "provider", family: provider, blend: "only" },
+        capability: provider === "anthropic" ? 2 : 3, thinking: "medium" });
+      expect(review.routes.every(value => value.lead.key === "only" && value.fallback.length === 0)).toBe(true);
+      expect(compileOmpOverlay(catalog, chosen, review.routes, serves).modelRoles?.default).toBe(`${provider}/native-only:medium`);
+    }
+  });
+
+  test("explicit lane preferences permit reviewed premium adoption without inventing an automatic default", () => {
+    const catalog = compileCatalog({ schemaVersion: 1, models: [model("o4", "openai", 4)] });
+    expect(() => defaultSelection(catalog)).toThrow("code_invalid_selection");
+    const explicit = selectionForLane({ kind: "provider", family: "openai", blend: "only" }, 4);
+    expect(explicit).toEqual({ lane: { kind: "provider", family: "openai", blend: "only" }, capability: 4,
+      thinking: "medium", advisor: "glance", spark: false, priority: false, prewalk: false, planYolo: false,
+      fallback: true, budget: "any" });
+    const review = reviewCatalog(catalog, explicit, daytime);
+    expect(compileOmpOverlay(catalog, explicit, review.routes).modelRoles?.default).toBe("openai/native-o4:medium");
+    const invalid = selectionForLane({ kind: "provider", family: "unlisted", blend: "only" }, 4);
+    expect(() => reviewCatalog(catalog, invalid, daytime)).toThrow("code_invalid_selection");
+  });
+
   test("a single-family catalog keeps its own balanced pure lane", () => {
     for (const family of ["anthropic", "openai", "deepseek"]) {
       const single = compileCatalog({ schemaVersion: 1,
@@ -207,7 +282,26 @@ describe("structured route selection", () => {
     expect(() => reviewCatalog(catalog, selection({ capability: 4 }), daytime)).toThrow("code_invalid_selection");
     const elite = reviewCatalog(catalog, selection({ capability: 4, lane: { kind: "provider", family: "anthropic", blend: "only" } }), daytime);
     for (const roleName of ["default", "task", "plan", "slow"]) expect(route(elite.routes, roleName).lead.key).toBe("a4");
-    for (const roleName of ["smol", "tiny", "commit"]) expect(route(elite.routes, roleName).lead.key).toBe("a1");
+    for (const roleName of ["smol", "memory", "widget", "tiny", "commit"]) expect(route(elite.routes, roleName).lead.key).toBe("a1");
+  });
+
+  test("sparse cross-family ladders cannot promote a routine fallback into elite", () => {
+    const catalog = compileCatalog({ schemaVersion: 1, models: [
+      ...document().models.filter(value => value.provider === "anthropic"),
+      model("o4", "openai", 4),
+    ] });
+    const chosen = selection({ lane: { kind: "provider", family: "anthropic", blend: "led" } });
+    const routine = reviewCatalog(catalog, chosen, daytime);
+    for (const [roleName, thinking] of [["default", "medium"], ["task", "medium"], ["plan", "high"], ["slow", "high"], ["vision", "low"]] as const) {
+      expect(route(routine.routes, roleName).fallback).toEqual([{ key: "a1", thinking }]);
+    }
+    expect(routine.routes.flatMap(value => [value.lead, ...value.fallback]).some(value => value.key === "o4")).toBe(false);
+    expect(Object.values(compileOmpOverlay(catalog, chosen, routine.routes).retry?.fallbackChains ?? {}).flat()
+      .some(reference => reference.startsWith("openai/"))).toBe(false);
+    const elite = reviewCatalog(catalog, { ...chosen, capability: 4 }, daytime);
+    expect(route(elite.routes, "default").fallback.map(value => value.key)).toContain("o4");
+    const explicitAstra = reviewCatalog(catalog, { ...chosen, lane: { kind: "provider", family: "openai", blend: "only" }, capability: 4 }, daytime);
+    expect(compileOmpOverlay(catalog, explicitAstra.selection, explicitAstra.routes).modelRoles?.default).toBe("openai/native-o4:medium");
   });
 
   test("saved three-level catalogs keep operator-assigned tiers rather than being reclassified", () => {
@@ -258,10 +352,17 @@ describe("structured route selection", () => {
     for (const roleName of ["default", "task"]) expect(route(maximum.routes, roleName).lead.thinking).toBe("max");
     for (const roleName of ["plan", "slow"]) expect(route(maximum.routes, roleName).lead.thinking).toBe("high");
     expect(route(maximum.routes, "smol").lead).toEqual({ key: "o1", thinking: "medium" });
-    for (const roleName of ["tiny", "commit"]) expect(route(maximum.routes, roleName).lead).toEqual({ key: "o1", thinking: "low" });
+    expect(route(maximum.routes, "memory").lead).toEqual({ key: "o1", thinking: "medium" });
+    for (const roleName of ["widget", "tiny", "commit"]) expect(route(maximum.routes, roleName).lead).toEqual({ key: "o1", thinking: "low" });
     expect(route(maximum.routes, "advisor").lead).toEqual({ key: "a1", thinking: "low" });
     const image = route(maximum.routes, "vision");
     expect([image.lead, ...image.fallback].every(choice => choice.thinking === "low")).toBe(true);
+    const overlay = compileOmpOverlay(catalog, maximum.selection, maximum.routes);
+    expect(overlay.modelRoles?.widget).toBe("openai/native-o1:low");
+    expect(overlay.retry?.fallbackChains?.widget).toEqual([]);
+    expect(overlay.modelRoles?.memory).toBe("openai/native-o1:medium");
+    expect(overlay.retry?.fallbackChains?.memory).toEqual([]);
+    expect(overlay).not.toHaveProperty("memory");
   });
 
   test("vision prefers an image-capable higher rung, filters its net, and deliberately crosses pure lanes", () => {
@@ -296,7 +397,7 @@ describe("structured route selection", () => {
     const catalog = compileCatalog(document());
     const review = reviewCatalog(catalog, selection({ spark: true, priority: true, capability: 1 }), daytime);
     expect(review.selection.spark).toBe(false);
-    for (const roleName of ["commit", "tiny", "smol"]) expect(route(review.routes, roleName).lead.key).toBe("o1");
+    for (const roleName of ["commit", "tiny", "widget", "memory", "smol"]) expect(route(review.routes, roleName).lead.key).toBe("o1");
     const pure = selection({ lane: { kind: "provider", family: "anthropic", blend: "only" } });
     expect(reviewCatalog(catalog, { ...pure, spark: true }, daytime).selection.spark).toBe(false);
     expect(() => reviewCatalog(catalog, { ...pure, priority: true }, daytime)).toThrow("code_invalid_selection");
@@ -309,7 +410,7 @@ describe("review to OMP boundary", () => {
     const review = reviewCatalog(catalog, selection({ advisor: "audit", prewalk: true, priority: true, planYolo: true }), daytime);
     expect(ReviewSchema.parse(review)).toEqual(review);
     const overlay = compileOmpOverlay(catalog, review.selection, review.routes);
-    const roles = ["default", "task", "plan", "slow", "advisor", "vision", "smol", "tiny", "commit"];
+    const roles = ["default", "task", "plan", "slow", "advisor", "vision", "smol", "memory", "widget", "tiny", "commit"];
     expect(review.routes.map(value => value.role)).toEqual(roles);
     expect(Object.keys(overlay.modelRoles ?? {})).toEqual(roles);
     expect(Object.keys(overlay.retry?.fallbackChains ?? {})).toEqual(roles);
@@ -325,6 +426,9 @@ describe("review to OMP boundary", () => {
     expect(overlay.modelRoles?.default).toBe("openai-codex/native-o2:medium");
     expect(overlay.retry?.fallbackChains?.default?.[0]).toBe("openai/native-o1:medium");
     expect(overlay.retry?.fallbackChains?.commit).toEqual([]);
+    expect(overlay.retry?.fallbackChains?.widget).toEqual([]);
+    expect(overlay.retry?.fallbackChains?.memory).toEqual([]);
+    expect(overlay).not.toHaveProperty("memory");
     expect(overlay.task?.agentAdvisor).toEqual({ task: "on" });
     expect(overlay.task?.prewalk).toBe(true);
     expect(overlay.task).toEqual({ agentAdvisor: { task: "on" }, prewalk: true });
@@ -345,7 +449,7 @@ describe("review to OMP boundary", () => {
     expect(route(review.routes, "advisor")).toMatchObject({ lead: { key: "a2", thinking: "medium" }, fallback: [{ key: "a1", thinking: "low" }] });
     for (const advisor of ["off", "glance", "review"] as const) {
       const ordinary = reviewCatalog(catalog, selection({ advisor }), daytime);
-      expect(compileOmpOverlay(catalog, ordinary.selection, ordinary.routes).task).toBeUndefined();
+      expect(compileOmpOverlay(catalog, ordinary.selection, ordinary.routes).task).toEqual({});
     }
   });
 
@@ -356,7 +460,7 @@ describe("review to OMP boundary", () => {
     const audit = reviewCatalog(catalog, selection({ advisor: "audit" }), daytime);
     expect(compileOmpOverlay(catalog, audit.selection, audit.routes).task).toEqual({ agentAdvisor: { task: "on" } });
     const off = reviewCatalog(catalog, selection(), daytime);
-    expect(off.routes.map(value => value.role)).toEqual(["default", "task", "plan", "slow", "vision", "smol", "tiny", "commit"]);
+    expect(off.routes.map(value => value.role)).toEqual(["default", "task", "plan", "slow", "vision", "smol", "memory", "widget", "tiny", "commit"]);
     expect(Object.keys(compileOmpOverlay(catalog, off.selection, off.routes).modelRoles ?? {})).toEqual(off.routes.map(value => value.role));
   });
 
@@ -364,7 +468,8 @@ describe("review to OMP boundary", () => {
     const catalog = compileCatalog(document());
     const review = reviewCatalog(catalog, selection({ fallback: false, advisor: "audit" }), daytime);
     expect(review.routes.every(value => value.fallback.length === 0)).toBe(true);
-    expect(compileOmpOverlay(catalog, review.selection, review.routes).retry).toEqual({ enabled: true, modelFallback: false });
+    expect(compileOmpOverlay(catalog, review.selection, review.routes).retry)
+      .toEqual({ enabled: true, modelFallback: false, fallbackChains: { memory: [], widget: [] } });
   });
 
   test("overlay compilation refuses missing roles, altered thinking, and mismatched selections", () => {

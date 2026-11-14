@@ -160,6 +160,8 @@ describe("pure typed scaffolding", () => {
           expect(review.routes.find(route => route.role === "task")?.fallback.map(choice => choice.key))
             .toEqual([`${provider}.series3`, `${provider}.series2`]);
           expect(review.routes.find(route => route.role === "smol")?.lead.key).toBe(`${provider}.series1`);
+          expect(review.routes.find(route => route.role === "memory")?.lead).toEqual({ key: `${provider}.series1`, thinking: "low" });
+          expect(review.routes.find(route => route.role === "widget")?.lead).toEqual({ key: `${provider}.series1`, thinking: "low" });
           expect(review.routes.find(route => route.role === "commit")?.lead.key).toBe(`${provider}.series1`);
         }
       }
@@ -689,7 +691,8 @@ describe("a family Code requires that the accounts reach only in part", () => {
       default: "openai-codex/gpt-6.1-sol:medium", task: "openai-codex/gpt-6.1-sol:medium",
       plan: "openai-codex/gpt-6.1-sol:high", slow: "openai-codex/gpt-6.1-sol:high",
       advisor: "openai-codex/gpt-6-luna:low", vision: "openai-codex/gpt-6.1-sol:low",
-      smol: "openai-codex/gpt-6-luna:medium", tiny: "openai-codex/gpt-6-luna:low", commit: "openai-codex/gpt-6-luna:low",
+      smol: "openai-codex/gpt-6-luna:medium", memory: "openai-codex/gpt-6-luna:medium", widget: "openai-codex/gpt-6-luna:low",
+      tiny: "openai-codex/gpt-6-luna:low", commit: "openai-codex/gpt-6-luna:low",
     });
     expect(review.routes.flatMap(route => [route.lead, ...route.fallback]).some(choice => catalog.model(choice.key).id === "gpt-6-astra")).toBe(false);
     const elite = reviewCatalog(catalog, { ...chosen, capability: 4 }, 200);
@@ -716,7 +719,7 @@ describe("passive starter metadata", () => {
     const compiled = compileCatalog(document), selection = defaultSelection(compiled);
     const review = reviewCatalog(compiled, selection, 1000);
     expect(review.routes.map(route => route.role)).toEqual([
-      "default", "task", "plan", "slow", "advisor", "vision", "smol", "tiny", "commit",
+      "default", "task", "plan", "slow", "advisor", "vision", "smol", "memory", "widget", "tiny", "commit",
     ]);
     for (const model of document.models) {
       const source = snapshot.models.find(row => row.provider === model.provider && row.id === model.id)!;

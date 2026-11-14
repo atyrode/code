@@ -114,9 +114,14 @@ describe("what an option would do before it is chosen", () => {
     expect(max.selection.thinking).toBe("max");
     expect(max.routes.filter(route => route.role === "default" || route.role === "task").map(route => route.lead.thinking)).toEqual(["max", "max"]);
     expect(max.routes.filter(route => route.role === "plan" || route.role === "slow").map(route => route.lead.thinking)).toEqual(["high", "high"]);
-    expect(max.routes.find(route => route.role === "smol")?.lead).toEqual({ key: "o1", thinking: "medium" });
-    for (const role of ["tiny", "commit"]) expect(max.routes.find(route => route.role === role)?.lead).toEqual({ key: "o1", thinking: "low" });
+    for (const role of ["smol", "memory"]) expect(max.routes.find(route => route.role === role)?.lead).toEqual({ key: "o1", thinking: "medium" });
+    for (const role of ["widget", "tiny", "commit"]) expect(max.routes.find(route => route.role === role)?.lead).toEqual({ key: "o1", thinking: "low" });
     expect(max.routes.find(route => route.role === "vision")?.lead.thinking).toBe("low");
+    for (const role of ["memory", "widget"]) expect(max.routes.find(route => route.role === role)?.fallback).toEqual([]);
+    const withoutFallbacks = chooseOption(catalog, max.selection, max, "fallbacks", "off", known).review!;
+    for (const [role, thinking] of [["memory", "medium"], ["widget", "low"]] as const) {
+      expect(withoutFallbacks.routes.find(route => route.role === role)).toMatchObject({ lead: { key: "o1", thinking }, fallback: [] });
+    }
     for (const [word, key, thinking] of [["glance", "o1", "low"], ["review", "o2", "medium"], ["audit", "o3", "high"]] as const) {
       expect(chooseOption(catalog, max.selection, max, "advisor", word, known).review?.routes.find(route => route.role === "advisor")?.lead)
         .toEqual({ key, thinking });

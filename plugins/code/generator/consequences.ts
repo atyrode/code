@@ -157,7 +157,7 @@ function stranded(outcome: RoleOutcome): boolean {
 
 /**
  * The dial move that gives every role a route again, and what it does for each role that had none:
- * `leads` on an open pool (grouped by pool, so "GPT only keeps all 8 on Codex" can be said),
+ * `leads` on an open pool (grouped by pool, so a single consequence can name its pool and role count),
  * `fallsBack` while its own pool is out, or `removed` because the move stops routing the role at all
  * ("advisor off" clears the wait by having no advisor, it seats nothing). `waitedOn` names the pools
  * the stranded roles were held by. `othersMoved` counts roles that had a route and change model.

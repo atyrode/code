@@ -1133,7 +1133,7 @@
 .plugin-atyrode_code_generator .plugin-atyrode_code_generator__earlier-word[data-same] { color: var(--tui-mid); }
 /* The word today's catalog has no route for, quieter, its reason in its title: the row cannot be recalled. */
 .plugin-atyrode_code_generator .plugin-atyrode_code_generator__earlier-word[data-off] { color: var(--tui-quiet); text-decoration: line-through; }
-/* What recalling the profile would strand, warm: "8 no route until 16:55". */
+/* What recalling the profile would strand, warm, with its role count and reopening. */
 .plugin-atyrode_code_generator .plugin-atyrode_code_generator__earlier-fate { color: var(--tui-warn-text); white-space: nowrap; }
 .plugin-atyrode_code_generator .plugin-atyrode_code_generator__earlier-marks { display: inline-flex; flex: none; align-self: center; gap: 2px; }
 .plugin-atyrode_code_generator .plugin-atyrode_code_generator__earlier-age { color: var(--tui-dim); font-size: 11.5px; white-space: nowrap; }

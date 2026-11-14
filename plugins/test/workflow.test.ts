@@ -164,7 +164,7 @@ test("verification prepares a charge without spending, and one confirmation save
   expect((await f.configuration()).configuration).toMatchObject({ revision: 1, active: null, draft: null });
   const verified = await pending.confirm(preview, { onProgress: value => progress.push(value) });
   expect(f.calls.filter(door => effects.includes(door))).toEqual(["atyrode.code.initializeConfiguration", actionDoor("startInventory"),
-    actionDoor("startBenchmark"), actionDoor("startBenchmark"), "atyrode.code.stageCatalog", "atyrode.code.promoteCatalog", "atyrode.code.select"]);
+    actionDoor("startBenchmark"), actionDoor("startBenchmark"), "atyrode.code.stageCatalog", "atyrode.code.promoteCatalog"]);
   // One job per provider, each probing only that provider's candidates.
   expect(f.benchmarked.map(input => [...new Set(input.candidates.map(candidate => candidate.provider))])).toEqual([["anthropic"], ["deepseek"]]);
   const saved = verified.configuration;
@@ -176,7 +176,7 @@ test("verification prepares a charge without spending, and one confirmation save
   // own default lane and highest capability; every other choice is the operator's.
   expect(saved.selection).toEqual({ ...preview, lane: { kind: "provider", family: "anthropic", blend: "only" }, capability: 3, spark: false });
   expect(verified.exclusions).toEqual([{ provider: "deepseek", id: "deepseek-vision-exp", reason: "unstable_id" }]);
-  expect([...new Set(progress.map(value => value.step))]).toEqual(["observe", "initialize", "inventory", "draft", "benchmark", "derive", "stage", "review", "promote", "select"]);
+  expect([...new Set(progress.map(value => value.step))]).toEqual(["observe", "initialize", "inventory", "draft", "benchmark", "derive", "stage", "review", "promote"]);
   expect(progress.filter(value => value.step === "benchmark").map(value => value.providers.map(entry => `${entry.provider} ${entry.done}/${entry.total}`)))
     .toEqual([[], ["anthropic 0/3", "deepseek 0/2"], ["anthropic 3/3", "deepseek 0/2"], ["anthropic 3/3", "deepseek 2/2"]]);
   // A charge is spent once; a second confirmation never repeats it.
@@ -218,6 +218,33 @@ test("null selections verify and adopt everyday served Sonnet, otherwise served 
     expect((await f.configuration(second)).configuration?.selection).toEqual(selection);
     expect(f.calls.slice(from)).not.toContain(actionDoor("startInventory"));
     expect(f.calls.slice(from)).not.toContain(actionDoor("startBenchmark"));
+  }
+});
+
+test("verification promotes an explicit elite selection with its premium-only derived list in one write", async () => {
+  for (const explicit of [true, false]) {
+    const f = verificationFixture();
+    f.omp.accounts.accounts = [f.slot("openai-codex", 3)];
+    f.omp.inventory.models = [row("openai-codex", "gpt-6-astra", 10, 200_000, ["low", "medium", "high", "max"], true)];
+    const pending = await prepared(f, 0);
+    const selection: Selection = { ...preview, lane: { kind: "provider", family: "openai", blend: "only" },
+      capability: 4, thinking: "max", advisor: "off", spark: false };
+    if (!explicit) {
+      const stopped = await stopOf(pending.confirm(null));
+      expect([stopped.step, stopped.reason]).toEqual(["derive", "code_invalid_selection"]);
+      expect(f.calls).not.toContain("atyrode.code.stageCatalog");
+      expect((await f.configuration()).configuration).toMatchObject({ revision: 1, selection: null, active: null, draft: null });
+      continue;
+    }
+    const verified = await pending.confirm(selection);
+    expect(verified.configuration.selection).toEqual(selection);
+    expect(verified.configuration.active?.document.models.map(model => [model.tier, model.id])).toEqual([[4, "gpt-6-astra"]]);
+    expect(verified.configuration.active?.provenance).toEqual(verified.provenance);
+    expect(verified.provenance.providers).toEqual(["openai-codex"]);
+    expect(verified.configuration.revision).toBe(3);
+    expect(f.calls.filter(door => effects.includes(door))).toEqual(["atyrode.code.initializeConfiguration", actionDoor("startInventory"),
+      actionDoor("startBenchmark"), "atyrode.code.stageCatalog", "atyrode.code.promoteCatalog"]);
+    expect(f.calls).not.toContain("atyrode.code.select");
   }
 });
 

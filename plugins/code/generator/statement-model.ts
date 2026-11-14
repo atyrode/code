@@ -430,8 +430,8 @@ function poolWord(pool: QuotaPool | null, vocab: Vocabulary): string {
 export type FixView = { readonly label: string; readonly result: string; readonly selection: Selection; readonly review: Review };
 
 /**
- * "Claude-led keeps all 8 on GPT" when the move puts every role on one pool ("GPT only gives all 8
- * a route" where the label already names it); otherwise each group of rescued roles by name. A move
+ * Names one pool when the move puts every role there, or just the role count when the lane label
+ * already names that pool; otherwise each group of rescued roles by name. A move
  * onto a pool whose availability is not known now says so: a rescue is not measured room.
  */
 export function fixView(fix: Rescue, catalog: CompiledCatalog, pools: readonly QuotaPool[], vocab: Vocabulary): FixView | null {
@@ -448,7 +448,7 @@ export function fixView(fix: Rescue, catalog: CompiledCatalog, pools: readonly Q
   if (only && fix.rescued.removed.length === 0 && fix.rescued.fallsBack.length === 0) {
     const count = fix.review.routes.length;
     const lane = fix.review.selection.lane;
-    // "GPT only keeps all 8 on GPT" says the pool twice; a lane move that names the pool's family only needs the result.
+    // A lane label naming the pool's family needs only the role count in its result, without saying the pool twice.
     const named = fix.moves.some(move => move.dial === "lane") && lane.kind === "provider" && lane.family === only.family &&
       only.bucket === providerPolicy(only.provider).quotaBucketBase;
     result = named ? `gives all ${count} a route` : `keeps all ${count} on ${poolWord(only, vocab)}`;

@@ -3,7 +3,7 @@ import type { GuestStorage, ServerMigration } from "@manifold/plugin-kit/server"
 import type { RuntimeAccountPool } from "@atyrode/manifold-omp";
 import { initialAccountChoices, selectedAccountPool } from "../domain/accounts.ts";
 import { compileCatalog } from "../domain/catalog.ts";
-import { DomainError, type CatalogDocument } from "../domain/contracts.ts";
+import { DomainError, type CatalogDocument, type Selection } from "../domain/contracts.ts";
 import { defaultSelection, reviewCatalog } from "../domain/routing.ts";
 import { CODE_PREFERENCES_EVENT, CatalogRevisionSchema, ConfigurationSchema, VerificationProvenanceSchema,
   ConfigurationLookupSchema, TargetSchema, type Configuration, type Workspace, type CatalogReview,
@@ -160,13 +160,13 @@ export async function initializeConfiguration(ctx: CodeContext, input: z.infer<t
     selection: null, updatedBy: ctx.auth.principal.id, updatedAt: ctx.now(),
   });
 }
-export function catalogReview(ctx: CodeContext, record: Configuration, source: "active" | "draft"): CatalogReview {
+export function catalogReview(ctx: CodeContext, record: Configuration, source: "active" | "draft", wanted?: Selection): CatalogReview {
   const catalog = record[source];
   if (!catalog) throw new CodeRefusal("catalog_missing");
   const compiled = compileCatalog(catalog.document);
   const providers = catalog.provenance?.providers;
-  const selection = source === "active" && record.selection ? record.selection
-    : defaultSelection(compiled, providers ? provider => providers.includes(provider) : undefined);
+  const selection = wanted ?? (source === "active" && record.selection ? record.selection
+    : defaultSelection(compiled, providers ? provider => providers.includes(provider) : undefined));
   const review = reviewCatalog(compiled, selection, ctx.now());
   const facts = { revision: record.revision, source, catalogDigest: catalog.digest, provenance: catalog.provenance, review };
   // Time-dependent estimates do not change the reviewed route and selection. Provenance is bound:
