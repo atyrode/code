@@ -111,6 +111,36 @@ describe("the routing", () => {
     expect(off.find(row => row.role === "memory")).toMatchObject({ lead: { alias: "o1", thinking: "medium" }, fallback: [] });
   });
 
+  test("the ledger and grouped profile retain deliberative effort extremes on the selected rung", () => {
+    for (const [thinking, deliberative] of [
+      ["minimal", "minimal"], ["low", "medium"], ["medium", "high"],
+      ["high", "xhigh"], ["xhigh", "xhigh"], ["max", "max"],
+    ] as const) {
+      const rows = ledger(review({ thinking }));
+      for (const role of ["default", "task"]) {
+        expect(rows.find(row => row.role === role)?.lead).toMatchObject({ key: "o2", thinking });
+      }
+      for (const role of ["plan", "slow"]) {
+        expect(rows.find(row => row.role === role)?.lead).toMatchObject({ key: "o2", thinking: deliberative });
+        expect(profileGroups(rows).find(group => group.roles.some(entry => entry.role === role))?.lead)
+          .toMatchObject({ key: "o2", thinking: deliberative });
+      }
+    }
+  });
+
+  test("routing displays the model-metadata clamp without discarding the explicit effort choice", () => {
+    const limited = compileCatalog({ schemaVersion: 1, models: catalog.models.map((entry): CatalogModel =>
+      entry.key === "o2" ? { ...entry, thinkingLevels: ["low", "medium", "high"] } : entry) });
+    for (const thinking of ["high", "xhigh", "max"] as const) {
+      const selected = reviewCatalog(limited, review({ thinking }).selection, now);
+      const rows = routeLedger(limited, selected, displayAliases(limited), [], vocab);
+      expect(selected.selection.thinking).toBe(thinking);
+      for (const role of ["default", "task", "plan", "slow"]) {
+        expect(rows.find(row => row.role === role)?.lead).toMatchObject({ key: "o2", thinking: "high" });
+      }
+    }
+  });
+
   test("a lead whose pool is out is struck with that pool's reopening and what the role does meanwhile; the rest stand", () => {
     const claudeOut = { blocks: { carol: [{ scope: "", until: now + 5 * HOUR }] } };
     const led = ledger(review({ lane: mixed }), claudeOut);

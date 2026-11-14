@@ -684,19 +684,33 @@ describe("a family Code requires that the accounts reach only in part", () => {
     expect(tiers(document, "openai-codex"))
       .toEqual([[1, "gpt-6-luna"], [2, "gpt-5.6-terra"], [3, "gpt-6.1-sol"], [4, "gpt-6-astra"]]);
     const onlyOpenai = (provider: string) => provider === "openai-codex";
-    const chosen = defaultSelection(catalog, onlyOpenai), review = reviewCatalog(catalog, chosen, 200);
-    const overlay = compileOmpOverlay(catalog, chosen, review.routes, onlyOpenai);
+    const chosen = defaultSelection(catalog, onlyOpenai);
     expect(chosen).toMatchObject({ lane: { kind: "provider", family: "openai", blend: "only" }, capability: 3, thinking: "medium" });
-    expect(overlay.modelRoles).toEqual({
-      default: "openai-codex/gpt-6.1-sol:medium", task: "openai-codex/gpt-6.1-sol:medium",
-      plan: "openai-codex/gpt-6.1-sol:high", slow: "openai-codex/gpt-6.1-sol:high",
-      advisor: "openai-codex/gpt-6-luna:low", vision: "openai-codex/gpt-6.1-sol:low",
-      smol: "openai-codex/gpt-6-luna:medium", memory: "openai-codex/gpt-6-luna:medium", widget: "openai-codex/gpt-6-luna:low",
-      tiny: "openai-codex/gpt-6-luna:low", commit: "openai-codex/gpt-6-luna:low",
-    });
-    expect(review.routes.flatMap(route => [route.lead, ...route.fallback]).some(choice => catalog.model(choice.key).id === "gpt-6-astra")).toBe(false);
-    const elite = reviewCatalog(catalog, { ...chosen, capability: 4 }, 200);
-    expect(compileOmpOverlay(catalog, elite.selection, elite.routes, onlyOpenai).modelRoles?.slow).toBe("openai-codex/gpt-6-astra:high");
+    for (const [thinking, main, deliberative] of [
+      ["minimal", "low", "low"], ["low", "low", "medium"], ["medium", "medium", "high"],
+      ["high", "high", "xhigh"], ["xhigh", "xhigh", "xhigh"], ["max", "max", "max"],
+    ] as const) {
+      const review = reviewCatalog(catalog, { ...chosen, thinking }, 200);
+      const overlay = compileOmpOverlay(catalog, review.selection, review.routes, onlyOpenai);
+      for (const [role, effort] of [["default", main], ["task", main], ["plan", deliberative], ["slow", deliberative]] as const) {
+        const value = review.routes.find(route => route.role === role)!;
+        expect(catalog.model(value.lead.key).id).toBe("gpt-6.1-sol");
+        expect([value.lead, ...value.fallback].every(choice => choice.thinking === effort)).toBe(true);
+        expect(overlay.modelRoles?.[role]).toBe(`openai-codex/gpt-6.1-sol:${effort}`);
+      }
+      for (const [role, effort] of [
+        ["advisor", "low"], ["smol", "medium"], ["memory", "medium"], ["widget", "low"], ["tiny", "low"], ["commit", "low"],
+      ] as const) {
+        const value = review.routes.find(route => route.role === role)!;
+        expect(catalog.model(value.lead.key).id).toBe("gpt-6-luna");
+        expect(value.lead.thinking).toBe(effort);
+        expect(value.fallback).toEqual([]);
+      }
+      expect(review.routes.find(route => route.role === "vision")?.lead.thinking).toBe("low");
+      expect(review.routes.flatMap(route => [route.lead, ...route.fallback]).some(choice => catalog.model(choice.key).id === "gpt-6-astra")).toBe(false);
+    }
+    const elite = reviewCatalog(catalog, { ...chosen, capability: 4, thinking: "max" }, 200);
+    expect(compileOmpOverlay(catalog, elite.selection, elite.routes, onlyOpenai).modelRoles?.slow).toBe("openai-codex/gpt-6-astra:max");
   });
 
   test("a plan serving terra and astra alone ladders each at its own tier, the tiers between routing to terra", () => {

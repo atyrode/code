@@ -491,31 +491,44 @@ describe("pure client-supplied policy composition", () => {
     expect(current.compositionDigest).not.toBe(composed.compositionDigest);
   });
 
-  test("composition emits only native shared roles, bounds helpers and buys a premium rung only when selected", async () => {
+  test("composition maps deliberative effort without moving model tiers or propagating main effort to helpers", async () => {
     const f = fixture();
     let record = await active(f);
     const roles = ["default", "task", "plan", "slow", "advisor", "vision", "smol", "memory", "widget", "tiny", "commit"];
     for (const capability of [2, 3] as const) {
-      record = await accepted(f, "select", { ...workspace, expectedRevision: record.revision,
-        selection: { ...record.selection!, capability, thinking: "max", advisor: "glance", prewalk: true, fallback: true } });
-      const composed = await accepted(f, "composeSession", { ...workspace, expectedRevision: record.revision, accounts: accounts(), prompt: "" });
-      expect(composed.review.routes.map(route => route.role)).toEqual(roles);
-      expect(Object.keys(composed.overlay.modelRoles!)).toEqual(roles);
-      expect(Object.keys(composed.overlay.retry!.fallbackChains!)).toEqual(roles);
-      expect(composed.overlay.task).toEqual({ prewalk: true });
-      expect(Object.hasOwn(composed.overlay, "memory")).toBe(false);
-      expect(composed.overlay.modelRoles).toEqual({
-        default: `anthropic/native-model${capability}:max`, task: `anthropic/native-model${capability}:max`,
-        plan: `anthropic/native-model${capability}:high`, slow: `anthropic/native-model${capability}:high`,
-        advisor: "anthropic/native-model1:low", vision: `anthropic/native-model${capability}:low`,
-        smol: "anthropic/native-model1:medium", memory: "anthropic/native-model1:medium", widget: "anthropic/native-model1:low",
-        tiny: "anthropic/native-model1:low", commit: "anthropic/native-model1:low",
-      });
-      expect(composed.overlay.retry!.fallbackChains!.plan).toEqual(capability === 2
-        ? ["anthropic/native-model1:high"] : ["anthropic/native-model2:high", "anthropic/native-model1:high"]);
-      for (const role of ["advisor", "smol", "memory", "widget", "tiny", "commit"])
-        expect(composed.overlay.retry!.fallbackChains![role]).toEqual([]);
+      for (const [thinking, deliberative] of [
+        ["minimal", "minimal"], ["low", "medium"], ["medium", "high"],
+        ["high", "xhigh"], ["xhigh", "xhigh"], ["max", "max"],
+      ] as const) {
+        record = await accepted(f, "select", { ...workspace, expectedRevision: record.revision,
+          selection: { ...record.selection!, capability, thinking, advisor: "glance", prewalk: true, fallback: true } });
+        const composed = await accepted(f, "composeSession", { ...workspace, expectedRevision: record.revision, accounts: accounts(), prompt: "" });
+        expect(composed.review.selection.thinking).toBe(thinking);
+        expect(composed.review.routes.map(route => route.role)).toEqual(roles);
+        expect(Object.keys(composed.overlay.modelRoles!)).toEqual(roles);
+        expect(Object.keys(composed.overlay.retry!.fallbackChains!)).toEqual(roles);
+        expect(composed.overlay.task).toEqual({ prewalk: true });
+        expect(Object.hasOwn(composed.overlay, "memory")).toBe(false);
+        expect(composed.overlay.modelRoles).toEqual({
+          default: `anthropic/native-model${capability}:${thinking}`, task: `anthropic/native-model${capability}:${thinking}`,
+          plan: `anthropic/native-model${capability}:${deliberative}`, slow: `anthropic/native-model${capability}:${deliberative}`,
+          advisor: "anthropic/native-model1:low", vision: `anthropic/native-model${capability}:low`,
+          smol: "anthropic/native-model1:medium", memory: "anthropic/native-model1:medium", widget: "anthropic/native-model1:low",
+          tiny: "anthropic/native-model1:low", commit: "anthropic/native-model1:low",
+        });
+        for (const role of ["plan", "slow"])
+          expect(composed.overlay.retry!.fallbackChains![role]).toEqual(capability === 2
+            ? [`anthropic/native-model1:${deliberative}`]
+            : [`anthropic/native-model2:${deliberative}`, `anthropic/native-model1:${deliberative}`]);
+        for (const role of ["default", "task"])
+          expect(composed.overlay.retry!.fallbackChains![role]).toEqual(capability === 2
+            ? [`anthropic/native-model1:${thinking}`]
+            : [`anthropic/native-model2:${thinking}`, `anthropic/native-model1:${thinking}`]);
+        for (const role of ["advisor", "smol", "memory", "widget", "tiny", "commit"])
+          expect(composed.overlay.retry!.fallbackChains![role]).toEqual([]);
+      }
     }
+
     record = await accepted(f, "select", { ...workspace, expectedRevision: record.revision, selection: { ...record.selection!, advisor: "off" } });
     const off = await accepted(f, "composeSession", { ...workspace, expectedRevision: record.revision, accounts: accounts(), prompt: "" });
     expect(Object.keys(off.overlay.modelRoles!)).toEqual(roles.filter(role => role !== "advisor"));
@@ -527,6 +540,56 @@ describe("pure client-supplied policy composition", () => {
     expect(noFallback.overlay.retry?.fallbackChains?.memory).toEqual([]);
     expect(Object.hasOwn(noFallback.overlay, "memory")).toBe(false);
     expect(noFallback.overlay.task).toEqual({ prewalk: true });
+  });
+
+  test("composition clamps mapped effort independently for each model, never rounding xhigh up to max", async () => {
+    const f = fixture(), catalog = document();
+    catalog.models[0]!.thinkingLevels = ["low", "medium"];
+    catalog.models[1]!.thinkingLevels = ["low", "medium", "high", "max"];
+    f.published = published(catalog.models);
+    const draft = await staged(f, catalog);
+    const review = await accepted(f, "reviewCatalog", { ...workspace, expectedRevision: draft.revision, source: "draft" });
+    let record = await accepted(f, "promoteCatalog", { ...workspace, expectedRevision: draft.revision, source: "draft", reviewDigest: review.reviewDigest });
+    for (const [thinking, main, deliberative, fallback] of [
+      ["minimal", "low", "low", "low"], ["low", "low", "medium", "medium"], ["medium", "medium", "high", "medium"],
+      ["high", "high", "high", "medium"], ["xhigh", "high", "high", "medium"], ["max", "max", "max", "medium"],
+    ] as const) {
+      record = await accepted(f, "select", { ...workspace, expectedRevision: record.revision,
+        selection: { ...record.selection!, capability: 2, thinking, advisor: "glance", fallback: true } });
+      const composed = await accepted(f, "composeSession", { ...workspace, expectedRevision: record.revision, accounts: accounts(), prompt: "" });
+      expect(composed.review.selection.thinking).toBe(thinking);
+      expect(composed.overlay.modelRoles).toEqual({
+        default: `anthropic/native-model2:${main}`, task: `anthropic/native-model2:${main}`,
+        plan: `anthropic/native-model2:${deliberative}`, slow: `anthropic/native-model2:${deliberative}`,
+        advisor: "anthropic/native-model1:low", vision: "anthropic/native-model2:low",
+        smol: "anthropic/native-model1:medium", memory: "anthropic/native-model1:medium", widget: "anthropic/native-model1:low",
+        tiny: "anthropic/native-model1:low", commit: "anthropic/native-model1:low",
+      });
+      for (const role of ["plan", "slow"])
+        expect(composed.overlay.retry!.fallbackChains![role]).toEqual([`anthropic/native-model1:${fallback}`]);
+      expect(composed.overlay.retry!.fallbackChains!.memory).toEqual([]);
+      expect(composed.overlay.retry!.fallbackChains!.widget).toEqual([]);
+      expect(composed.overlay.task).toEqual({});
+      expect(Object.hasOwn(composed.overlay, "memory")).toBe(false);
+    }
+  });
+
+  test("advisor intensity keeps its own model and effort when the main effort is max", async () => {
+    const f = fixture();
+    let record = await active(f);
+    for (const [advisor, lead, fallback] of [
+      ["glance", "anthropic/native-model1:low", []],
+      ["review", "anthropic/native-model2:medium", ["anthropic/native-model1:low"]],
+      ["audit", "anthropic/native-model3:high", ["anthropic/native-model2:high", "anthropic/native-model1:low"]],
+    ] as const) {
+      record = await accepted(f, "select", { ...workspace, expectedRevision: record.revision,
+        selection: { ...record.selection!, capability: 2, thinking: "max", advisor, fallback: true } });
+      const composed = await accepted(f, "composeSession", { ...workspace, expectedRevision: record.revision, accounts: accounts(), prompt: "" });
+      expect(composed.overlay.modelRoles?.advisor).toBe(lead);
+      expect(composed.overlay.retry?.fallbackChains?.advisor).toEqual(fallback);
+      expect(composed.overlay.modelRoles?.plan).toBe("anthropic/native-model2:max");
+      expect(composed.overlay.modelRoles?.slow).toBe("anthropic/native-model2:max");
+    }
   });
 
   test("a free profile composes routine work without promoting to a paid premium rung, but refuses that explicit rung", async () => {

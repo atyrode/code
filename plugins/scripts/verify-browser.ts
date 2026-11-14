@@ -612,6 +612,7 @@ async function assertRoutes(browser: BrowserInstance, advisor: boolean): Promise
 /** Real pointer and keyboard dial commits update shared-role consumers, not just the selected words. */
 async function sharedDialScenario(browser: BrowserInstance, document: CatalogDocument, initial: Selection, label: string): Promise<void> {
   const compiled = compileCatalog(document), aliases = displayAliases(compiled);
+  const deliberativeEfforts = { minimal: "minimal", low: "medium", medium: "high", high: "xhigh", xhigh: "xhigh", max: "max" } as const;
   let selection: Selection = { ...initial, lane: { kind: "provider", family: "anthropic", blend: "only" }, capability: 2, thinking: "medium", advisor: "glance" };
   const screenshot = async (name: string) => {
     if (screenshotDirectory === undefined) return;
@@ -632,7 +633,7 @@ async function sharedDialScenario(browser: BrowserInstance, document: CatalogDoc
         `${description}: ${role} uses the requested rung and effort`);
     };
     for (const role of ["default", "task"]) expectLead(role, selection.capability, selection.thinking);
-    for (const role of ["plan", "slow"]) expectLead(role, selection.capability, "high");
+    for (const role of ["plan", "slow"]) expectLead(role, selection.capability, deliberativeEfforts[selection.thinking]);
     for (const role of ["smol", "memory"]) expectLead(role, 1, "medium");
     for (const role of ["widget", "tiny", "commit"]) expectLead(role, 1, "low");
     assert.equal(shown.find(route => route.role === "vision")?.thinking, compiled.clampThinking(compiled.rung("anthropic", selection.capability), "low"),
@@ -666,6 +667,18 @@ async function sharedDialScenario(browser: BrowserInstance, document: CatalogDoc
   await pointAway(browser);
   await until(browser, "leaving the route restores the effort-precedence explanation", preferenceNote);
   await screenshot("everyday");
+  await choose(browser, "thinking", "low");
+  selection = { ...selection, thinking: "low" };
+  await assertPolicy("Low main effort gives deliberative roles medium without a tier promotion");
+  await screenshot("main-low");
+  await focusRow(browser, "thinking");
+  await key(browser, "Home", 36);
+  await until(browser, "Home retains explicit minimal main effort", `${chosenKey("thinking")} === 'minimal'`);
+  selection = { ...selection, thinking: "minimal" };
+  await assertPolicy("Explicit minimal effort stays minimal for deliberative roles");
+  await screenshot("main-minimal");
+  await choose(browser, "thinking", "medium");
+  selection = { ...selection, thinking: "medium" };
   await choose(browser, "tier", "smart");
   selection = { ...selection, capability: 3 };
   await assertPolicy("An explicit strong choice");
@@ -676,6 +689,16 @@ async function sharedDialScenario(browser: BrowserInstance, document: CatalogDoc
   selection = { ...selection, capability: 4 };
   await assertPolicy("An explicit keyboard elite choice");
   await screenshot("elite");
+  await choose(browser, "thinking", "high");
+  selection = { ...selection, thinking: "high" };
+  await assertPolicy("High main effort gives deliberative roles xhigh within model limits");
+  await screenshot("main-high");
+  await focusRow(browser, "thinking");
+  await key(browser, "ArrowRight", 39);
+  await until(browser, "ArrowRight explicitly selects xhigh without maximum effort", `${chosenKey("thinking")} === 'xhigh'`);
+  selection = { ...selection, thinking: "xhigh" };
+  await assertPolicy("Deliberative xhigh does not silently become max");
+  await screenshot("main-xhigh");
   await focusRow(browser, "thinking");
   await key(browser, "End", 35);
   await until(browser, "End explicitly selects maximum main effort", `${chosenKey("thinking")} === 'max'`);

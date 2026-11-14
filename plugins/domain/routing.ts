@@ -30,6 +30,9 @@ export const ROLES = ["default", "task", "plan", "slow", "advisor", "vision", "s
 type Role = typeof ROLES[number];
 // OMP disables widget reasoning; its explicit cheap route also avoids one-shot main-model inheritance.
 const utilityThinking: Partial<Record<Role, ThinkingLevel>> = { smol: "medium", memory: "medium", widget: "low", tiny: "low", commit: "low" };
+const deliberativeThinking: Record<ThinkingLevel, ThinkingLevel> = {
+  minimal: "minimal", low: "medium", medium: "high", high: "xhigh", xhigh: "xhigh", max: "max",
+};
 const weights: Record<Role, number> = {
   default: 10, task: 6, plan: 3, slow: 2,
   advisor: 4, vision: 0.5, smol: 1, memory: 0.5, widget: 0.5, tiny: 0.5, commit: 0.5,
@@ -213,7 +216,7 @@ function selectedRoutes(catalog: CompiledCatalog, selection: Selection): Route[]
       const deliberative = role === "plan" || role === "slow";
       const family = lane.kind === "mixed" && deliberative ? "anthropic" : primary;
       lead = catalog.rung(family, capability);
-      if (deliberative) level = "high";
+      if (deliberative) level = deliberativeThinking[thinking];
       fallbacks = chain(lead);
     }
     if (!admits(lead)) throw new DomainError("budget_unsatisfiable");

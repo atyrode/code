@@ -106,10 +106,22 @@ describe("what each role runs, from its own chain and the pools", () => {
 
   test("a mixed team's planning and slow work fall back to Codex until Claude reopens, unless fallbacks are off", () => {
     const lane: Selection["lane"] = { kind: "mixed" };
-    const result = outcomes(selection({ lane }), reading({}, { blocks: blocked }));
-    for (const role of ["plan", "slow"])
-      expect(result.get(role)).toMatchObject({ kind: "falls-back", model: { key: "o2" }, pool: { id: "openai-codex:codex" }, until: now + 5 * HOUR });
-    expect(result.get("default")).toMatchObject({ kind: "leads", model: { key: "o2" }, pool: { id: "openai-codex:codex", verdict: { kind: "room" } } });
+    for (const [thinking, deliberative] of [
+      ["minimal", "minimal"], ["low", "medium"], ["medium", "high"],
+      ["high", "xhigh"], ["xhigh", "xhigh"], ["max", "max"],
+    ] as const) {
+      const result = outcomes(selection({ lane, thinking }), reading({}, { blocks: blocked }));
+      for (const role of ["plan", "slow"])
+        expect(result.get(role)).toMatchObject({ kind: "falls-back", model: { key: "o2", thinking: deliberative },
+          pool: { id: "openai-codex:codex" }, until: now + 5 * HOUR });
+      expect(result.get("default")).toMatchObject({ kind: "leads", model: { key: "o2", thinking },
+        pool: { id: "openai-codex:codex", verdict: { kind: "room" } } });
+      for (const role of ["smol", "memory"])
+        expect(result.get(role)).toMatchObject({ kind: "leads", model: { key: "o1", thinking: "medium" } });
+      for (const role of ["widget", "tiny", "commit"])
+        expect(result.get(role)).toMatchObject({ kind: "leads", model: { key: "o1", thinking: "low" } });
+      expect(result.get("vision")).toMatchObject({ kind: "leads", model: { key: "o2", thinking: "low" } });
+    }
     const off = outcomes(selection({ lane, fallback: false }), reading({}, { blocks: blocked }));
     for (const role of ["plan", "slow"])
       expect(off.get(role)).toEqual({ role, kind: "no-route", until: now + 5 * HOUR });

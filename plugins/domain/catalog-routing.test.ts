@@ -373,19 +373,61 @@ describe("structured route selection", () => {
     expect(catalog.family(route(review.routes, "advisor").lead.key)).toBe("deepseek");
   });
 
+  test("deliberation adjusts only effort, preserving explicit extremes and cheap helper routes", () => {
+    const catalog = compileCatalog(document());
+    for (const [thinking, deliberative] of [
+      ["minimal", "minimal"], ["low", "medium"], ["medium", "high"],
+      ["high", "xhigh"], ["xhigh", "xhigh"], ["max", "max"],
+    ] as const) {
+      for (const [lane, mainKey, deliberativeKey, helperKey, advisorKey] of [
+        [{ kind: "mixed" }, "o2", "a2", "o1", "a1"],
+        [{ kind: "provider", family: "openai", blend: "only" }, "o2", "o2", "o1", "o1"],
+        [{ kind: "provider", family: "anthropic", blend: "only" }, "a2", "a2", "a1", "a1"],
+        [{ kind: "provider", family: "anthropic", blend: "led" }, "a2", "a2", "a1", "o1"],
+      ] as const) {
+        const review = reviewCatalog(catalog, selection({ lane, thinking, advisor: "glance" }), daytime);
+        expect(review.selection.thinking).toBe(thinking);
+        for (const roleName of ["default", "task", "plan", "slow"]) {
+          const value = route(review.routes, roleName);
+          const deliberates = roleName === "plan" || roleName === "slow";
+          const effort = deliberates ? deliberative : thinking;
+          expect(value.lead).toEqual({ key: deliberates ? deliberativeKey : mainKey, thinking: effort });
+          for (const choice of [value.lead, ...value.fallback]) {
+            expect(choice.thinking).toBe(effort);
+            expect(catalog.model(choice.key).tier).toBeLessThanOrEqual(2);
+          }
+        }
+        for (const [roleName, effort] of [
+          ["smol", "medium"], ["memory", "medium"], ["widget", "low"], ["tiny", "low"], ["commit", "low"],
+        ] as const) {
+          const value = route(review.routes, roleName);
+          expect(value.lead).toEqual({ key: helperKey, thinking: effort });
+          expect(value.fallback).toEqual([]);
+        }
+        expect(route(review.routes, "advisor").lead).toEqual({ key: advisorKey, thinking: "low" });
+        const image = route(review.routes, "vision");
+        expect([image.lead, ...image.fallback].every(choice => choice.thinking === "low")).toBe(true);
+      }
+    }
+  });
+
   test("thinking gaps round down and floors round up without propagating main extremes to utility roles", () => {
     const input = document();
     input.models = input.models.map(value => ({ ...value, thinkingLevels: ["low", "medium", "high", "max"] }));
     const catalog = compileCatalog(input);
-    const gap = reviewCatalog(catalog, selection({ thinking: "xhigh" }), daytime);
-    expect(route(gap.routes, "default").lead.thinking).toBe("high");
-    expect(route(gap.routes, "plan").lead.thinking).toBe("high");
-    const floor = reviewCatalog(catalog, selection({ thinking: "minimal" }), daytime);
-    expect(route(floor.routes, "default").lead.thinking).toBe("low");
-    expect(route(floor.routes, "slow").lead.thinking).toBe("high");
+    for (const [thinking, main, deliberative] of [
+      ["minimal", "low", "low"], ["low", "low", "medium"], ["medium", "medium", "high"],
+      ["high", "high", "high"], ["xhigh", "high", "high"], ["max", "max", "max"],
+    ] as const) {
+      const review = reviewCatalog(catalog, selection({ thinking }), daytime);
+      for (const [roleName, effort] of [["default", main], ["task", main], ["plan", deliberative], ["slow", deliberative]] as const) {
+        const value = route(review.routes, roleName);
+        expect([value.lead, ...value.fallback].every(choice => choice.thinking === effort)).toBe(true);
+      }
+    }
     const maximum = reviewCatalog(catalog, selection({ thinking: "max", advisor: "glance" }), daytime);
     for (const roleName of ["default", "task"]) expect(route(maximum.routes, roleName).lead.thinking).toBe("max");
-    for (const roleName of ["plan", "slow"]) expect(route(maximum.routes, roleName).lead.thinking).toBe("high");
+    for (const roleName of ["plan", "slow"]) expect(route(maximum.routes, roleName).lead.thinking).toBe("max");
     expect(route(maximum.routes, "smol").lead).toEqual({ key: "o1", thinking: "medium" });
     expect(route(maximum.routes, "memory").lead).toEqual({ key: "o1", thinking: "medium" });
     for (const roleName of ["widget", "tiny", "commit"]) expect(route(maximum.routes, roleName).lead).toEqual({ key: "o1", thinking: "low" });

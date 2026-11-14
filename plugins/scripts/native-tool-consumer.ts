@@ -76,7 +76,7 @@ export async function createNativeToolConsumer(context: NativeToolConsumerContex
   check(!Object.hasOwn(composed.overlay, "memory"), "memory-execution-enabled");
   check(canonicalJobJson(composed.overlay.retry?.fallbackChains?.memory) === canonicalJobJson([]), "memory-retry-chain-inherited");
   check(canonicalJobJson(composed.overlay.modelRoles) === canonicalJobJson({
-    default: "openai/gpt-5:low", task: "openai/gpt-5:low", plan: "openai/gpt-5:high", slow: "openai/gpt-5:high",
+    default: "openai/gpt-5:low", task: "openai/gpt-5:low", plan: "openai/gpt-5:medium", slow: "openai/gpt-5:medium",
     vision: "openai/gpt-5:low", smol: "openai/gpt-5-mini:medium", memory: "openai/gpt-5-mini:medium", widget: "openai/gpt-5-mini:low",
     tiny: "openai/gpt-5-mini:low", commit: "openai/gpt-5-mini:low",
   }), "shared-role-effort-or-premium-boundary-changed");

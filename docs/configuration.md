@@ -513,8 +513,11 @@ A fresh profile chooses a complete served Sonnet lane at medium, otherwise serve
 at medium, or a real lower rung when the everyday target is unavailable. It never
 fills upward to a premium default. With no included accounts, the bundled starter remains an explicitly
 render-only preview: dials can be explored, but the no-account launch refusal stays.
-Saved explicit choices remain visible. Planning and slow use the selected tier at
-high, without a hidden premium tier; explicit strong/elite selections remain available.
+Saved explicit choices remain visible. Routine medium profiles configure planning and
+slow at high on the selected model tier, without a hidden premium tier. Their configured
+effort mapping is `minimal→minimal`, `low→medium`, `medium→high`, `high→xhigh`,
+`xhigh→xhigh`, `max→max`, followed by model-metadata clamping. Explicit max remains
+available; xhigh is never silently promoted to max. Strong/elite model choices remain explicit.
 Automatic fallbacks stay at or below both that role's explicitly selected tier and
 its lead tier; a sparse ladder cannot quietly substitute a premium model. An explicitly
 selected advisor review/audit has its own tier, independent of the main model dial.

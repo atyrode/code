@@ -108,6 +108,18 @@ describe("the settings' values", () => {
     expect(slots.lane.options.map(option => option.value)).toEqual(["gpt-only", "gpt-led", "mixed", "claude-led", "claude-only"]);
   });
 
+  test("explicit xhigh and max options retain their deliberative routes without a premium tier move", () => {
+    const slots = statementSlots(context(team(), pools()), vocab);
+    for (const thinking of ["xhigh", "max"] as const) {
+      const option = slots.thinking.options.find(option => option.value === thinking)!;
+      expect(option.available).toBe(true);
+      expect(option.selection?.thinking).toBe(thinking);
+      for (const role of ["default", "task", "plan", "slow"]) {
+        expect(option.review?.routes.find(route => route.role === role)?.lead).toEqual({ key: "o2", thinking });
+      }
+    }
+  });
+
   test("an extra says what its present position means and what turning it would do, never the same sentence twice", () => {
     const fallbacks = statementSlots(context(team({ fallback: true }), pools()), vocab).extras.options.find(option => option.value === "fallbacks")!;
     expect(fallbacks.on).toBe(true);
@@ -203,12 +215,14 @@ describe("a Launch press stops on a review unlike what the panel showed", () => 
     expect(reviewMatches(projected, { review: shown, accountPool: pool })).toBe(true);
     expect(reviewMatches(projected, { review: review({ lane: gptOnly }), accountPool: pool })).toBe(false);
     expect(reviewMatches(projected, { review: shown, accountPool: { "openai-codex": [{}], anthropic: [] } })).toBe(false);
+    expect(reviewMatches(projected, { review: review({ lane: mixed, thinking: "high" }), accountPool: pool })).toBe(false);
+    expect(reviewMatches(projected, { review: review({ lane: mixed, thinking: "max" }), accountPool: pool })).toBe(false);
     expect(reviewMatches(projectionOf(shown, null), { review: shown, accountPool: pool })).toBe(false);
   });
 
   test("what the review shows unlike the projection is said role by role, grouped where roles go alike", () => {
     expect(movesText(catalog, review(), shown)).toBe("plan, slow o2 → a2");
-    expect(movesText(catalog, review(), review({ thinking: "high" }))).toBe("default, task medium → high");
+    expect(movesText(catalog, review(), review({ thinking: "high" }))).toBe("default, task medium → high · plan, slow high → x-high");
     expect(movesText(catalog, shown, shown)).toBe("");
   });
 
