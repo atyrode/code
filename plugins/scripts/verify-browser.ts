@@ -3943,10 +3943,11 @@ async function modelsSheetScenario(browser: BrowserInstance, server: TestServer,
     await waitFor(() => benchmarks.size === 1, timeout, 50);
     assert.deepEqual(await browser.evaluate(`({ parts: ${goParts(modelsSheet)},
       providers: [...document.querySelectorAll('${modelsSheet} [data-side="measuring"] .${G}models-pw')].map(el => el.getAttribute('aria-label')).sort(),
-      probing: [...document.querySelectorAll('${modelsSheet} [data-cell][data-key]')].filter(cell => (cell.dataset.probing !== undefined) !== ['anthropic', 'openai'].includes(cell.dataset.family)).map(cell => cell.dataset.cell) })`), {
+      probing: [...document.querySelectorAll('${modelsSheet} [data-cell][data-key][data-probing]')].map(cell => cell.dataset.key).sort() })`), {
       parts: [["measuring models", null], [`0 of ${charge.benchmark.candidates.length}`, "strong"]],
-      providers: [`Claude: 0 of ${requests("anthropic")} measured`, `Codex: 0 of ${requests("openai-codex")} measured`], probing: [],
-    }, "Checking says what it has measured, and the rungs of every provider still owed are probing, no other");
+      providers: [`Claude: 0 of ${requests("anthropic")} measured`, `Codex: 0 of ${requests("openai-codex")} measured`],
+      probing: starter.models.filter(model => charge.benchmark.candidates.some(candidate => candidate.provider === model.provider)).map(model => model.key).sort(),
+    }, "Checking says what it has measured, and only models of the exact charged providers are probing, not another provider in the same family");
     for (const run of benchmarks.values()) run.settled = true;
 
     // Checked: the measured list is put in use, the head says when, and beside it is what the check left out, each with its
