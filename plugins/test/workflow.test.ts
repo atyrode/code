@@ -4,7 +4,7 @@ import { actionDoor, actionSchemas as ompActionSchemas, BENCHMARK_OPERATION_ID, 
 import { approvalCovers, createCodeWorkflowClient, inventoryArtifact, VerificationError, type VerificationOptions, type VerificationProgress } from "../code/workflow.ts";
 import { verificationState } from "../code/generator/verification.ts";
 import { PublicJobSchema, type PublicJob, type TerminalSummary } from "@manifold/protocol";
-import { actionSchemas, type ActionResult, type Configuration } from "../code/contract.ts";
+import { actionSchemas, type ActionResult, type Configuration, type VerificationProvenance } from "../code/contract.ts";
 import { compileCatalog } from "../domain/catalog.ts";
 import type { Selection } from "../domain/contracts.ts";
 import { inventoryPlan } from "../domain/probe.ts";
@@ -347,12 +347,13 @@ test("unexpected premium reachability keeps the exact completed check without pr
     expect(draft.digest).toBe(digestOf(draft.document));
     expect(draft.document.models).toEqual([expect.objectContaining({ provider: "openai-codex", id: "gpt-6-astra", tier: 4,
       tokensPerSecond: 50, timeToFirstTokenMs: 300 })]);
-    expect(draft.provenance).toEqual({ ompVersion: pending.charge.inventory.ompVersion,
+    const provenance: VerificationProvenance = { ompVersion: pending.charge.inventory.ompVersion,
       inventoryArtifactSha256: pending.charge.inventoryArtifactSha256, catalogRevision: pending.charge.catalogRevision,
       inventoryObservedAt: pending.charge.inventory.observedAt, benchmarkCompletedAt: 8_000 + f.benchmarked.length,
-      providers: ["openai-codex"], poolIdentityDigest: pending.charge.pool.poolIdentityDigest });
+      providers: ["openai-codex"], poolIdentityDigest: pending.charge.pool.poolIdentityDigest };
+    expect(draft.provenance).toEqual(provenance);
     expect((await f.workflow.readChecks()).checks).toEqual([{ poolIdentityDigest: pending.charge.pool.poolIdentityDigest,
-      budget: pending.charge.budget, digest: draft.digest, provenance: draft.provenance, recordedAt: 10_000, models: ["openai-codex/gpt-6-astra"] }]);
+      budget: pending.charge.budget, digest: draft.digest, provenance, recordedAt: 10_000, models: ["openai-codex/gpt-6-astra"] }]);
     const kept = JSON.parse([...f.store].find(([key]) => key.startsWith("checks/"))![1]);
     expect(kept).toMatchObject({ document: draft.document, digest: draft.digest, provenance: draft.provenance,
       poolIdentityDigest: pending.charge.pool.poolIdentityDigest, budget: pending.charge.budget });

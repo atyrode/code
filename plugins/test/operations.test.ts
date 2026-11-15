@@ -586,7 +586,7 @@ describe("pure client-supplied policy composition", () => {
         selection: { ...record.selection!, capability: 2, thinking: "max", advisor, fallback: true } });
       const composed = await accepted(f, "composeSession", { ...workspace, expectedRevision: record.revision, accounts: accounts(), prompt: "" });
       expect(composed.overlay.modelRoles?.advisor).toBe(lead);
-      expect(composed.overlay.retry?.fallbackChains?.advisor).toEqual(fallback);
+      expect(composed.overlay.retry?.fallbackChains?.advisor).toEqual([...fallback]);
       expect(composed.overlay.modelRoles?.plan).toBe("anthropic/native-model2:max");
       expect(composed.overlay.modelRoles?.slow).toBe("anthropic/native-model2:max");
     }

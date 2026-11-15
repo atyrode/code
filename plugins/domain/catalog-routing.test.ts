@@ -328,7 +328,7 @@ describe("new premium main-model admission", () => {
     const before = compileCatalog(document());
     const after = compileCatalog({ schemaVersion: 1, models: [model("a4", "anthropic", 4)] });
     const chosen = selectionForLane({ kind: "provider", family: "anthropic", blend: "only" }, 2);
-    const proposed = { provider: "anthropic", id: "native-a4", tier: 4 };
+    const proposed = { provider: "anthropic", id: "native-a4", tier: 4 as const };
     expect(newPremiumLead(after, chosen, { catalog: before, selection: chosen })).toEqual(proposed);
     expect(newPremiumLead(after, chosen, null)).toEqual(proposed);
     expect(newPremiumLead(after, { ...chosen, capability: 4 }, null)).toBeNull();

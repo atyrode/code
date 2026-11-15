@@ -147,14 +147,15 @@ describe("pure typed scaffolding", () => {
       expect(result.document.models.filter(model => model.provider === provider).map(model => [model.tier, model.id]))
         .toEqual([[1, "series1"], [2, "series2"], [3, "series3"], [4, "series4"]]);
       for (const capability of [1, 2, 3, 4] as const) {
+        const effort = ({ 1: "low", 2: "medium", 3: "high", 4: "max" } as const)[capability];
         const review = reviewCatalog(catalog, { ...defaultSelection(catalog), capability, thinking: "max",
           lane: { kind: "provider", family, blend: "only" } }, 200);
         expect(review.available.capabilities).toEqual([1, 2, 3, 4]);
         const overlay = compileOmpOverlay(catalog, review.selection, review.routes);
-        expect(overlay.modelRoles?.default).toBe(`${provider}/series${capability}:${["low", "medium", "high", "max"][capability - 1]}`);
+        expect(overlay.modelRoles?.default).toBe(`${provider}/series${capability}:${effort}`);
         for (const role of ["plan", "slow"]) {
           expect(review.routes.find(route => route.role === role)?.lead).toEqual({
-            key: `${provider}.series${capability}`, thinking: ["low", "medium", "high", "max"][capability - 1],
+            key: `${provider}.series${capability}`, thinking: effort,
           });
         }
         if (capability === 4) {
@@ -375,7 +376,7 @@ describe("unmeasured inventory intent planning", () => {
     const inv = fourLevelInventory(), planned = inventoryPlan(inv, "any");
     expect(planned).toEqual({ schemaVersion: 1, models: expect.any(Array) });
     expect(planned.models.map(model => [model.provider, model.tier, model.id])).toEqual(
-      ["openai-codex", "anthropic"].flatMap(provider => [1, 2, 3, 4].map(tier => [provider, tier, `series${tier}`])));
+      ["openai-codex", "anthropic"].flatMap(provider => ([1, 2, 3, 4] as const).map(tier => [provider, tier, `series${tier}`])));
     for (const model of planned.models) {
       const source = inv.models.find(row => row.provider === model.provider && row.id === model.id)!;
       expect(model).toMatchObject({
