@@ -1540,7 +1540,7 @@ const BOXES = boxesOf(stage, SAID_WORDS);
 /** The whole panel: the stage and, while one is open, the layer over it, laid out in the panel's root. */
 const PANEL_BOXES = boxesOf(generator, SAID_WORDS);
 /** The checked-age text leaf in Setup's profile facts follows the wall clock, like the sheet head's state. */
-const CHECKED_AGE_LEAF = `element.matches('.${G}setup-facts .${G}setup-q') && element.childElementCount === 0 && /^· checked (?:just now|[0-9]+m ago)$/.test((element.textContent ?? '').trim())`;
+const CHECKED_AGE_LEAF = `element.matches('.${G}setup-facts .${G}setup-q') && element.childElementCount === 0 && /^· checked (?:just now|[0-9]+[mhd] ago)$/.test((element.textContent ?? '').trim())`;
 const SHEET_BOXES = boxesOf(`${generator} ${openSheetHost}`, `element.closest('.${G}sheet-state, .plugin-atyrode_code__sr') || element.parentElement?.closest('[data-readout]') || (${CHECKED_AGE_LEAF})`);
 const SHIFTED = `(() => {
   const at = element => { let x = 0, y = 0; for (let node = element; node; node = node.offsetParent) { x += node.offsetLeft; y += node.offsetTop; } return [x, y]; };
