@@ -414,6 +414,22 @@ describe("a stored catalog read at its named families' actual tiers", () => {
     expect(defaultSelection(served)).toMatchObject({ lane: { kind: "provider", family: "openai", blend: "only" }, capability: 3 });
   });
 
+  test("a top tier the stored ladder never had is an explicit actual-tier choice, not an old rank", () => {
+    // Fable laddered cheapest at 1 under Sonnet 2 and Opus 3 is read at 4: the stored top was 3.
+    const catalog = compileCatalog({ schemaVersion: 1, models: [
+      model("fable", "anthropic", 1, { id: "claude-fable-5" }), model("sonnet", "anthropic", 2, { id: "claude-sonnet-5" }),
+      model("opus", "anthropic", 3, { id: "claude-opus-5" }),
+    ] });
+    expect(catalog.models.map(value => [value.key, value.tier])).toEqual([["fable", 4], ["sonnet", 2], ["opus", 3]]);
+    const elite = reviewCatalog(catalog, anthropicOnly(4), daytime);
+    expect([route(elite.routes, "default").lead.key, elite.available.capabilities]).toEqual(["fable", [1, 2, 3, 4]]);
+    expect(newPremiumLead(catalog, anthropicOnly(4), null)).toBeNull();
+    // Ranks that named a model before keep it or are refused; the automatic choice stays below elite.
+    expect(() => reviewCatalog(catalog, anthropicOnly(1), daytime)).toThrow("code_invalid_selection");
+    expect([leadKey(catalog, 2), leadKey(catalog, 3)]).toEqual(["sonnet", "opus"]);
+    expect(defaultSelection(catalog)).toMatchObject({ lane: { kind: "provider", family: "anthropic", blend: "only" }, capability: 2 });
+  });
+
   test("an under-rank model that keeps its identity stays previewable, but its old rank is never premium consent", () => {
     const lone = compileCatalog({ schemaVersion: 1, models: [model("opus", "anthropic", 1, { id: "claude-opus-5" })] });
     const cheap = anthropicOnly(1), premium = { provider: "anthropic", id: "claude-opus-5", tier: 3 };

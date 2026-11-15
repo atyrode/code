@@ -164,12 +164,13 @@ export class CompiledCatalog {
    * so a capability 2 that meant Opus would now mean Haiku; Sonnet stored at 4 over Opus at 3 is
    * read at 2, so a capability 2 that meant Opus would now mean Sonnet. Neither model is chosen for
    * the caller; the tier each now holds still resolves it explicitly. A rung that keeps its model
-   * is never refused, and where no model of the family moved, none changes.
+   * is never refused, and where no model of the family moved, none changes. A capability above the
+   * stored ladder's top named no model before, so a new actual tier (Fable read at 4) is never refused.
    */
   assertUnambiguousSelection(family: string, capability: number): void {
     const original = this.#stored.get(family);
-    if (!original) return;
-    const before = original[Math.max(1, Math.min(original[4] === undefined ? 3 : 4, capability))];
+    if (!original || capability > (original[4] === undefined ? 3 : 4)) return;
+    const before = original[Math.max(1, capability)];
     if (before !== undefined && before !== this.rung(family, capability)) throw new DomainError("invalid_selection");
   }
 
