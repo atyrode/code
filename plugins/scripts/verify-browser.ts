@@ -19,7 +19,7 @@ import type { CatalogDocument, Selection } from "../domain/contracts.ts";
 import { compileCatalog } from "../domain/catalog.ts";
 import { catalogFromObservations, catalogFromMetadata, inventoryDraft } from "../domain/probe.ts";
 import { providerPolicy } from "../domain/providers.ts";
-import { defaultSelection, reviewCatalog } from "../domain/routing.ts";
+import { defaultSelection, reviewCatalog, selectionForLane } from "../domain/routing.ts";
 import { displayAliases } from "../code/generator/aliases.ts";
 import { TIERS } from "../code/generator/sheets-model.ts";
 import { readStoredDraft, storedDraftKey, type StoredDraft } from "../code/generator/draft-store.ts";
@@ -5512,23 +5512,43 @@ async function tieredUsageScenario(browser: BrowserInstance, server: TestServer,
  * struck, cannot be picked and says why when pointed at, pressed and aloud. GPT-led would cross to Claude while GPT only
  * runs, so GPT stays pickable, says beforehand that it lands on GPT only and does; there the `only` box is checked and
  * struck, and pointing at it, focusing it or Space on it says why and leaves it checked. The observation and the reading
- * are synthetic, a Claude slot beside a Codex one; the exclusion is the one save, made before the panel opens, and the
- * panel saves nothing.
+ * are synthetic, a Claude slot beside a Codex one. Before the panel opens, the real starter metadata is staged unmeasured
+ * and promoted with an explicit Mixed profile while the pool still holds both, then one account save excludes Claude's
+ * account and keeps that profile; the panel saves nothing.
  */
 async function leadStruckScenario(browser: BrowserInstance, server: TestServer, writer: TokenGrant): Promise<void> {
   const workspace = await createContainer(server, "Struck leads", "canvas");
   const target = { containerId: workspace.id };
-  const created = await callAction(server, writer.token, "atyrode.code.initializeConfiguration", { ...target, expectedRevision: 0 });
-  assert(created.ok);
   const claude = fixtureAccounts([1]);
-  const excluded = await callAction(server, writer.token, "atyrode.code.changeAccounts", { ...target, expectedRevision: (created.result as Configuration).revision,
-    change: { kind: "set-account", enabled: false, reference: claude.accounts[0]!.reference } });
-  assert(excluded.ok, "The saved choices exclude Claude's one account");
-  const base = await readConfiguration(server, writer, target);
-  await arrangeWorkbench(server, writer);
   const codex = { reference: { kind: "credential" as const, scope: fixtureScope, provider: "openai-codex", credentialId: 3 }, credentialId: 3,
     type: "api_key" as const, identityKey: null, email: null, disabled: false, blocks: [] };
   const observation = (): OmpResult<"accounts"> => ({ ...claude, observedAt: Date.now() - 1_000, accounts: [...claude.accounts, codex] });
+  const declared = new Set(observation().accounts.map(account => account.reference.provider));
+  const created = await callAction(server, writer.token, "atyrode.code.initializeConfiguration", { ...target, expectedRevision: 0 });
+  assert(created.ok);
+  const catalogRead = await callAction(server, writer.token, "atyrode.omp.readModelCatalog", { providers: starterProviders });
+  assert(catalogRead.ok, "The pinned OMP bundle supplies the starter's passive metadata");
+  const starter = catalogFromMetadata(ModelCatalogSnapshotSchema.parse(catalogRead.result), "any");
+  // Where each role's lead lives as the published starter routes it, its addresses only: no account or quota is judged.
+  const catalog = compileCatalog(starter), reviewedAt = Date.now();
+  const leadProviders = (selection: Selection) => [...new Set(reviewCatalog(catalog, selection, reviewedAt).routes.map(route => catalog.model(route.lead.key).provider))].sort();
+  const mixed = selectionForLane({ kind: "mixed" }, 3);
+  assert(leadProviders(mixed).every(provider => declared.has(provider)), "Every role Mixed leads is on a provider of the declared Claude and Codex pool");
+  assert.deepEqual(leadProviders(selectionForLane({ kind: "provider", family: "openai", blend: "only" }, 3)), ["openai-codex"],
+    "GPT only, where GPT-led falls once Claude is excluded, leads every role on the declared Codex account's provider");
+  const staged = await callAction(server, writer.token, "atyrode.code.stageCatalog", { ...target, expectedRevision: (created.result as Configuration).revision, document: starter });
+  assert(staged.ok, staged.ok ? "" : staged.denial.message);
+  const reviewInput = { ...target, expectedRevision: (staged.result as Configuration).revision, source: "draft" as const, selection: mixed };
+  const reviewed = await callAction(server, writer.token, "atyrode.code.reviewCatalog", reviewInput);
+  assert(reviewed.ok, reviewed.ok ? "" : reviewed.denial.message);
+  const promoted = await callAction(server, writer.token, "atyrode.code.promoteCatalog", { ...reviewInput, reviewDigest: (reviewed.result as ActionResult<"reviewCatalog">).reviewDigest });
+  assert(promoted.ok, promoted.ok ? "" : promoted.denial.message);
+  const excluded = await callAction(server, writer.token, "atyrode.code.changeAccounts", { ...target, expectedRevision: (promoted.result as Configuration).revision,
+    change: { kind: "set-account", enabled: false, reference: claude.accounts[0]!.reference } });
+  assert(excluded.ok, "The saved choices exclude Claude's one account");
+  const base = await readConfiguration(server, writer, target);
+  assert.deepEqual(base.configuration?.selection, mixed, "Excluding Claude's account keeps the deliberately saved Mixed profile");
+  await arrangeWorkbench(server, writer);
   const fixture = await intercept(browser, server, name => name === "atyrode.omp.accounts.accounts" ? { ok: true, result: observation() }
     : name === "atyrode.omp.accounts.usage" ? { ok: true, result: fixtureUsage(observation()) } : undefined);
   /** The readout warns with `why`. */
@@ -5538,7 +5558,7 @@ async function leadStruckScenario(browser: BrowserInstance, server: TestServer, 
     const claudeLead = word("lane", "anthropic"), gptLead = word("lane", "openai");
     await until(browser, "Claude's lead is struck and names why",
       `${claudeLead}?.dataset.off !== undefined && ${claudeLead}.getAttribute('aria-disabled') === 'true' && !!${claudeLead}.getAttribute('aria-description')`);
-    assert.equal(await browser.evaluate(chosenKey("lane")), "mixed", "The initialized profile leads Mixed");
+    assert.equal(await browser.evaluate(chosenKey("lane")), "mixed", "The deliberately saved profile leads Mixed");
     const why = await browser.evaluate<string>(`${claudeLead}.getAttribute('aria-description')`);
     await pointOf(browser, claudeLead);
     await until(browser, "pointing at the struck lead says why", `${warns(why)} && ${readout}.querySelector('b')?.textContent === 'Claude'`);
