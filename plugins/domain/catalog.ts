@@ -46,8 +46,8 @@ function fill(ladder: (string | undefined)[]): boolean {
  * that name's tier; any other model keeps the tier its document gives it. A catalog stored before
  * its family was laddered by those names, a sparse Anthropic one laddered by price, so keeps its
  * raw document, digest and provenance untouched and is still read at actual tiers. The stored tier
- * and the ladder it built are kept privately, only to refuse a selector whose model that reading
- * would silently change (`assertUnambiguousSelection`).
+ * and the ladder it built are kept privately, only to refuse a kept selector whose model that
+ * reading would silently change (`assertUnambiguousSelection`, `isReclassified`).
  */
 export class CompiledCatalog {
   readonly models: readonly Model[];
@@ -97,8 +97,8 @@ export class CompiledCatalog {
     for (const [family, original] of stored) {
       // Two stored rungs read at one tier (two versions of one name, or a named model moved onto an
       // unnamed one's rung) both stay listed. The rung goes to the model whose tier did not move,
-      // else to the higher stored rung, whatever the document's order; a selector that named the
-      // other is refused, not silently given this one (`assertUnambiguousSelection`).
+      // else to the higher stored rung, whatever the document's order; a stored selector that named
+      // the other is refused, not silently given this one (`assertUnambiguousSelection`).
       const ladder = new Array<string | undefined>(5);
       for (const key of original) {
         if (key === undefined) continue;
@@ -159,18 +159,20 @@ export class CompiledCatalog {
   }
 
   /**
-   * Refuse (`invalid_selection`) a family and capability whose rung the stored tiers gave to one
-   * model and the effective tiers give to another: Opus stored at 2 over Haiku at 1 is read at 3,
-   * so a capability 2 that meant Opus would now mean Haiku; Sonnet stored at 4 over Opus at 3 is
-   * read at 2, so a capability 2 that meant Opus would now mean Sonnet. Neither model is chosen for
-   * the caller; the tier each now holds still resolves it explicitly. A rung that keeps its model
-   * is never refused, and where no model of the family moved, none changes. A capability above the
-   * stored ladder's top named no model before, so a new actual tier (Fable read at 4) is never refused.
+   * Refuse (`invalid_selection`) a STORED family and capability whose rung the stored tiers gave
+   * to one model and the effective tiers give to another: Opus stored at 2 over Haiku at 1 is read
+   * at 3, so a capability 2 that meant Opus would now mean Haiku; Sonnet stored at 4 over Opus at 3
+   * is read at 2, so a capability 2 that meant Opus would now mean Sonnet. A capability above the
+   * stored ladder's top meant its top rung, as `rung` clamps, so a stored 4 that meant Opus is
+   * refused once Fable is read at 4. A rung that keeps its model is never refused, and where no
+   * model of the family moved, none changes. Only a kept (stored or automatic) selector is admitted
+   * here, by its caller: reviewing, clamping or defaulting a choice resolves the effective rung,
+   * so a new explicit choice of the tier each model now holds always names it.
    */
   assertUnambiguousSelection(family: string, capability: number): void {
     const original = this.#stored.get(family);
-    if (!original || capability > (original[4] === undefined ? 3 : 4)) return;
-    const before = original[Math.max(1, capability)];
+    if (!original) return;
+    const before = original[Math.max(1, Math.min(original[4] === undefined ? 3 : 4, capability))];
     if (before !== undefined && before !== this.rung(family, capability)) throw new DomainError("invalid_selection");
   }
 

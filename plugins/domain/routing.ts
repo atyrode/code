@@ -143,8 +143,6 @@ function selectedRoutes(catalog: CompiledCatalog, selection: Selection): Route[]
   const { lane, capability, thinking } = selection;
   const primary = lane.kind === "mixed" ? "openai" : lane.family;
   const pure = lane.kind === "provider" && lane.blend === "only";
-  // A capability whose main model the catalog's effective tiers would silently change is refused.
-  catalog.assertUnambiguousSelection(primary, capability);
   const crossingFamily = (family: string): string | undefined => {
     const preferred = familyPolicy(family).crossTo;
     return preferred === null ? undefined : catalog.families.includes(preferred) ? preferred : catalog.families.find(candidate => candidate !== family);
@@ -292,7 +290,9 @@ export function reviewCatalog(catalog: CompiledCatalog, input: Selection, nowMs:
  *
  * The budget is never narrowed. It is a constraint rather than a preference, so a free selection
  * this catalog cannot serve refuses `budget_unsatisfiable` here instead of becoming a paid one.
- * Without a selection to keep, the catalog's own default is the answer.
+ * Without a selection to keep, the catalog's own default is the answer. Like `reviewCatalog`, it
+ * resolves the effective rungs; a caller keeping a stored selector admits it first
+ * (`CompiledCatalog.assertUnambiguousSelection`).
  */
 export function clampSelection(catalog: CompiledCatalog, wanted: Selection | null,
   serves: (provider: string) => boolean = () => true): Selection {
@@ -357,29 +357,42 @@ export type ModelAddress = { readonly provider: string; readonly id: string };
  * A newly selected main model above the requested tier needs an explicit premium choice.
  * A model this catalog reads at a tier its document did not store (`CompiledCatalog.isReclassified`)
  * always does: the stored rank it was listed under is no consent, nor is an earlier selection's.
- * Otherwise an unchanged active provider/model identity keeps its existing meaning across catalog
- * edits, unless the active catalog read that model at a tier its document did not store: then only
- * an active capability at or above the model's actual tier is consent.
- * Callers validate the proposed selection before consulting this admission boundary.
+ * So does a selector whose stored rank named another model (`assertUnambiguousSelection`): no
+ * earlier choice authorizes it under its model's actual tier. Otherwise an unchanged active
+ * provider/model identity keeps its existing meaning across catalog edits, unless the active
+ * catalog read that model at a tier its document did not store: then only an active capability at
+ * or above the model's actual tier is consent.
+ *
+ * An active selector whose stored rank named another model names no active identity, unless
+ * `previous.resolved`, the internal proof of the actual choice it was saved as, is exactly the
+ * model it resolves to now and at or under its capability. Any other proof is no proof, and the
+ * stored rank is admitted as strictly as without one. Callers validate the proposed selection
+ * before consulting this admission boundary.
  */
 export function newPremiumLead(catalog: CompiledCatalog, selection: Selection,
-  previous: { catalog: CompiledCatalog; selection: Selection } | null): (ModelAddress & { tier: Selection["capability"] }) | null {
+  previous: { catalog: CompiledCatalog; selection: Selection; resolved?: ModelAddress } | null): (ModelAddress & { tier: Selection["capability"] }) | null {
   const family = selection.lane.kind === "mixed" ? "openai" : selection.lane.family;
   const model = catalog.model(catalog.rung(family, selection.capability));
   if (model.tier === 0 || model.tier <= selection.capability) return null;
-  if (previous !== null && !catalog.isReclassified(model.key)) {
-    try {
-      const lane = previous.selection.lane, previousFamily = lane.kind === "mixed" ? "openai" : lane.family;
-      // An active capability whose model the effective tiers changed names no active identity.
+  const premium = { provider: model.provider, id: model.id, tier: model.tier };
+  if (previous === null || catalog.isReclassified(model.key)) return premium;
+  try {
+    catalog.assertUnambiguousSelection(family, selection.capability);
+    const lane = previous.selection.lane, previousFamily = lane.kind === "mixed" ? "openai" : lane.family;
+    const before = previous.catalog.model(previous.catalog.rung(previousFamily, previous.selection.capability));
+    const resolved = previous.resolved;
+    // An active capability whose model the effective tiers changed names no active identity,
+    // unless its saved proof is that very model at or under the capability it was chosen with.
+    if (resolved === undefined || resolved.provider !== before.provider || resolved.id !== before.id ||
+      before.tier > previous.selection.capability) {
       previous.catalog.assertUnambiguousSelection(previousFamily, previous.selection.capability);
-      const before = previous.catalog.model(previous.catalog.rung(previousFamily, previous.selection.capability));
-      if (before.provider === model.provider && before.id === model.id &&
-        (!previous.catalog.isReclassified(before.key) || previous.selection.capability >= model.tier)) return null;
-    } catch (error) {
-      if (!(error instanceof DomainError) || error.code !== "invalid_selection") throw error;
     }
+    if (before.provider === model.provider && before.id === model.id &&
+      (!previous.catalog.isReclassified(before.key) || previous.selection.capability >= model.tier)) return null;
+  } catch (error) {
+    if (!(error instanceof DomainError) || error.code !== "invalid_selection") throw error;
   }
-  return { provider: model.provider, id: model.id, tier: model.tier };
+  return premium;
 }
 
 /** The models routes name, leads and fallbacks, each once, in route order. */

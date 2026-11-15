@@ -363,7 +363,7 @@ describe("a stored catalog read at its named families' actual tiers", () => {
   const leadKey = (catalog: CompiledCatalog, capability: Selection["capability"]) =>
     route(reviewCatalog(catalog, anthropicOnly(capability), daytime).routes, "default").lead.key;
 
-  test("a cached sparse Anthropic ladder keeps its stored document and refuses only the rank whose model would change", () => {
+  test("a cached sparse Anthropic ladder keeps its stored document; only a kept rank whose model would change is refused", () => {
     // Laddered by price before Anthropic's names were its tiers: Sonnet unreachable, Opus took rung 2.
     const stored: CatalogDocument = { schemaVersion: 1, models: [
       model("haiku", "anthropic", 1, { id: "claude-haiku-5" }), model("opus", "anthropic", 2, { id: "claude-opus-5" }),
@@ -379,42 +379,57 @@ describe("a stored catalog read at its named families' actual tiers", () => {
     expect([route(elite.routes, "default").lead.key, elite.available.capabilities]).toEqual(["opus", [1, 2, 3]]);
     expect(newPremiumLead(catalog, anthropicOnly(3), { catalog, selection: anthropicOnly(2) })).toBeNull();
     expect(leadKey(catalog, 1)).toBe("haiku");
-    // Rank 2 meant Opus and would now mean Haiku: refused, neither model chosen behind the operator's back.
+    // A kept rank 2 meant Opus and would now mean Haiku: refused, neither model chosen behind the
+    // operator's back. A new explicit rank 2 previews the Haiku it now names, with no premium step.
     expect(() => catalog.assertUnambiguousSelection("anthropic", 2)).toThrow("code_invalid_selection");
-    expect(() => reviewCatalog(catalog, anthropicOnly(2), daytime)).toThrow("code_invalid_selection");
-    expect(() => clampSelection(catalog, anthropicOnly(2))).toThrow("code_invalid_selection");
+    expect(leadKey(catalog, 2)).toBe("haiku");
+    expect(clampSelection(catalog, anthropicOnly(2))).toEqual(anthropicOnly(2));
+    expect(newPremiumLead(catalog, anthropicOnly(2), { catalog, selection: anthropicOnly(2) })).toBeNull();
     // Reads and an automatic choice are not refused by one ambiguous rank.
     expect(catalog.model("opus")).toMatchObject({ id: "claude-opus-5", tier: 3 });
     expect(defaultSelection(catalog)).toMatchObject({ lane: { kind: "provider", family: "anthropic", blend: "only" }, capability: 1 });
+    expect(stored).toEqual(untouched);
   });
 
-  test("a stored third-rung Fable is refused rather than silently downgraded to Opus", () => {
+  test("a stored third-rung Fable's kept rank is refused rather than silently downgraded to Opus; each actual tier stays explicit", () => {
     const catalog = compileCatalog({ schemaVersion: 1, models: [
       model("haiku", "anthropic", 1, { id: "claude-haiku-5" }), model("opus", "anthropic", 2, { id: "claude-opus-5" }),
       model("fable", "anthropic", 3, { id: "claude-fable-5" }),
     ] });
     expect(catalog.models.map(value => value.tier)).toEqual([1, 3, 4]);
-    for (const capability of [2, 3] as const) expect(() => reviewCatalog(catalog, anthropicOnly(capability), daytime)).toThrow("code_invalid_selection");
-    const elite = reviewCatalog(catalog, anthropicOnly(4), daytime);
-    expect([route(elite.routes, "default").lead.key, elite.available.capabilities]).toEqual(["fable", [1, 2, 3, 4]]);
-    expect(leadKey(catalog, 1)).toBe("haiku");
+    // Kept ranks 2 and 3 meant Opus and Fable: refused, never silently Haiku and Opus. A kept 4 meant
+    // the stored top, Fable, which is still the rung it names.
+    for (const capability of [2, 3]) expect(() => catalog.assertUnambiguousSelection("anthropic", capability)).toThrow("code_invalid_selection");
+    for (const capability of [1, 4]) expect(() => catalog.assertUnambiguousSelection("anthropic", capability)).not.toThrow();
+    // A new explicit choice names each model at its actual tier, Opus at 3 and Fable at 4, with no premium step.
+    expect(([1, 2, 3, 4] as const).map(capability => leadKey(catalog, capability))).toEqual(["haiku", "haiku", "opus", "fable"]);
+    for (const capability of [2, 3, 4] as const) expect(newPremiumLead(catalog, anthropicOnly(capability), null)).toBeNull();
+    expect(reviewCatalog(catalog, anthropicOnly(4), daytime).available.capabilities).toEqual([1, 2, 3, 4]);
   });
 
-  test("a correctly stored model whose rung another model's actual tier takes is refused, never automatically replaced", () => {
+  test("a correctly stored model whose rung another model's actual tier takes is never automatically replaced, yet each stays explicit", () => {
     // Opus authored at its own tier 3; Sonnet misranked at 4 is read at 2 and now fills ranks 1 and 2.
-    const anthropic = [model("opus", "anthropic", 3, { id: "claude-opus-5" }), model("sonnet", "anthropic", 4, { id: "claude-sonnet-5" })];
-    const catalog = compileCatalog({ schemaVersion: 1, models: anthropic });
-    expect([catalog.isReclassified("opus"), catalog.model("sonnet").tier]).toEqual([false, 2]);
-    for (const capability of [1, 2] as const) expect(() => reviewCatalog(catalog, anthropicOnly(capability), daytime)).toThrow("code_invalid_selection");
-    expect(leadKey(catalog, 3)).toBe("opus");
-    expect(() => defaultSelection(catalog)).toThrow("code_invalid_selection");
-    // The automatic choice moves on to another family's complete profile instead of the ambiguous Sonnet rank.
-    const served = compileCatalog({ schemaVersion: 1, models: [...anthropic,
-      model("luna", "openai-codex", 1, { id: "gpt-6-luna" }), model("sol", "openai-codex", 3, { id: "gpt-6.1-sol" })] });
-    expect(defaultSelection(served)).toMatchObject({ lane: { kind: "provider", family: "openai", blend: "only" }, capability: 3 });
+    const stored: CatalogDocument = { schemaVersion: 1, models: [
+      model("opus", "anthropic", 3, { id: "claude-opus-5" }), model("sonnet", "anthropic", 4, { id: "claude-sonnet-5" }),
+    ] };
+    const untouched = structuredClone(stored);
+    const catalog = compileCatalog(stored);
+    expect([catalog.isReclassified("opus"), catalog.model("sonnet").tier, catalog.top("anthropic")]).toEqual([false, 2, 3]);
+    // Kept ranks 1 and 2 meant Opus and a kept 4 meant Sonnet: each is refused, never silently another model.
+    for (const capability of [1, 2, 4]) expect(() => catalog.assertUnambiguousSelection("anthropic", capability)).toThrow("code_invalid_selection");
+    expect(() => catalog.assertUnambiguousSelection("anthropic", 3)).not.toThrow();
+    // A new explicit choice previews each model at its actual tier: Sonnet at 2 with no premium step, Opus at 3.
+    expect(([1, 2, 3] as const).map(capability => leadKey(catalog, capability))).toEqual(["sonnet", "sonnet", "opus"]);
+    expect(clampSelection(catalog, anthropicOnly(2))).toEqual(anthropicOnly(2));
+    expect(newPremiumLead(catalog, anthropicOnly(2), { catalog, selection: anthropicOnly(2) })).toBeNull();
+    expect(newPremiumLead(catalog, anthropicOnly(1), null)).toEqual({ provider: "anthropic", id: "claude-sonnet-5", tier: 2 });
+    expect(() => reviewCatalog(catalog, anthropicOnly(4), daytime)).toThrow("code_invalid_selection");
+    // A fresh default is a new effective choice too; whether a kept selector still means it is its caller's to admit.
+    expect(defaultSelection(catalog)).toEqual(anthropicOnly(2));
+    expect(stored).toEqual(untouched);
   });
 
-  test("a top tier the stored ladder never had is an explicit actual-tier choice, not an old rank", () => {
+  test("a top tier the stored ladder never had is an explicit actual-tier choice, never a kept old rank", () => {
     // Fable laddered cheapest at 1 under Sonnet 2 and Opus 3 is read at 4: the stored top was 3.
     const catalog = compileCatalog({ schemaVersion: 1, models: [
       model("fable", "anthropic", 1, { id: "claude-fable-5" }), model("sonnet", "anthropic", 2, { id: "claude-sonnet-5" }),
@@ -424,21 +439,30 @@ describe("a stored catalog read at its named families' actual tiers", () => {
     const elite = reviewCatalog(catalog, anthropicOnly(4), daytime);
     expect([route(elite.routes, "default").lead.key, elite.available.capabilities]).toEqual(["fable", [1, 2, 3, 4]]);
     expect(newPremiumLead(catalog, anthropicOnly(4), null)).toBeNull();
-    // Ranks that named a model before keep it or are refused; the automatic choice stays below elite.
-    expect(() => reviewCatalog(catalog, anthropicOnly(1), daytime)).toThrow("code_invalid_selection");
+    // A kept 4 meant the stored top, Opus, and a kept 1 meant Fable: both refused, never silently changed.
+    for (const capability of [1, 4]) expect(() => catalog.assertUnambiguousSelection("anthropic", capability)).toThrow("code_invalid_selection");
+    for (const capability of [2, 3]) expect(() => catalog.assertUnambiguousSelection("anthropic", capability)).not.toThrow();
     expect([leadKey(catalog, 2), leadKey(catalog, 3)]).toEqual(["sonnet", "opus"]);
+    // A new rank 1 previews Sonnet, read above it: that needs Sonnet's actual tier, whatever came before or proves it.
+    const sonnet = { provider: "anthropic", id: "claude-sonnet-5", tier: 2 };
+    expect(leadKey(catalog, 1)).toBe("sonnet");
+    expect(newPremiumLead(catalog, anthropicOnly(1), null)).toEqual(sonnet);
+    expect(newPremiumLead(catalog, anthropicOnly(1), { catalog, selection: anthropicOnly(2) })).toEqual(sonnet);
+    expect(newPremiumLead(catalog, anthropicOnly(1), { catalog, selection: anthropicOnly(2), resolved: sonnet })).toEqual(sonnet);
+    // The automatic choice stays below elite.
     expect(defaultSelection(catalog)).toMatchObject({ lane: { kind: "provider", family: "anthropic", blend: "only" }, capability: 2 });
   });
 
   test("an under-rank model that keeps its identity stays previewable, but its old rank is never premium consent", () => {
     const lone = compileCatalog({ schemaVersion: 1, models: [model("opus", "anthropic", 1, { id: "claude-opus-5" })] });
-    const cheap = anthropicOnly(1), premium = { provider: "anthropic", id: "claude-opus-5", tier: 3 };
+    const cheap = anthropicOnly(1), opus = { provider: "anthropic", id: "claude-opus-5" }, premium = { ...opus, tier: 3 };
     expect(leadKey(lone, 1)).toBe("opus");
     expect(newPremiumLead(lone, cheap, { catalog: lone, selection: cheap })).toEqual(premium);
     expect(newPremiumLead(lone, cheap, null)).toEqual(premium);
     // An earlier actual-tier choice authorizes no persisted under-rank selection of the same stored rank.
     expect(newPremiumLead(lone, cheap, { catalog: lone, selection: anthropicOnly(3) })).toEqual(premium);
     expect(newPremiumLead(lone, anthropicOnly(2), { catalog: lone, selection: anthropicOnly(3) })).toEqual(premium);
+    expect(newPremiumLead(lone, anthropicOnly(2), { catalog: lone, selection: anthropicOnly(3), resolved: opus })).toEqual(premium);
     expect(newPremiumLead(lone, anthropicOnly(3), { catalog: lone, selection: cheap })).toBeNull();
     // The same Opus authored at its own tier keeps the unchanged active identity's existing exemption.
     const authored = compileCatalog({ schemaVersion: 1, models: [model("opus", "anthropic", 3, { id: "claude-opus-5" })] });
@@ -447,25 +471,58 @@ describe("a stored catalog read at its named families' actual tiers", () => {
     expect(newPremiumLead(lone, cheap, { catalog: authored, selection: cheap })).toEqual(premium);
     expect(newPremiumLead(authored, cheap, { catalog: lone, selection: cheap })).toEqual(premium);
     expect(newPremiumLead(authored, cheap, { catalog: lone, selection: anthropicOnly(3) })).toBeNull();
-    // Sonnet stored at 1 above an unreachable Haiku keeps rank 1 at its actual tier 2; Opus's rank 2 is refused.
+    expect(newPremiumLead(authored, cheap, { catalog: lone, selection: anthropicOnly(3), resolved: opus })).toBeNull();
+    // A proof of the saved Opus under its actual tier is no consent either.
+    expect(newPremiumLead(authored, cheap, { catalog: lone, selection: cheap, resolved: opus })).toEqual(premium);
+    // Sonnet stored at 1 above an unreachable Haiku keeps rank 1 at its actual tier 2; Opus's kept rank 2 is refused.
     const sparse = compileCatalog({ schemaVersion: 1, models: [
       model("sonnet", "anthropic", 1, { id: "claude-sonnet-5" }), model("opus", "anthropic", 2, { id: "claude-opus-5" }),
     ] });
     expect([leadKey(sparse, 1), leadKey(sparse, 3)]).toEqual(["sonnet", "opus"]);
     expect(newPremiumLead(sparse, cheap, { catalog: sparse, selection: cheap })).toEqual({ provider: "anthropic", id: "claude-sonnet-5", tier: 2 });
-    expect(() => reviewCatalog(sparse, anthropicOnly(2), daytime)).toThrow("code_invalid_selection");
-    // An active rank whose model changed names no active identity to exempt.
-    expect(newPremiumLead(sparse, cheap, { catalog: sparse, selection: anthropicOnly(2) })).toEqual({ provider: "anthropic", id: "claude-sonnet-5", tier: 2 });
+    expect(() => sparse.assertUnambiguousSelection("anthropic", 2)).toThrow("code_invalid_selection");
+    expect(leadKey(sparse, 2)).toBe("sonnet");
+    // An active rank whose model changed names no active identity to exempt, and no proof makes a reclassified model consent.
+    const sonnet = { provider: "anthropic", id: "claude-sonnet-5", tier: 2 };
+    expect(newPremiumLead(sparse, cheap, { catalog: sparse, selection: anthropicOnly(2) })).toEqual(sonnet);
+    expect(newPremiumLead(sparse, cheap, { catalog: sparse, selection: anthropicOnly(2), resolved: sonnet })).toEqual(sonnet);
   });
 
-  test("two stored rungs read at one tier both stay listed, one deterministic rung, the other's rank refused", () => {
+  test("an internal proof of a kept rank's saved choice exempts it only as exactly that model at or under its capability", () => {
+    const fable = { provider: "anthropic", id: "claude-fable-5" }, sonnet = { provider: "anthropic", id: "claude-sonnet-5" };
+    // Fable laddered at 1 under Sonnet 2 and Opus 3: a kept 4 meant Opus, a kept 1 meant Fable.
+    const ranked = compileCatalog({ schemaVersion: 1, models: [
+      model("fable", "anthropic", 1, { id: fable.id }), model("sonnet", "anthropic", 2, { id: sonnet.id }),
+      model("opus", "anthropic", 3, { id: "claude-opus-5" }),
+    ] });
+    const authored = compileCatalog({ schemaVersion: 1, models: [model("fable", "anthropic", 4, { id: fable.id })] });
+    const elite = { catalog: ranked, selection: anthropicOnly(4) }, premium = { ...fable, tier: 4 };
+    // Unproved, the kept rank names no active identity; proved as the very Fable it now names at 4, it does.
+    expect(newPremiumLead(authored, anthropicOnly(2), elite)).toEqual(premium);
+    expect(newPremiumLead(authored, anthropicOnly(2), { ...elite, resolved: fable })).toBeNull();
+    // A proof of another model, of the same id on another provider, or of an unknown id is no proof.
+    for (const resolved of [{ provider: "anthropic", id: "claude-opus-5" }, { provider: "vendor-example", id: fable.id }, { provider: "anthropic", id: "claude-fable-9" }]) {
+      expect(newPremiumLead(authored, anthropicOnly(2), { ...elite, resolved })).toEqual(premium);
+    }
+    // A proof under its model's actual tier is no proof: kept rank 1 is admitted as strictly as without one,
+    // while the unambiguous kept rank 2 keeps the unchanged authored identity's existing exemption.
+    const lonelySonnet = compileCatalog({ schemaVersion: 1, models: [model("sonnet", "anthropic", 2, { id: sonnet.id })] });
+    expect(newPremiumLead(lonelySonnet, anthropicOnly(1), { catalog: ranked, selection: anthropicOnly(1), resolved: sonnet })).toEqual({ ...sonnet, tier: 2 });
+    expect(newPremiumLead(lonelySonnet, anthropicOnly(1), { catalog: ranked, selection: anthropicOnly(2) })).toBeNull();
+  });
+
+  test("two stored rungs read at one tier both stay listed, one deterministic rung, the other's kept rank refused", () => {
     const versions = [model("old", "anthropic", 1, { id: "claude-opus-4-6" }), model("new", "anthropic", 2, { id: "claude-opus-5" })];
     for (const models of [versions, [...versions].reverse()]) {
       const catalog = compileCatalog({ schemaVersion: 1, models });
       expect(catalog.models.map(value => [value.key, value.tier]).sort()).toEqual([["new", 3], ["old", 3]]);
       expect(catalog.model("old")).toMatchObject({ id: "claude-opus-4-6", tier: 3 });
       expect([1, 2, 3, 4].map(tier => catalog.rung("anthropic", tier))).toEqual(["new", "new", "new", "new"]);
-      expect(() => reviewCatalog(catalog, anthropicOnly(1), daytime)).toThrow("code_invalid_selection");
+      // A kept rank 1 meant the old Opus; a new rank 1 names the rung's Opus, above it, and no proof of the old one helps.
+      expect(() => catalog.assertUnambiguousSelection("anthropic", 1)).toThrow("code_invalid_selection");
+      expect(leadKey(catalog, 1)).toBe("new");
+      expect(newPremiumLead(catalog, anthropicOnly(1), { catalog, selection: anthropicOnly(1),
+        resolved: { provider: "anthropic", id: "claude-opus-4-6" } })).toEqual({ provider: "anthropic", id: "claude-opus-5", tier: 3 });
       expect([leadKey(catalog, 2), leadKey(catalog, 3)]).toEqual(["new", "new"]);
     }
     // A model read at its own stored tier keeps its rung over one moved onto it.
@@ -475,7 +532,8 @@ describe("a stored catalog read at its named families' actual tiers", () => {
       const catalog = compileCatalog({ schemaVersion: 1, models });
       expect([1, 2, 3].map(tier => catalog.rung("anthropic", tier))).toEqual(["haiku", "haiku", "opus"]);
       expect(catalog.models.map(value => value.key).sort()).toEqual(["haiku", "old", "opus"]);
-      expect(() => reviewCatalog(catalog, anthropicOnly(2), daytime)).toThrow("code_invalid_selection");
+      expect(() => catalog.assertUnambiguousSelection("anthropic", 2)).toThrow("code_invalid_selection");
+      expect(leadKey(catalog, 2)).toBe("haiku");
       expect([leadKey(catalog, 1), leadKey(catalog, 3)]).toEqual(["haiku", "opus"]);
     }
     // A stored tier of its own is still one model per family rung.
