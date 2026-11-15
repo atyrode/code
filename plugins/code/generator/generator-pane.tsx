@@ -331,6 +331,8 @@ export function GeneratorPane(props: GeneratorPaneProps) {
     announce(text);
     say({ value, text, warn: true, color: null });
   }
+  // The saved profile Code refuses, shown as it reads with no local draft: its selected words choose it again for Save.
+  const reselect = model.savedChoiceNeeded && model.localDraft === null && model.profile?.source === "active";
   function commitTeam(next: Selection, say: string, value: string): boolean {
     if (!selection) return false;
     if (!teamGate.open) { refuse(teamGate.refusal.text, value); return false; }
@@ -347,7 +349,8 @@ export function GeneratorPane(props: GeneratorPaneProps) {
   }
   function choose(row: GeneratorRow, word: RowWord, via: "pointer" | "keyboard" | "scrub") {
     const value = row.kind === "switch" ? `${row.label} ${word.text}` : word.text;
-    if (!word.option?.selection || !commitTeam(word.option.selection, `${word.name}${word.says ? `: ${word.says}` : ""}`, value)) return;
+    const next = word.option?.selection ?? (word.selected && reselect ? selection : null);
+    if (!next || !commitTeam(next, `${word.name}${word.says ? `: ${word.says}` : ""}`, value)) return;
     // The keyboard says what it did where a pointer read it before choosing; a scrub says its whole way from where it began,
     // no longer a refusal it passed on the way.
     if (via === "keyboard") say(wordSaid(row, word));
@@ -583,7 +586,7 @@ export function GeneratorPane(props: GeneratorPaneProps) {
     </header>
     <div className={`${G}dials`} role="group" aria-label="profile">
       {rows ? rows.map((row, index) => <DialRow key={row.id} row={row} cursor={row.id === cursorRow} locked={!teamGate.open}
-        reselect={model.savedChoiceNeeded && model.localDraft === null && model.profile?.source === "active"}
+        reselect={reselect}
         onCursor={() => setCursor(row.id)} onChoose={(word, via) => choose(row, word, via)} onRefuse={(word, via) => refuseWord(row, word, via)}
         onHover={word => setHovered(current => word ? { kind: "word", row: row.id, key: word.key } : current?.kind === "word" && current.row === row.id ? null : current)}
         onFocusChange={on => { setFocused(current => on ? row.id : current === row.id ? null : current); if (on) setCursor(row.id); }}
