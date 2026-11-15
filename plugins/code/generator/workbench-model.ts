@@ -275,6 +275,10 @@ export function useWorkbench({ host, target, machine, rosterError, available }: 
   const [accountsFailure, setAccountsFailure] = useState<string | null>(null);
   const accountsBusy = useRef(false);
   const [dials, setDials] = useState<ProfileDraft | null>(null);
+  // The profile a completed check measured for and kept staged without putting in use (model-verification.ts `onRetained`),
+  // with what it was kept under: this sign-in, workspace and machine, and the record's exact revision and lists.
+  const [retained, setRetained] = useState<{ readonly client: HostServices["client"]; readonly principal: string; readonly containerId: string | null;
+    readonly machineId: string; readonly revision: number; readonly catalogDigest: string | null; readonly draftDigest: string; readonly selection: Selection } | null>(null);
   const [held, setHeld] = useState<HeldReview | null>(null);
   const [skillChoice, setSkillChoice] = useState<SkillChoice>(undefined);
   const [automation, setAutomation] = useState<AutomationChoice>(undefined);
@@ -321,7 +325,16 @@ export function useWorkbench({ host, target, machine, rosterError, available }: 
     try { return { document: catalogFromMetadata(metadata.data, "any"), error: null }; }
     catch (reason) { return { document: null, error: reason instanceof Error ? reason.message : codeOperationFailure(reason) }; }
   }, [dials !== null, storedDocument, configurationCurrent, metadata.data]);
-  const document = dials?.document ?? storedDocument ?? starter.document;
+  // THE CHECKED PROFILE, SHOWN ON ITS STAGED LIST. A check that kept its measured list staged keeps on show the profile it was
+  // run for, on that list, while the record, sign-in, workspace and machine are exactly those it was kept under and the rows
+  // hold no edit: it is what using the staged list chooses, not an edit. An edit, a discard or any other write ends it for good.
+  const retainedChoice = useMemo(() => retained && dials === null && record?.draft && retained.client === host.client &&
+    retained.principal === host.principal.id && retained.containerId === host.containerId && retained.machineId === machineId &&
+    record.revision === retained.revision && record.draft.digest === retained.draftDigest && (record.active?.digest ?? null) === retained.catalogDigest
+    ? { document: record.draft.document, selection: retained.selection } : null,
+  [retained, dials === null, record?.revision, record?.draft?.digest, record?.active?.digest, host.client, host.principal.id, host.containerId, machineId]);
+  useEffect(() => { if (retained && !retainedChoice) setRetained(null); }, [retained, retainedChoice]);
+  const document = dials?.document ?? retainedChoice?.document ?? storedDocument ?? starter.document;
   const compiled = useMemo(() => {
     if (!document) return null;
     try { return compileCatalog(document); } catch { return null; }
@@ -332,14 +345,14 @@ export function useWorkbench({ host, target, machine, rosterError, available }: 
     // gate and quota still receive the known empty pool and cannot treat the preview as entitlement.
     try { return defaultSelection(compiled, served?.size ? provider => served.has(provider) : undefined); } catch { return null; }
   }, [compiled, served]);
-  const selection = dials?.selection ?? record?.selection ?? initialSelection;
+  const selection = dials?.selection ?? retainedChoice?.selection ?? record?.selection ?? initialSelection;
   const profile = useMemo<ProfileDraft | null>(() => dials ?? (document && selection ? {
-    source: record?.active ? "active" : record?.draft ? "draft" : "starter",
+    source: record?.active && !retainedChoice ? "active" : record?.draft ? "draft" : "starter",
     document, selection, revision: record?.revision ?? observed?.revision ?? 0, initialized: record !== null,
     baseSelection: record?.selection ?? null, catalogDigest: record?.active?.digest ?? null,
     draftDigest: record?.draft?.digest ?? null, metadata: storedDocument ? null : metadata.data,
     metadataKey: storedDocument ? null : metadataKey,
-  } : null), [dials, document, selection, record, observed?.revision, storedDocument, metadata.data, metadataKey]);
+  } : null), [dials, retainedChoice, document, selection, record, observed?.revision, storedDocument, metadata.data, metadataKey]);
   // Freeze first-use material before the controls become interactive. Polls and
   // competing initialization can invalidate it, never silently replace it. A draft
   // kept before a reload comes first, once the record (and for a first-use draft the
@@ -446,7 +459,11 @@ export function useWorkbench({ host, target, machine, rosterError, available }: 
     },
     // A stopped first verification leaves the choices it created and nothing else (launch-step.ts `followInitialization`).
     onInitialized: (from, to) => setDials(previous => followInitialization(previous, from, to)),
-    onRetained: saved => { setSavedPolicy(saved); setDials(null); setHeld(null); } });
+    onRetained: (saved, checked) => {
+      setSavedPolicy(saved); setDials(null); setHeld(null);
+      setRetained(checked && saved.draft ? { client: host.client, principal: host.principal.id, containerId: host.containerId, machineId,
+        revision: saved.revision, catalogDigest: saved.active?.digest ?? null, draftDigest: saved.draft.digest, selection: checked } : null);
+    } });
   const authority = useRef({ client: host.client, authoring: host.authoring, writable, epoch: 0 });
   if (authority.current.client !== host.client || authority.current.authoring !== host.authoring || authority.current.writable !== writable)
     authority.current = { client: host.client, authoring: host.authoring, writable, epoch: authority.current.epoch + 1 };
@@ -558,7 +575,7 @@ export function useWorkbench({ host, target, machine, rosterError, available }: 
   }
   function discardChanges() {
     if (!allowed("edit-team")) return;
-    setDials(null); setSavedPolicy(null); setHeld(null); setMessage(null);
+    setDials(null); setSavedPolicy(null); setHeld(null); setMessage(null); setRetained(null);
   }
   async function save(explicitSelection?: Selection, launchAfterSave = false) {
     // Only a local edit of a verified active profile saves here; the bundled preview has no save.

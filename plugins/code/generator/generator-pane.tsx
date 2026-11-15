@@ -576,7 +576,7 @@ export function GeneratorPane(props: GeneratorPaneProps) {
     </header>
     <div className={`${G}dials`} role="group" aria-label="profile">
       {rows ? rows.map((row, index) => <DialRow key={row.id} row={row} cursor={row.id === cursorRow} locked={!teamGate.open}
-        reselect={model.savedChoiceNeeded && model.localDraft === null}
+        reselect={model.savedChoiceNeeded && model.localDraft === null && model.profile?.source === "active"}
         onCursor={() => setCursor(row.id)} onChoose={(word, via) => choose(row, word, via)} onRefuse={(word, via) => refuseWord(row, word, via)}
         onHover={word => setHovered(current => word ? { kind: "word", row: row.id, key: word.key } : current?.kind === "word" && current.row === row.id ? null : current)}
         onFocusChange={on => { setFocused(current => on ? row.id : current === row.id ? null : current); if (on) setCursor(row.id); }}

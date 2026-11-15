@@ -6,7 +6,7 @@ import { compileCatalog } from "../../domain/catalog.ts";
 import { CatalogDocumentSchema, type CatalogDocument, type Selection } from "../../domain/contracts.ts";
 import type { Exclusion } from "../../domain/probe.ts";
 import { orderedFamilies, providerPolicy } from "../../domain/providers.ts";
-import { defaultSelection, newPremiumLead, selectionForLane } from "../../domain/routing.ts";
+import { clampSelection, defaultSelection, newPremiumLead, selectionForLane } from "../../domain/routing.ts";
 import type { Configuration } from "../contract.ts";
 import { canWriteCodeWorkspace, codeOperationFailure, codeWorkflow } from "../machine-web.ts";
 import { accountWord, familyWord, hueOf, since, useMinuteTick } from "../ui.tsx";
@@ -19,6 +19,7 @@ import { Blocks, pressesGo, SheetCue, SheetGo, SheetHead, SheetKeys, SheetReadou
   type GoAction, type GoFix, type GoHandle, type GoPress, type GoTone, type Said } from "./sheet-frame.tsx";
 import { contextWords, exclusionWords, followPress, listChanges, modelRows, modelsPhase, money, saveFailure, speedLevel, thinkingRange, TIERS,
   type ListChange, type ModelRow, type SavePress } from "./sheets-model.ts";
+import { teamEdits, WORD_NAMES } from "./statement-model.ts";
 import { CHECKING_HOLD_MS } from "./verification.ts";
 import type { WorkbenchModel } from "./workbench-model.ts";
 
@@ -136,8 +137,11 @@ export function ModelsSheet({ host, model, machine, onBack, backRef, onPlace }: 
   const editFixes: readonly GoFix[] = [
     ...savable && localDraft ? [{ label: "save", run: () => { setSavePress({ draft: localDraft, before: model.message }); void model.actions.save(); } }] : [],
     { label: "discard edit", run: () => model.actions.discardChanges() }];
+  // A profile the person must confirm before the staged list is put in use with it: the new model's actual premium tier, or,
+  // when the staged list cannot form the profile shown, the nearest profile it can, with every setting it moves named.
   const [premium, setPremium] = useState<{
     readonly host: HostServices; readonly scope: string; readonly selection: Selection; readonly model: string; readonly effort: string; readonly tier: string;
+    readonly premium: boolean; readonly moves: readonly string[];
   } | null>(null);
   const promotionScope = JSON.stringify([record?.revision, active?.digest, draft?.digest, record?.selection, model.configurationCurrent, model.writable, model.selection, model.edited]);
   const currentPremium = premium && premium.scope === promotionScope && premium.host.client === host.client &&
@@ -172,9 +176,10 @@ export function ModelsSheet({ host, model, machine, onBack, backRef, onPlace }: 
     const { containerId, revision } = record, digest = draft.digest, verified = draft.provenance !== null;
     // The profile the person sees, which this press chooses: the rows' profile, on the list in use or, with none in use,
     // on this staged list. An edit of it holds this write until it is saved or discarded (`editHold`, launch-step.ts
-    // `editHoldsCatalogWrite`), so the rows show the saved profile, the saved profile chosen again, or, with nothing saved,
-    // the staged list's own profile as drawn. It goes along as chosen, its tier, effort, lane, budget and switches included;
-    // a staged list that cannot form it is never quietly given another, and only a list that shows no profile at all asks.
+    // `editHoldsCatalogWrite`), so the rows show the saved profile, the saved profile chosen again, the profile a check
+    // kept this list for (workbench-model.ts `retainedChoice`) or, with nothing saved, the staged list's own profile as
+    // drawn. It goes along as chosen, its tier, effort, lane, budget and switches included; only a list that shows no
+    // profile at all asks for one.
     const shown = model.profile;
     const here = shown !== null && !model.stale && (shown.source === "active" ? active !== null && shown.catalogDigest === active.digest
       : shown.source === "draft" && shown.draftDigest === digest);
@@ -184,7 +189,23 @@ export function ModelsSheet({ host, model, machine, onBack, backRef, onPlace }: 
     }
     const visible = here ? model.selection : null;
     if (confirmed === undefined && visible !== null && !previewSelection(compiled, visible)) {
-      setFailure("The staged list cannot form your profile. Choose a profile it can form and save it, or import another list.");
+      // A staged list that cannot form the profile shown (another family, a tier it lacks) is never given another quietly:
+      // the nearest profile it can form, every other setting kept as far as it hosts it and at most the tier chosen, unless
+      // its main model's actual tier is higher, is asked about with each setting it moves, and only an approval uses it.
+      try {
+        const providers = draft.provenance?.providers;
+        let candidate = clampSelection(compiled, visible, providers ? provider => providers.includes(provider) : undefined);
+        const lead = newPremiumLead(compiled, candidate, model.previousProfile);
+        if (lead) candidate = { ...candidate, capability: lead.tier };
+        const review = previewSelection(compiled, candidate);
+        if (!review) throw new WorkflowError("code_invalid_selection");
+        const route = review.routes.find(entry => entry.role === "default")!.lead, main = compiled.model(route.key);
+        setPremium({ host, scope: promotionScope, selection: review.selection, model: `${main.provider}/${main.id}`, effort: route.thinking,
+          tier: TIERS[review.selection.capability - 1]!, premium: lead !== null,
+          moves: teamEdits(visible, review.selection, familyWord).map(edit => `${WORD_NAMES[edit.word].toLowerCase()} ${edit.from} → ${edit.to}`) });
+      } catch {
+        setFailure("The staged list cannot form your profile or any profile near it within its budget. Import another list or check the models.");
+      }
       return;
     }
     const selection = confirmed ?? visible ?? undefined;
@@ -197,7 +218,7 @@ export function ModelsSheet({ host, model, machine, onBack, backRef, onPlace }: 
           if (!review) { setFailure("The replacement cannot retain this profile at the new model's actual tier. Import another list or check the models."); return; }
           const effort = review.routes.find(route => route.role === "default")!.lead.thinking;
           setPremium({ host, scope: promotionScope, selection: review.selection, model: `${lead.provider}/${lead.id}`, effort,
-            tier: TIERS[lead.tier - 1]! });
+            tier: TIERS[lead.tier - 1]!, premium: true, moves: [] });
           return;
         }
       } catch (reason) {
@@ -222,7 +243,7 @@ export function ModelsSheet({ host, model, machine, onBack, backRef, onPlace }: 
             const model = compiled.model(lead.key);
             if (model.tier !== capability) continue;
             setPremium({ host, scope: promotionScope, selection: review.selection, model: `${model.provider}/${model.id}`,
-              effort: lead.thinking, tier: TIERS[capability - 1]! });
+              effort: lead.thinking, tier: TIERS[capability - 1]!, premium: true, moves: [] });
             return;
           }
         }
@@ -238,7 +259,7 @@ export function ModelsSheet({ host, model, machine, onBack, backRef, onPlace }: 
       wrote(revision, promoted);
       // Promotion adopts exactly the reviewed selection, whether the chosen one, the list's default or explicitly confirmed.
       return { value: "in use", text: ["the staged list replaced the one in use",
-        ...confirmed ? ["the premium profile was explicitly selected"] : [], ...verified ? [] : ["check it next"]].join("; ") };
+        ...confirmed ? ["the profile was explicitly selected"] : [], ...verified ? [] : ["check it next"]].join("; ") };
     }, setFailure);
   }
   function discard() {
@@ -611,10 +632,12 @@ export function ModelsSheet({ host, model, machine, onBack, backRef, onPlace }: 
       </div>
     </PanelDialog>
     <DecisionDialog decision={currentPremium ? {
-      kind: "premium", title: "Use this premium profile?",
-      text: ["Using this list would select the premium model, actual tier and configured effort below. Confirm this explicit profile before putting it in use.",
+      kind: "premium", title: currentPremium.moves.length > 0 ? "Use this profile with the staged list?" : "Use this premium profile?",
+      text: [currentPremium.moves.length > 0
+        ? `The staged list cannot form the profile shown. Using it would select the ${currentPremium.premium ? "premium " : ""}model, tier and configured effort below, with the settings it moves. Confirm this explicit profile before putting it in use.`
+        : "Using this list would select the premium model, actual tier and configured effort below. Confirm this explicit profile before putting it in use.",
         "This puts the staged list and this profile in use; it does not check models or launch a session."],
-      items: [`${currentPremium.model} · ${currentPremium.tier} · configured ${currentPremium.effort}`],
+      items: [`${currentPremium.model} · ${currentPremium.tier} · configured ${currentPremium.effort}`, ...currentPremium.moves],
       choices: [{ label: `Use ${currentPremium.tier} profile`, does: { kind: "approve" } }, { label: "Not now", does: { kind: "dismiss" } }],
     } : null} onChoose={choice => {
       const chosen = currentPremium;

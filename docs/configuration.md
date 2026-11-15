@@ -345,9 +345,10 @@ first verification does. A write that replaces the list a draft was made on (usi
 staged list replaces the list in use and the staged one, discarding or importing
 replaces the staged one, and an import replaces the bundled list a workspace without
 one previews) never drops an unsaved edit. A staged list is put in use with the profile
-the rows show, as the person's explicit choice: the saved profile on the list in use, or,
-with none in use, the profile drawn on the staged list itself, with its tier, effort, lane,
-budget and switches; a list that cannot form it is refused rather than given another.
+the rows show, as the person's explicit choice: the profile a check kept the list for (below),
+the saved profile on the list in use, or, with none in use, the profile drawn on the staged
+list itself, with its tier, effort, lane, budget and switches. A list that cannot form it is
+never given another quietly: Models asks about the nearest profile it can form instead.
 Models holds a write that would
 replace the list an unsaved edit rests on and says which list the edit is on and what
 each fix does: **save**, for an edit of the team in use, keeps the edit on that list;
@@ -1147,8 +1148,18 @@ profile stay as they were. An adopted check measured nothing here,
 so nothing reads as left out after it.
 A staged list offers **use staged list**, which reviews at its revision and atomically
 promotes that exact catalog and selected profile, and **discard**. The profile the rows
-show (the saved one, or with no list in use the one drawn on the staged list) goes along
-as chosen; a list that cannot form it says so and changes nothing, and a list that draws no
+show goes along as chosen. A check that measured a list and kept it staged (a newly measured
+premium lead, or no profile without one) shows the profile it was run for on that list, its
+budget, tier, effort, lane and switches as checked, while the workspace, sign-in, machine,
+revision and both lists stay as they were kept and no edit is made; that is what using it
+chooses, and an edit, a discard or any other write ends it for good. Otherwise the rows show
+the saved profile, or with no list in use the one drawn on the staged list. A list that
+cannot form the profile shown asks, in the same question premium tiers use, about the
+nearest profile it can form: the lane kept where it hosts it, else its default lane, the
+tier chosen or the nearest below it unless the main model's actual tier is higher, every
+other setting as chosen, with the model, tier, configured effort and every setting it
+moves listed. **Not now** writes nothing; approving reviews and promotes exactly that profile.
+One it cannot form within the budget says so and changes nothing. A list that draws no
 profile asks explicitly before a premium-only one. An unsaved edit made on a list the write
 would replace holds it, with **save** (an edit of the team in use, kept on that list)
 and **discard edit** beside it. Review and promotion bind the same selection and digest;

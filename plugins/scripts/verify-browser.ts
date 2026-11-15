@@ -4301,6 +4301,8 @@ async function preSpendPremiumScenario(browser: BrowserInstance, server: TestSer
       if (kind === "background") observed = { ...observed, accounts: [...observed.accounts, account(31 + index * 2)] };
       await openGenerator(browser, server, workspace.id);
       await chooseMachine(browser, destination.machineId, machineName);
+      // The person checks a profile of their own: the saved one at medium thinking, an edit no write has saved.
+      if (kind === "unexpected") await choose(browser, "thinking", "medium");
       await openSheet(browser, "models");
       if (kind === "background") {
         await waitFor(() => inventories.size === listed + 1, timeout, 50);
@@ -4366,7 +4368,9 @@ async function preSpendPremiumScenario(browser: BrowserInstance, server: TestSer
           check.poolIdentityDigest === document.provenance!.poolIdentityDigest), "The exact verified check is kept, not discarded for another paid run");
         const measured = benchmarks.size;
         await click(browser, element(`${modelsSheet} [data-go]`));
-        await questionOpens(browser, "premium", "using retained evidence asks its actual measured tier");
+        const retainedQuestion = await questionOpens(browser, "premium", "using retained evidence asks its actual measured tier");
+        assert(retainedQuestion.items[0]!.includes(TIERS[2]!) && retainedQuestion.items[0]!.includes("configured medium"),
+          "The staged list a check kept is used with the profile it checked, its own medium thinking kept, at the actual tier");
         const cancellation = trace.requests.length;
         await key(browser, "Escape", 27);
         await until(browser, "cancelling leaves the same measured list staged", `${unasked} && ${goIs(modelsSheet, "use staged list")}`);
@@ -4808,6 +4812,64 @@ async function legacyTierRepairScenario(browser: BrowserInstance, server: TestSe
     await closeSheet(browser);
     await composesSonnet(firstUse.id, used.revision);
     assert.equal((await listed(firstUse.id))?.model, `anthropic/${sonnet.id}`);
+
+    // A saved Claude profile at smart and high thinking on a Claude list in use, and a GPT-only list staged beside it: the
+    // staged list cannot form that profile, so using it asks about the nearest profile it can form, every setting it moves
+    // named. Not now writes nothing; approving puts the list in use with exactly that profile, every other preference kept.
+    const gptRead = await callAction(server, person.token, "atyrode.omp.readModelCatalog", { providers: ["openai-codex"] });
+    assert(gptRead.ok, "The pinned OMP bundle supplies its passive GPT metadata");
+    const gptOnly: CatalogDocument = { schemaVersion: 1,
+      models: catalogFromMetadata(ModelCatalogSnapshotSchema.parse(gptRead.result), "any").models.filter(model => model.provider === "openai-codex") };
+    const claudeList: CatalogDocument = { schemaVersion: 1, models: [sonnet, opus] };
+    const claudeSmart: Selection = { ...smart, thinking: "high", prewalk: true };
+    const crossed = await createContainer(server, "Claude profile, GPT list staged", "canvas");
+    workspaces.add(crossed.id);
+    const crossedBase = await callAction(server, person.token, "atyrode.code.initializeConfiguration", { containerId: crossed.id, expectedRevision: 0 });
+    assert(crossedBase.ok);
+    const claudeStaged = await callAction(server, person.token, "atyrode.code.stageCatalog",
+      { containerId: crossed.id, expectedRevision: (crossedBase.result as Configuration).revision, document: claudeList });
+    assert(claudeStaged.ok);
+    const claudeInput = { containerId: crossed.id, expectedRevision: (claudeStaged.result as Configuration).revision, source: "draft" as const, selection: claudeSmart };
+    const claudeReview = await callAction(server, person.token, "atyrode.code.reviewCatalog", claudeInput);
+    assert(claudeReview.ok, claudeReview.ok ? "" : claudeReview.denial.message);
+    const claudeInUse = await callAction(server, person.token, "atyrode.code.promoteCatalog",
+      { ...claudeInput, reviewDigest: (claudeReview.result as ActionResult<"reviewCatalog">).reviewDigest });
+    assert(claudeInUse.ok, claudeInUse.ok ? "" : claudeInUse.denial.message);
+    const gptStaged = await callAction(server, person.token, "atyrode.code.stageCatalog",
+      { containerId: crossed.id, expectedRevision: (claudeInUse.result as Configuration).revision, document: gptOnly });
+    assert(gptStaged.ok, gptStaged.ok ? "" : gptStaged.denial.message);
+    const crossedBefore = await typedRead(crossed.id);
+    assert.deepEqual(crossedBefore.selection, claudeSmart);
+    const fromCrossed = trace.requests.length;
+    const crossedWrites = () => trace.requests.slice(fromCrossed).filter(request => /^atyrode\.code\.(reviewCatalog|promoteCatalog|select)$/.test(request.name));
+    await openGenerator(browser, server, crossed.id);
+    await chooseMachine(browser, destination.machineId, machineName);
+    await openSheet(browser, "models");
+    await until(browser, "the GPT list waits staged in Models", goIs(modelsSheet, "use staged list"));
+    await click(browser, element(`${modelsSheet} [data-go]`));
+    const proposed = await questionOpens(browser, "premium", "using a list that cannot form the saved profile asks about the nearest one it can");
+    assert(proposed.items[0]!.includes("openai-codex/") && proposed.items[0]!.includes("configured "), "The question names the GPT model, its tier and configured effort");
+    assert(proposed.items.slice(1).some(item => item.startsWith("lane ")), "The question names the lane it moves");
+    assert.deepEqual(crossedWrites(), [], "Asking reviews and promotes nothing");
+    await answer(browser, "dismiss");
+    await until(browser, "Not now leaves the GPT list staged", `${unasked} && ${goIs(modelsSheet, "use staged list")}`);
+    assert.deepEqual(crossedWrites(), [], "Not now writes nothing");
+    assert.deepEqual(await typedRead(crossed.id), crossedBefore, "Not now leaves the workspace as it was");
+    await click(browser, element(`${modelsSheet} [data-go]`));
+    await questionOpens(browser, "premium", "a fresh press asks again");
+    await answer(browser, "approve");
+    await waitFor(async () => (await readConfiguration(server, person, { containerId: crossed.id })).revision === crossedBefore.revision + 1, timeout, 50);
+    const crossedUsed = await typedRead(crossed.id);
+    assert.deepEqual(crossedUsed.active?.document, gptOnly, "The GPT list is in use");
+    assert(crossedUsed.selection && crossedUsed.selection.lane.kind === "provider" && crossedUsed.selection.lane.family === "openai",
+      "The approved profile leads GPT");
+    assert.deepEqual([crossedUsed.selection.thinking, crossedUsed.selection.advisor, crossedUsed.selection.prewalk, crossedUsed.selection.planYolo,
+      crossedUsed.selection.fallback, crossedUsed.selection.budget], [claudeSmart.thinking, claudeSmart.advisor, claudeSmart.prewalk, claudeSmart.planYolo,
+      claudeSmart.fallback, claudeSmart.budget], "Every setting the GPT list hosts is kept as saved");
+    assert.deepEqual(crossedWrites().map(request => [request.name, request.input.selection]),
+      [["atyrode.code.reviewCatalog", crossedUsed.selection], ["atyrode.code.promoteCatalog", crossedUsed.selection]],
+      "Review and promotion carry exactly the approved profile");
+    await closeSheet(browser);
     noNativeEffects(trace.requests);
     fixture.check();
   } finally {

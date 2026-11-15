@@ -45,8 +45,11 @@ export type ModelVerificationInput = {
    * stopped or was cancelled: the panel's own write, which the shown first-use profile may follow.
    */
   onInitialized: (from: number, to: number) => void;
-  /** A completed check retained a verified staged list without changing the active profile. */
-  onRetained: (configuration: Configuration) => void;
+  /**
+   * A completed check retained a verified staged list without changing the active profile, measured for `checked`, the
+   * profile the run was for (null when it had none), which using the staged list then chooses.
+   */
+  onRetained: (configuration: Configuration, checked: Selection | null) => void;
 };
 /** `inventory`: OMP's inventory is running. `charge`: advertised premium intent or its separate
  * spending approval awaits the person; nothing has been spent. `benchmark`: probing, then deriving and saving. */
@@ -211,7 +214,7 @@ export function useModelVerification(input: ModelVerificationInput): ModelVerifi
           configuration.draft.provenance.inventoryObservedAt === charge.inventory.observedAt &&
           configuration.draft.provenance.inventoryArtifactSha256 === charge.inventoryArtifactSha256 &&
           configuration.draft.provenance.catalogRevision === charge.catalogRevision && charge.budget === (session.wanted?.budget ?? "any")) {
-          latest.current.onRetained(configuration);
+          latest.current.onRetained(configuration, session.wanted);
           kept.refresh();
         }
       } catch { /* The retained record remains available to the next ordinary workspace read. */ }
