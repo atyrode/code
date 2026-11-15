@@ -3948,6 +3948,11 @@ async function modelsSheetScenario(browser: BrowserInstance, server: TestServer,
       providers: [`Claude: 0 of ${requests("anthropic")} measured`, `Codex: 0 of ${requests("openai-codex")} measured`],
       probing: starter.models.filter(model => charge.benchmark.candidates.some(candidate => candidate.provider === model.provider)).map(model => model.key).sort(),
     }, "Checking says what it has measured, and only models of the exact charged providers are probing, not another provider in the same family");
+    const apiTerra = starter.models.find(model => model.provider === "openai" && model.tier === 2);
+    assert(apiTerra && !charge.benchmark.candidates.some(candidate => candidate.provider === apiTerra.provider),
+      "The published API Terra is displayed but its provider is absent from the exact Codex/Claude charge");
+    assert.equal(await browser.evaluate(`${element(`${modelsSheet} [data-key="${apiTerra.key}"]`)}.hasAttribute('data-probing')`), false,
+      "An unselected API Terra does not probe when the same family's Codex provider is charged");
     for (const run of benchmarks.values()) run.settled = true;
 
     // Checked: the measured list is put in use, the head says when, and beside it is what the check left out, each with its
@@ -5029,11 +5034,13 @@ async function keptChecksScenario(browser: BrowserInstance, server: TestServer, 
     "atyrode.code.adoptCheck", "atyrode.code.promoteCatalog", "atyrode.omp.reviewSession", "atyrode.omp.prepareSession"];
   /** Those doors requested since `from`, in order. Nothing reviews a launch without a press, so none follows a refused one. */
   const requested = (from: number) => trace.requests.slice(from).map(request => request.name).filter(name => doors.includes(name));
-  /** The rows lead Claude only, which a Claude-only list hosts as it is: an edit of the bundled starter, which leads Mixed. */
+  /** Deliberately edit the medium Claude-only starter to high thinking on the same Sonnet tier, which the checked list hosts. */
   const leadClaudeOnly = async () => {
     await choose(browser, "lane", "anthropic");
     if (await browser.evaluate<boolean>(`${onlyBox}.getAttribute('aria-checked') !== 'true'`)) await click(browser, onlyBox);
-    await until(browser, "the rows lead Claude only", `${rowValue("lane")} === 'Claude only'`);
+    await choose(browser, "thinking", "high");
+    await until(browser, "the rows lead Claude only at explicitly chosen high thinking",
+      `${rowValue("lane")} === 'Claude only' && ${rowValue("thinking")} === 'high'`);
   };
   /**
    * Opens a workspace never set up and edits its rows with `edit`. Before the edit nothing initializes or checks it on its
@@ -5076,8 +5083,10 @@ async function keptChecksScenario(browser: BrowserInstance, server: TestServer, 
       "One press checks the models, asking once, then reviews the saved profile and launches it");
     assert.deepEqual(trace.requests.slice(from).find(request => request.name === "atyrode.code.approveChecks")?.input, { expectedRevision: 0, requests: charge },
       "The first Approve records the person's approval of exactly its charge");
-    const checked = (await readConfiguration(server, person, { containerId: first.id })).configuration?.active;
+    const checkedRecord = (await readConfiguration(server, person, { containerId: first.id })).configuration;
+    const checked = checkedRecord?.active;
     assert(checked?.provenance, "The check put a checked list in use");
+    assert.equal(checkedRecord?.selection?.thinking, "high", "The check saves the deliberately edited thinking, not the medium default");
     const checkedPool = checked.provenance.poolIdentityDigest;
     const kept = await readChecks(server, person);
     assert.equal(kept.approvedRequests, charge, "The approval is the person's, kept for their later checks");
