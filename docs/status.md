@@ -31,15 +31,19 @@ a higher label is not admitted for being higher. Admission is separate and exact
   capabilities.
 - A catalog's `ompVersion` is recorded provenance, never compared or admitted.
 
-This source preparation pins merged OMP
+This source pins the tagged OMP
 [`a538300`](https://github.com/atyrode/manifold-omp/commit/a538300d2832dc4a8a006a72a5fd348e829d8f08)
 (family 0.4.0 on OMP 18.20.1) and Manifold
 [`5693107`](https://github.com/atyrode/manifold/commit/5693107cfb8b135f4753477d2d25e82b66925476)
 (v0.37.0: protocol 60, owner RPC 46, hardened contract 14), which is also OMP's own
 `MANIFOLD_REV`. The Code gate is source proof against that locally prepared OMP
-commit. Release proof is separate: it installs OMP's real published family from its
-canonical publisher over HTTPS with no local source mapping. No public OMP 0.4.0
-release is published or qualified for this preparation, so neither is claimed.
+commit. Separate publisher proof for
+[stable OMP v0.4.0](https://github.com/atyrode/manifold-omp/releases/tag/v0.4.0)
+[passed](https://github.com/atyrode/manifold-omp/actions/runs/43690414939):
+ordinary unauthenticated HTTPS downloads of all six assets, strict publisher sums
+and full native verification with a fresh normal owner and no prepared archive map.
+The release is versioned and SHA-verified, not GitHub-immutable or Sigstore-attested.
+That upstream release proof does not establish Code's own gate or live activation.
 
 Separately pinned callers intentionally remain on their old caller/root pair until
 their owner upgrades and repacks them; nothing shims the old pair. Before activating
