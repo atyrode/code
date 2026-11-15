@@ -44,6 +44,7 @@ if (await exists(sdkLink)) {
 const upstream = join(source, "plugins");
 await run([process.execPath, "install", "--frozen-lockfile"], upstream);
 await run([process.execPath, "--no-env-file", "run", "deps:prepare"], upstream);
+await run(["python3", "scripts/prepare-grammar-assets.py"], upstream);
 await run([process.execPath, "--no-env-file", "run", "pack"], upstream);
 
 // The pointer is ours; neither an unrelated directory nor an external symlink is

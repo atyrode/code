@@ -174,7 +174,8 @@ account choices; it does not fetch a provider or mutate broker state.
 
 ## Pinned dependencies and gate
 
-Use Bun 1.4.4 and two immutable revisions:
+Use Bun 1.4.4, `python3` and `zstd` on `PATH`, network access for OMP's pinned
+grammar sources, and two immutable revisions:
 
 ```text
 <parent>/
@@ -185,8 +186,12 @@ Use Bun 1.4.4 and two immutable revisions:
 `plugins/package.json` pins `@atyrode/manifold-omp` to one published Git commit.
 `scripts/prepare-integration.ts` checks that commit out into ignored
 `.integration/`, requires its `MANIFOLD_REV` to match Code's, prepares its
-declared build dependencies, and invokes OMP's own staging-free packer. It
-installs no daemon, credentials, service policy or machine resource.
+declared build dependencies, runs OMP's own `scripts/prepare-grammar-assets.py`,
+and invokes OMP's own staging-free packer. That producer downloads OMP's pinned
+registry, publisher files and all 39 compressed grammars, checks each size and
+SHA-256, decompresses them with `zstd` and rebuilds the reviewed grammar
+archive; any missing tool, failed download or pin mismatch fails preparation.
+It installs no daemon, credentials, service policy or machine resource.
 `tsconfig.json` resolves the OMP caller API from that exact prepared snapshot.
 Keep Code's `MANIFOLD_REV`, OMP's `MANIFOLD_REV` and both reusable-workflow refs
 synchronized.
