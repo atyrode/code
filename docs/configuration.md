@@ -1058,9 +1058,10 @@ generator's rows. Each of these has a control; none is the only way to anything.
   that can be chosen, `Home` and `End` jump to the ends, and `Space` flips fallbacks;
   focus stays on the row's chosen word as the value moves. The wheel steps a row only
   while the row has focus or the pointer has rested on it for 450 ms, so a page scroll
-  passing over never turns it. `↵` takes the launch's step unless a button has focus,
-  which answers it itself; `Mod+↵` takes it from anywhere in the main view, typing
-  included. Neither acts on key repeat. `d` Defaults, `z` Revert, `f` fallback chains,
+  passing over never turns it. `↵` takes the launch's step unless the focused control
+  answers it itself, including a chosen word awaiting profile repair; `Mod+↵` takes it
+  from anywhere in the main view, typing included. Neither acts on key repeat.
+  `d` Defaults, `z` Revert, `f` fallback chains,
   `w` the machine list, `p` and `s` hide or show routing and usage, `a` the accounts,
   `e` the sessions, `m` Models, `u` Setup, `o` Options.
 - **Accounts.** `↑` `↓`, `Home`, `End`, `Space`, `↵`, `m` and `a` as above.
