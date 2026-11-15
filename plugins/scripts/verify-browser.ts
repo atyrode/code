@@ -4474,7 +4474,10 @@ async function preSpendPremiumScenario(browser: BrowserInstance, server: TestSer
     await chooseMachine(browser, destination.machineId, machineName, "absent");
     await openSheet(browser, "models");
     await until(browser, "Models remains reachable without an automatic premium profile", goIs(modelsSheet, "check models"));
-    assert.deepEqual(await browser.evaluate(modelList), listOf(catalogFromMetadata({ ...metadata, models: [eliteMetadata] }, "any")),
+    const advertised = listOf(catalogFromMetadata({ ...metadata, models: [eliteMetadata] }, "any"));
+    await until(browser, "the nullable preview has loaded exactly its advertised elite rung",
+      `JSON.stringify(${modelList}) === ${JSON.stringify(JSON.stringify(advertised))}`);
+    assert.deepEqual(await browser.evaluate(modelList), advertised,
       "The nullable preview displays exactly its advertised elite rung, never a made-up lower profile");
     assert.equal(await browser.evaluate(`document.querySelectorAll('${generator} [data-row]').length`), 0,
       "A fully loaded elite-only list has no automatic dial profile");
