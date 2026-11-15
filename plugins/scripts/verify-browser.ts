@@ -4742,8 +4742,8 @@ async function legacyTierRepairScenario(browser: BrowserInstance, server: TestSe
     assert(profile, "The workspace is listed");
     return profile.selected;
   };
-  const writes = (from: number) => trace.requests.slice(from)
-    .filter(request => /^atyrode\.code\.(initializeConfiguration|stageCatalog|promoteCatalog|discardCatalog|adoptCheck|select|changeAccounts)$/.test(request.name));
+  const workspaceWrite = /^atyrode\.code\.(initializeConfiguration|stageCatalog|promoteCatalog|discardCatalog|adoptCheck|select|changeAccounts)$/;
+  const writes = (from: number) => trace.requests.slice(from).filter(request => workspaceWrite.test(request.name));
   const screenshot = async (name: string) => {
     if (screenshotDirectory === undefined) return;
     assert(isAbsolute(screenshotDirectory), "CODE_VERIFY_SCREENSHOTS must name an absolute artifact directory");
@@ -4766,14 +4766,23 @@ async function legacyTierRepairScenario(browser: BrowserInstance, server: TestSe
     assert(!refusedCompose.ok && refusedCompose.denial.message === "code_invalid_selection", "A composition is refused before anything is posted");
     assert.deepEqual(await typedRead(held.id), heldSeed, "Reading, listing and a refused composition write nothing");
 
+    // This person's identity takes effect only on the fresh page this navigation loads. Until then the page the previous
+    // scenario left mounted (another person's, on its own workspace) stays live, and its saved-profile query, scoped to
+    // its own [workspace, revision, list], may ask again; the fresh page restarts every query. So the reviews this page
+    // asks are the ones of this workspace, whatever their order among the old page's.
     const from = trace.requests.length;
-    const reviews = () => trace.requests.slice(from).filter(request => request.name === "atyrode.code.reviewCatalog");
+    const reviews = () => trace.requests.slice(from).filter(request => request.name === "atyrode.code.reviewCatalog" && request.input.containerId === held.id);
     await openGenerator(browser, server, held.id);
     await chooseMachine(browser, destination.machineId, machineName);
     await until(browser, "the saved normal tier shows the Sonnet it reads now, waiting to be chosen again",
       `${chosenKey("tier")} === ${JSON.stringify(normalWord)} && ${row("tier")}?.dataset.reselect !== undefined && ${launchIs("launch", "refused")}`);
-    assert.deepEqual(reviews()[0], { name: "atyrode.code.reviewCatalog", input: { containerId: held.id, expectedRevision: heldSeed.revision, source: "active" } },
-      "The panel asks Code's own read-only review of the saved profile, at its exact revision and with no override");
+    // Nothing has been written since the seed, so every review this page asked is of the seeded revision.
+    const current = reviews();
+    assert(current.length > 0, "The panel asks Code's own review of the saved profile");
+    for (const request of current) {
+      assert.deepEqual(request, { name: "atyrode.code.reviewCatalog", input: { containerId: held.id, expectedRevision: heldSeed.revision, source: "active" } },
+        "The panel asks Code's own read-only review of the saved profile, at its exact revision and with no override");
+    }
 
     // The same normal word, pressed, is a choice the launch saves; it changes no setting, so nothing is kept for a reload.
     const draftKey = storedDraftKey(person.principal.id, held.id);
@@ -4788,8 +4797,21 @@ async function legacyTierRepairScenario(browser: BrowserInstance, server: TestSe
     assert.deepEqual(writes(from), [], "Choosing and reverting write nothing");
     assert.deepEqual(await typedRead(held.id), heldSeed);
 
-    // The keyboard chooses it as a press does: Enter on the row's chosen word.
+    // The keyboard chooses it as a press does, on the row's own chosen word once real keys bring focus to it: Space first,
+    // then Revert leaves it unmade again, writing nothing.
+    const chosenWordFocused = `document.activeElement === ${word("tier", normalWord)}`;
     await focusRow(browser, "tier");
+    await until(browser, "keyboard focus on the tier row's chosen normal word", chosenWordFocused);
+    await key(browser, " ", 32);
+    await until(browser, "chosen again by Space, the same normal word offers Save & launch",
+      `${launchIs("save & launch", "ready")} && ${row("tier")}?.dataset.reselect === undefined`);
+    await click(browser, element(`${generator} [data-revert]`));
+    await until(browser, "Revert leaves the keyboard's choice unmade", `${launchIs("launch", "refused")} && ${row("tier")}?.dataset.reselect !== undefined`);
+    assert.deepEqual(writes(from), [], "Choosing by Space and reverting write nothing");
+    assert.deepEqual(await typedRead(held.id), heldSeed);
+    // Then Enter on that same focused word chooses it for the save.
+    await focusRow(browser, "tier");
+    await until(browser, "keyboard focus on the tier row's chosen normal word again", chosenWordFocused);
     await key(browser, "Enter", 13);
     await until(browser, "chosen again by the keyboard, the same normal word offers Save & launch", launchIs("save & launch", "ready"));
     await click(browser, launchButton);
@@ -4905,7 +4927,10 @@ async function legacyTierRepairScenario(browser: BrowserInstance, server: TestSe
     const crossedBefore = await typedRead(crossed.id);
     assert.deepEqual(crossedBefore.selection, claudeSmart);
     const fromCrossed = trace.requests.length;
-    const crossedWrites = () => trace.requests.slice(fromCrossed).filter(request => /^atyrode\.code\.(reviewCatalog|promoteCatalog|select)$/.test(request.name));
+    // A review of a saved profile itself (in use, no override) only reads; any other review is a candidate for the staged
+    // list's promotion, and counts with every workspace write, in the order asked.
+    const crossedWrites = () => trace.requests.slice(fromCrossed).filter(request => workspaceWrite.test(request.name) ||
+      (request.name === "atyrode.code.reviewCatalog" && !(request.input.source === "active" && !("selection" in request.input))));
     await openGenerator(browser, server, crossed.id);
     await chooseMachine(browser, destination.machineId, machineName);
     await openSheet(browser, "models");
@@ -4914,7 +4939,7 @@ async function legacyTierRepairScenario(browser: BrowserInstance, server: TestSe
     const proposed = await questionOpens(browser, "premium", "using a list that cannot form the saved profile asks about the nearest one it can");
     assert(proposed.items[0]!.includes("openai-codex/") && proposed.items[0]!.includes("configured "), "The question names the GPT model, its tier and configured effort");
     assert(proposed.items.slice(1).some(item => item.startsWith("lane ")), "The question names the lane it moves");
-    assert.deepEqual(crossedWrites(), [], "Asking reviews and promotes nothing");
+    assert.deepEqual(crossedWrites(), [], "Asking asks no candidate review, promotion or write");
     await answer(browser, "dismiss");
     await until(browser, "Not now leaves the GPT list staged", `${unasked} && ${goIs(modelsSheet, "use staged list")}`);
     assert.deepEqual(crossedWrites(), [], "Not now writes nothing");

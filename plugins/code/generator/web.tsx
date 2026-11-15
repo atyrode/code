@@ -543,7 +543,9 @@ function Workbench({ host, target, machine, machines, rosterError, available, se
       inView: sheet === null && target !== null && (onRoot || app.current?.contains(target) === true),
       inField: target?.matches("textarea, input, select, [contenteditable]") ?? false,
       inDialog: target?.closest("[role=dialog], dialog, [data-popover]") != null,
-      onControl: target?.closest("button, a, [role=listbox], [role=option]") != null,
+      // A focused chosen word that chooses again (`data-reselect`) answers a plain ↵ itself in its row's own handler, which
+      // keeps every guard of a choice; this listener runs first, so it must leave that ↵ alone rather than launch.
+      onControl: target?.closest("button, a, [role=listbox], [role=option], [data-row][data-reselect] [role=radio][aria-checked=true]") != null,
       onRoot, view, tabbed, recents: recents.length,
     });
     if (action && run(action)) { event.preventDefault(); event.stopPropagation(); }

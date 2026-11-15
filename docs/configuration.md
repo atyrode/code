@@ -859,9 +859,10 @@ profile (`reviewCatalog`, `source: "active"`, at the record's exact revision, wi
 `selection`), once per revision; it calls no OMP or provider. While that review refuses
 `code_invalid_selection` and the saved profile forms on the list as it reads now, the rows
 show that profile and, while it stands with no local choice, a chosen word chooses again: a
-press on it (or Enter, or Space on a level row) keeps the very profile the rows show, its
-whole budget, effort, lead and preferences unchanged, as a local choice, which offers
-**save & launch** and **Revert** like any edit. It changes no setting, so nothing is kept
+press on it (or, while it has focus, a plain Enter, or Space on a level row) keeps the very
+profile the rows show, its whole budget, effort, lead and preferences unchanged, as a local
+choice, which offers **save & launch** and **Revert** like any edit; Enter on any other word
+and Mod+Enter still launch. It changes no setting, so nothing is kept
 for a reload and no Models write waits for it. Save is the ordinary `select` of that
 profile; once Code admits it at the new revision, a press on a chosen word does nothing
 again. A review not yet answered, failed or of another revision neither asks for the
