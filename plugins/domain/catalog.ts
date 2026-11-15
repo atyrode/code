@@ -159,19 +159,18 @@ export class CompiledCatalog {
   }
 
   /**
-   * Refuse (`invalid_selection`) a family and capability whose rung the stored tiers gave, at or
-   * under that capability, to a model now read at another tier, when the effective ladder gives
-   * the rung to another model: Opus stored at 2 over Haiku at 1 is read at 3, so a capability 2
-   * that meant Opus would now mean Haiku. Neither model is chosen for the caller; the tier the
-   * model now holds still resolves it explicitly. A rung that keeps its model is never refused.
+   * Refuse (`invalid_selection`) a family and capability whose rung the stored tiers gave to one
+   * model and the effective tiers give to another: Opus stored at 2 over Haiku at 1 is read at 3,
+   * so a capability 2 that meant Opus would now mean Haiku; Sonnet stored at 4 over Opus at 3 is
+   * read at 2, so a capability 2 that meant Opus would now mean Sonnet. Neither model is chosen for
+   * the caller; the tier each now holds still resolves it explicitly. A rung that keeps its model
+   * is never refused, and where no model of the family moved, none changes.
    */
   assertUnambiguousSelection(family: string, capability: number): void {
     const original = this.#stored.get(family);
     if (!original) return;
     const before = original[Math.max(1, Math.min(original[4] === undefined ? 3 : 4, capability))];
-    if (before === undefined || before === this.rung(family, capability)) return;
-    const tier = this.#storedTiers.get(before)!;
-    if (tier <= capability && tier !== this.#models.get(before)!.tier) throw new DomainError("invalid_selection");
+    if (before !== undefined && before !== this.rung(family, capability)) throw new DomainError("invalid_selection");
   }
 
   clampThinking(key: string, requested: ThinkingLevel): ThinkingLevel {

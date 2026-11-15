@@ -400,6 +400,20 @@ describe("a stored catalog read at its named families' actual tiers", () => {
     expect(leadKey(catalog, 1)).toBe("haiku");
   });
 
+  test("a correctly stored model whose rung another model's actual tier takes is refused, never automatically replaced", () => {
+    // Opus authored at its own tier 3; Sonnet misranked at 4 is read at 2 and now fills ranks 1 and 2.
+    const anthropic = [model("opus", "anthropic", 3, { id: "claude-opus-5" }), model("sonnet", "anthropic", 4, { id: "claude-sonnet-5" })];
+    const catalog = compileCatalog({ schemaVersion: 1, models: anthropic });
+    expect([catalog.isReclassified("opus"), catalog.model("sonnet").tier]).toEqual([false, 2]);
+    for (const capability of [1, 2] as const) expect(() => reviewCatalog(catalog, anthropicOnly(capability), daytime)).toThrow("code_invalid_selection");
+    expect(leadKey(catalog, 3)).toBe("opus");
+    expect(() => defaultSelection(catalog)).toThrow("code_invalid_selection");
+    // The automatic choice moves on to another family's complete profile instead of the ambiguous Sonnet rank.
+    const served = compileCatalog({ schemaVersion: 1, models: [...anthropic,
+      model("luna", "openai-codex", 1, { id: "gpt-6-luna" }), model("sol", "openai-codex", 3, { id: "gpt-6.1-sol" })] });
+    expect(defaultSelection(served)).toMatchObject({ lane: { kind: "provider", family: "openai", blend: "only" }, capability: 3 });
+  });
+
   test("an under-rank model that keeps its identity stays previewable, but its old rank is never premium consent", () => {
     const lone = compileCatalog({ schemaVersion: 1, models: [model("opus", "anthropic", 1, { id: "claude-opus-5" })] });
     const cheap = anthropicOnly(1), premium = { provider: "anthropic", id: "claude-opus-5", tier: 3 };
