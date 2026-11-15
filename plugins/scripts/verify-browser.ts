@@ -780,12 +780,13 @@ async function focusLaunch(browser: BrowserInstance): Promise<void> {
   await click(browser, generatorTitle);
   await tabTo(browser, "the launch", launchButton);
 }
-async function chooseMachine(browser: BrowserInstance, machineId: string, name: string): Promise<void> {
+async function chooseMachine(browser: BrowserInstance, machineId: string, name: string, rows: "present" | "absent" = "present"): Promise<void> {
   // The picker reads "no machine" until the panel has picked one, once every online machine has answered; its word then
   // changes width, so a press aimed before that pick can miss it. The profile's rows can also arrive after the pick, moving
   // the launch row down under a press aimed at the picker, so both are waited for before it is pressed.
   await until(browser, "the launch names its machine", `!!${machinePicker}?.textContent && ${machinePicker}.getAttribute('aria-label') !== 'Machine: none'`);
-  await until(browser, "the generator's rows are drawn", `document.querySelectorAll('${generator} [data-row]').length > 0`);
+  await until(browser, rows === "present" ? "the generator's rows are drawn" : "the premium-only preview has no automatic profile rows",
+    `document.querySelectorAll('${generator} [data-row]').length ${rows === "present" ? ">" : "==="} 0`);
   if (await browser.evaluate<boolean>(`${machinePicker}.textContent === ${JSON.stringify(name)}`)) return;
   await click(browser, machinePicker);
   await until(browser, "the machine list opens", `${machineList} !== null`);
@@ -4470,9 +4471,13 @@ async function preSpendPremiumScenario(browser: BrowserInstance, server: TestSer
     assert((await callAction(server, person.token, "atyrode.code.approveChecks", { expectedRevision: checks.revision, requests: 100 })).ok);
     const before = await readConfiguration(server, person, target), from = trace.requests.length, spent = benchmarks.size;
     await openGenerator(browser, server, nullable.id);
-    await chooseMachine(browser, destination.machineId, machineName);
+    await chooseMachine(browser, destination.machineId, machineName, "absent");
     await openSheet(browser, "models");
     await until(browser, "Models remains reachable without an automatic premium profile", goIs(modelsSheet, "check models"));
+    assert.deepEqual(await browser.evaluate(modelList), listOf(catalogFromMetadata({ ...metadata, models: [eliteMetadata] }, "any")),
+      "The nullable preview displays exactly its advertised elite rung, never a made-up lower profile");
+    assert.equal(await browser.evaluate(`document.querySelectorAll('${generator} [data-row]').length`), 0,
+      "A fully loaded elite-only list has no automatic dial profile");
     await click(browser, element(`${modelsSheet} [data-go]`));
     await until(browser, "a nullable profile with only an advertised premium rung stops unspent",
       `${unasked} && ${goIs(modelsSheet, "check models")} && ${goParts(modelsSheet)}.some(([text]) => text === 'check stopped')`);
