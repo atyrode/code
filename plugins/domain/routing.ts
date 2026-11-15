@@ -355,10 +355,11 @@ export type ModelAddress = { readonly provider: string; readonly id: string };
 
 /**
  * A newly selected main model above the requested tier needs an explicit premium choice.
- * An unchanged active provider/model identity keeps its existing meaning across catalog edits,
- * unless the active catalog read that model at a tier its document did not store
- * (`CompiledCatalog.isReclassified`): then only an active capability at or above the model's
- * actual tier is consent, never the stored rank it was chosen under.
+ * A model this catalog reads at a tier its document did not store (`CompiledCatalog.isReclassified`)
+ * always does: the stored rank it was listed under is no consent, nor is an earlier selection's.
+ * Otherwise an unchanged active provider/model identity keeps its existing meaning across catalog
+ * edits, unless the active catalog read that model at a tier its document did not store: then only
+ * an active capability at or above the model's actual tier is consent.
  * Callers validate the proposed selection before consulting this admission boundary.
  */
 export function newPremiumLead(catalog: CompiledCatalog, selection: Selection,
@@ -366,7 +367,7 @@ export function newPremiumLead(catalog: CompiledCatalog, selection: Selection,
   const family = selection.lane.kind === "mixed" ? "openai" : selection.lane.family;
   const model = catalog.model(catalog.rung(family, selection.capability));
   if (model.tier === 0 || model.tier <= selection.capability) return null;
-  if (previous !== null) {
+  if (previous !== null && !catalog.isReclassified(model.key)) {
     try {
       const lane = previous.selection.lane, previousFamily = lane.kind === "mixed" ? "openai" : lane.family;
       // An active capability whose model the effective tiers changed names no active identity.

@@ -4431,6 +4431,127 @@ async function preSpendPremiumScenario(browser: BrowserInstance, server: TestSer
 }
 
 /**
+ * A completed check a price ladder kept before Anthropic's names laddered it: the pinned bundle's latest Opus, stored on
+ * the fast rung (tier 1) a lone model then took, checked as the workflow records a check under a fictional Claude account
+ * and the synthetic installation the other check scenarios use. Everything Code decides is the real server's.
+ *
+ * - The list in use keeps its stored bytes, digest and provenance, and Models draws Opus on the smart rung it is.
+ * - Another workspace of the pool, set up, tries to adopt the kept check on its own as it opens, with no saved profile:
+ *   there is no automatic profile in a lone Opus, so nothing is adopted, and nothing checks again. The old fast and
+ *   normal ranks are refused too: neither is a choice of the smart model.
+ * - Opus's actual tier, chosen explicitly, adopts the very kept check, and both workspaces compose Opus from it.
+ *
+ * No inventory or benchmark is ever requested: the kept check is the only evidence, and nothing pays for it again.
+ */
+async function legacyPremiumCheckScenario(browser: BrowserInstance, server: TestServer, person: TokenGrant, destination: Target): Promise<void> {
+  const catalogRead = await callAction(server, person.token, "atyrode.omp.readModelCatalog", { providers: ["anthropic"] });
+  assert(catalogRead.ok, "The pinned OMP bundle supplies its passive model metadata");
+  const metadata = ModelCatalogSnapshotSchema.parse(catalogRead.result);
+  const opus = catalogFromMetadata(metadata, "any").models.find(model => model.provider === "anthropic" && model.tier === 3);
+  assert(opus, "The pinned bundle supplies a latest Opus");
+  const legacy: CatalogDocument = { schemaVersion: 1, models: [{ ...opus, tier: 1 }] };
+  const smart: Selection = { lane: { kind: "provider", family: "anthropic", blend: "only" }, capability: 3, thinking: "medium", advisor: "off",
+    spark: false, priority: false, prewalk: false, planYolo: false, fallback: true, budget: "any" };
+  const pins = { installationRevision: "synthetic-ui-only", artifactSha256: "c".repeat(64), resourceBindingDigest: "c".repeat(64) };
+  const observed = fixtureAccounts([1]);
+  const held = await createContainer(server, "Legacy Opus check in use", "canvas");
+  const opened = await createContainer(server, "Legacy Opus check adopted", "canvas");
+  const workspaces = new Set([held.id, opened.id]);
+  await arrangeWorkbench(server, person);
+  const trace = await watchActions(browser, server);
+  const fixture = await intercept(browser, server, async (name, input) => {
+    switch (name) {
+      case "atyrode.omp.describeDestination": {
+        if (!workspaces.has(String(input.containerId)) || input.machineId !== destination.machineId) return undefined;
+        const result: OmpResult<"describeDestination"> = { containerId: String(input.containerId), machineId: destination.machineId, pluginId: "atyrode.omp",
+          state: "ready", reason: null, deployment: null, services: [], operations: [INVENTORY_OPERATION_ID, BENCHMARK_OPERATION_ID, LAUNCH_OPERATION_ID]
+            .map(operationId => ({ operationId, pins, nativeReady: true, callerRefusal: null, state: "ready", reason: null })) };
+        return { ok: true, result };
+      }
+      case "atyrode.omp.accounts.accounts": return { ok: true, result: observed };
+      case "atyrode.omp.accounts.usage": return { ok: true, result: fixtureUsage(observed) };
+      // Never answered as a check: a request here would be a repeated spend, which `noNativeEffects` names.
+      case "atyrode.omp.startInventory": case "atyrode.omp.startBenchmark": return refused("synthetic_check_unexpected");
+      default: return undefined;
+    }
+  });
+  const composes = async (containerId: string, expectedRevision: number) => {
+    const composed = await callAction(server, person.token, "atyrode.code.composeSession", { containerId, expectedRevision, accounts: observed, prompt: "" });
+    assert(composed.ok, composed.ok ? "" : composed.denial.message);
+    assert.equal((composed.result as ActionResult<"composeSession">).review.routes.find(route => route.role === "default")?.lead.key, opus.key,
+      "The kept list composes Opus as the explicit smart lead");
+  };
+  try {
+    const initialized = await callAction(server, person.token, "atyrode.code.initializeConfiguration", { containerId: held.id, expectedRevision: 0 });
+    assert(initialized.ok);
+    const base = initialized.result as Configuration;
+    const pool = await callAction(server, person.token, "atyrode.code.composeProbe", { containerId: held.id, expectedRevision: base.revision, accounts: observed });
+    assert(pool.ok);
+    const poolIdentityDigest = (pool.result as ActionResult<"composeProbe">).poolIdentityDigest;
+    const staged = await callAction(server, person.token, "atyrode.code.stageCatalog", { containerId: held.id, expectedRevision: base.revision, document: legacy,
+      verification: { ompVersion: OMP_VERSION, inventoryArtifactSha256: pins.artifactSha256, catalogRevision: metadata.revision,
+        inventoryObservedAt: Date.now() - 3_000, benchmarkCompletedAt: Date.now() - 2_000, accounts: observed, poolIdentityDigest, budget: "any" } });
+    assert(staged.ok, staged.ok ? "" : staged.denial.message);
+    const kept = (staged.result as Configuration).draft;
+    assert(kept?.provenance, "The check is kept with its provenance");
+    const input = { containerId: held.id, expectedRevision: (staged.result as Configuration).revision, source: "draft" as const, selection: smart };
+    const review = await callAction(server, person.token, "atyrode.code.reviewCatalog", input);
+    assert(review.ok, review.ok ? "" : review.denial.message);
+    const promoted = await callAction(server, person.token, "atyrode.code.promoteCatalog", { ...input, reviewDigest: (review.result as ActionResult<"reviewCatalog">).reviewDigest });
+    assert(promoted.ok, promoted.ok ? "" : promoted.denial.message);
+    const inUse = await readConfiguration(server, person, { containerId: held.id });
+    assert.deepEqual([inUse.configuration?.active, inUse.configuration?.selection], [kept, smart], "The stored list is in use at Opus's actual tier, as kept");
+    const checks = (await readChecks(server, person)).checks;
+    assert.deepEqual(checks.map(check => [check.digest, check.poolIdentityDigest]), [[kept.digest, poolIdentityDigest]]);
+
+    // Models draws the stored fast-rung Opus on the smart rung it is, and the stored list stays as kept.
+    await openGenerator(browser, server, held.id);
+    await openSheet(browser, "models");
+    const drawn = [`anthropic:3 ${opus.key}`];
+    await until(browser, "Models draws the legacy Opus on its smart rung", `JSON.stringify(${modelList}) === ${JSON.stringify(JSON.stringify(drawn))}`);
+    await closeSheet(browser);
+    assert.deepEqual(await readConfiguration(server, person, { containerId: held.id }), inUse, "Reading the list in use rewrites nothing");
+    await composes(held.id, inUse.revision);
+
+    // The other workspace, set up with no saved profile, tries the kept check on its own as it opens: no profile forms.
+    const setUp = await callAction(server, person.token, "atyrode.code.initializeConfiguration", { containerId: opened.id, expectedRevision: 0 });
+    assert(setUp.ok);
+    const before = await readConfiguration(server, person, { containerId: opened.id });
+    const from = trace.requests.length;
+    await openGenerator(browser, server, opened.id);
+    await until(browser, "the launch names the machine the panel judged, where OMP answers", `${machinePicker}?.textContent === ${JSON.stringify(machineName)}`);
+    await waitFor(() => trace.requests.slice(from).some(request => request.name === "atyrode.code.adoptCheck"), timeout, 50);
+    await Bun.sleep(1_000);
+    assert.deepEqual(trace.requests.slice(from).filter(request => request.name === "atyrode.code.adoptCheck").map(request => request.input.selection), [null],
+      "One adoption, with no saved profile, and none again");
+    assert.deepEqual(await readConfiguration(server, person, { containerId: opened.id }), before, "No automatic profile adopts the lone Opus");
+    // The old fast and normal ranks are not choices of it either.
+    const adopt = { containerId: opened.id, expectedRevision: before.revision, accounts: observed, poolIdentityDigest, budget: "any" as const };
+    for (const capability of [1, 2] as const) {
+      const refusal = await callAction(server, person.token, "atyrode.code.adoptCheck", { ...adopt, selection: { ...smart, capability } });
+      assert(!refusal.ok && refusal.denial.message === "code_invalid_selection", `The stored rank ${capability} is not a choice of the smart Opus`);
+    }
+    assert.deepEqual(await readConfiguration(server, person, { containerId: opened.id }), before);
+    // Opus's actual tier adopts the very kept check, and Models draws it on its smart rung there too.
+    const adopted = await callAction(server, person.token, "atyrode.code.adoptCheck", { ...adopt, selection: smart });
+    assert(adopted.ok, adopted.ok ? "" : adopted.denial.message);
+    const own = adopted.result as Configuration;
+    assert.deepEqual([own.active, own.selection], [kept, smart], "The kept check is adopted as it was kept, at the explicit actual tier");
+    await openGenerator(browser, server, opened.id);
+    await openSheet(browser, "models");
+    await until(browser, "Models draws the adopted legacy Opus on its smart rung", `JSON.stringify(${modelList}) === ${JSON.stringify(JSON.stringify(drawn))}`);
+    await closeSheet(browser);
+    await composes(opened.id, own.revision);
+    assert.deepEqual((await readChecks(server, person)).checks, checks, "The kept check stays as it was kept");
+    noNativeEffects(trace.requests);
+    fixture.check();
+  } finally {
+    await fixture.stop();
+    trace.stop();
+  }
+}
+
+/**
  * Model checks belong to the person who ran them (checks.ts): what one workspace checked or approved reaches the others.
  * Synthetic OMP observations stand in for the destination, the accounts and the probe jobs, as in Models: discovery,
  * benchmark and the launch ready, one fictional Claude account per workspace, inventories of the pinned OMP's bundled
@@ -5881,9 +6002,10 @@ async function sharedWorkbenchScenario(browser: BrowserInstance, viewerBrowser: 
   const bundled = await callAction(server, writer.token, "atyrode.omp.readModelCatalog", { providers: starterProviders });
   assert(bundled.ok);
   const metadata = ModelCatalogSnapshotSchema.parse(bundled.result);
-  // A launch refuses a routed model OMP does not publish, so the four curated tiers are published anthropic models.
-  const published = metadata.models.filter(model => model.provider === "anthropic").sort((left, right) => left.inputCostPerMillion - right.inputCostPerMillion).slice(0, 4);
-  assert.equal(published.length, 4, "The pinned OMP publishes four anthropic models for the fixture's tiers");
+  // A launch refuses a routed model OMP does not publish, so the four curated tiers are published anthropic models, one
+  // of each name Anthropic gives its tiers, each on its own tier, as the compiled catalog reads them.
+  const published = catalogFromMetadata(metadata, "any").models.filter(model => model.provider === "anthropic").sort((left, right) => left.tier - right.tier);
+  assert.deepEqual(published.map(model => model.tier), [1, 2, 3, 4], "The pinned OMP publishes one anthropic model of each named tier for the fixture's tiers");
   const document = { schemaVersion: 1, models: published.map((model, index) => ({
     key: `browser-model-${index + 1}`, provider: "anthropic", id: model.id, api: model.api, tier: index + 1,
     quotaBucket: null, inputCostPerMillion: index + 1, outputCostPerMillion: (index + 1) * 3, tokensPerSecond: 30,
@@ -7650,8 +7772,8 @@ async function agentLaunchScenario(browser: BrowserInstance, server: TestServer,
   const bundled = await callAction(server, sponsor.token, "atyrode.omp.readModelCatalog", { providers: starterProviders });
   assert(bundled.ok);
   const metadata = ModelCatalogSnapshotSchema.parse(bundled.result);
-  const published = metadata.models.filter(model => model.provider === "anthropic").sort((left, right) => left.inputCostPerMillion - right.inputCostPerMillion).slice(0, 4);
-  assert.equal(published.length, 4, "The pinned OMP publishes four anthropic models for the sponsor's tiers");
+  const published = catalogFromMetadata(metadata, "any").models.filter(model => model.provider === "anthropic").sort((left, right) => left.tier - right.tier);
+  assert.deepEqual(published.map(model => model.tier), [1, 2, 3, 4], "The pinned OMP publishes one anthropic model of each named tier for the sponsor's tiers");
   // Short keys, as a person names their models, so the Run tokens read like the generator's own.
   const keys = ["luna", "sol", "terra", "fable"];
   const document = { schemaVersion: 1, models: published.map((model, index) => ({
@@ -8505,6 +8627,8 @@ async function run(): Promise<void> {
     await asNewPerson(writerBrowser, server, writer, "Code check keeper", person => keptChecksScenario(writerBrowser, server, person, target));
     phase = "premium intent before spending, independent charge approval, retained measured evidence and unspent background intent";
     await asNewPerson(writerBrowser, server, writer, "Code premium checker", person => preSpendPremiumScenario(writerBrowser, server, person, target));
+    phase = "a completed check a price ladder kept with a lone Opus at fast: drawn on its smart rung, never adopted or composed at the old rank, adopted at its actual tier without another check";
+    await asNewPerson(writerBrowser, server, writer, "Code legacy check keeper", person => legacyPremiumCheckScenario(writerBrowser, server, person, target));
     phase = "tiered usage windows are their own rows and judge no pool";
     await tieredUsageScenario(writerBrowser, server, writer);
     phase = "struck leads and the only box say why";

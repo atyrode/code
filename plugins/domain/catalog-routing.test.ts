@@ -406,14 +406,17 @@ describe("a stored catalog read at its named families' actual tiers", () => {
     expect(leadKey(lone, 1)).toBe("opus");
     expect(newPremiumLead(lone, cheap, { catalog: lone, selection: cheap })).toEqual(premium);
     expect(newPremiumLead(lone, cheap, null)).toEqual(premium);
-    expect(newPremiumLead(lone, cheap, { catalog: lone, selection: anthropicOnly(3) })).toBeNull();
+    // An earlier actual-tier choice authorizes no persisted under-rank selection of the same stored rank.
+    expect(newPremiumLead(lone, cheap, { catalog: lone, selection: anthropicOnly(3) })).toEqual(premium);
+    expect(newPremiumLead(lone, anthropicOnly(2), { catalog: lone, selection: anthropicOnly(3) })).toEqual(premium);
     expect(newPremiumLead(lone, anthropicOnly(3), { catalog: lone, selection: cheap })).toBeNull();
     // The same Opus authored at its own tier keeps the unchanged active identity's existing exemption.
     const authored = compileCatalog({ schemaVersion: 1, models: [model("opus", "anthropic", 3, { id: "claude-opus-5" })] });
     expect(authored.isReclassified("opus")).toBe(false);
     expect(newPremiumLead(authored, cheap, { catalog: authored, selection: cheap })).toBeNull();
-    expect(newPremiumLead(lone, cheap, { catalog: authored, selection: cheap })).toBeNull();
+    expect(newPremiumLead(lone, cheap, { catalog: authored, selection: cheap })).toEqual(premium);
     expect(newPremiumLead(authored, cheap, { catalog: lone, selection: cheap })).toEqual(premium);
+    expect(newPremiumLead(authored, cheap, { catalog: lone, selection: anthropicOnly(3) })).toBeNull();
     // Sonnet stored at 1 above an unreachable Haiku keeps rank 1 at its actual tier 2; Opus's rank 2 is refused.
     const sparse = compileCatalog({ schemaVersion: 1, models: [
       model("sonnet", "anthropic", 1, { id: "claude-sonnet-5" }), model("opus", "anthropic", 2, { id: "claude-opus-5" }),

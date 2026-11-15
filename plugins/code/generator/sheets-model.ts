@@ -30,18 +30,31 @@ export type ModelRow = {
 };
 
 /**
- * The models a list places on a rung (tiers 1 to 4), each under its short alias. Tier 0 was Spark's
- * own rung, which is retired, so a model still listed there takes no rung. A list that does not
- * compile still shows, under its keys.
+ * The models a list places on a rung (tiers 1 to 4), each under its short alias, at the tier the
+ * compiled catalog routes it on: a stored list keeps its own bytes, and a known family's model
+ * reads at its provider's named tier even where an older ladder recorded another. Two stored
+ * rungs read at one tier both stay listed, the one that ladder routes first, so it is the one
+ * the rung shows. Tier 0 was Spark's own rung, which is retired, so a model still listed there
+ * takes no rung. A list that does not compile still shows, under its keys and recorded tiers,
+ * as the data to repair.
  */
 export function modelRows(document: CatalogDocument): ModelRow[] {
-  let aliases: ReadonlyMap<string, string> = new Map();
-  try { aliases = displayAliases(compileCatalog(document)); } catch { /* A list that does not compile keeps its keys. */ }
-  return document.models.filter(model => model.tier >= 1 && model.tier <= 4).map(model => ({
-    key: model.key, alias: aliases.get(model.key) ?? model.key, provider: model.provider, family: providerPolicy(model.provider).family,
-    id: model.id, tier: model.tier, tps: model.tokensPerSecond, ttft: model.timeToFirstTokenMs, pin: model.inputCostPerMillion,
-    pout: model.outputCostPerMillion, ctx: model.contextWindow, levels: model.thinkingLevels,
-  }));
+  const view = compiledView(document);
+  const rows = document.models.map(model => ({ model, tier: view?.tiers.get(model.key) ?? model.tier }))
+    .filter(({ tier }) => tier >= 1 && tier <= 4).map(({ model, tier }) => ({
+      key: model.key, alias: view?.aliases.get(model.key) ?? model.key, provider: model.provider, family: providerPolicy(model.provider).family,
+      id: model.id, tier, tps: model.tokensPerSecond, ttft: model.timeToFirstTokenMs, pin: model.inputCostPerMillion,
+      pout: model.outputCostPerMillion, ctx: model.contextWindow, levels: model.thinkingLevels,
+    }));
+  return view === null ? rows : rows.sort((a, b) => Number(!view.routed.has(a.key)) - Number(!view.routed.has(b.key)));
+}
+/** A list's aliases, effective tiers and routed rungs, or null for a list that does not compile. */
+function compiledView(document: CatalogDocument): { aliases: ReadonlyMap<string, string>; tiers: ReadonlyMap<string, number>; routed: ReadonlySet<string> } | null {
+  try {
+    const compiled = compileCatalog(document);
+    return { aliases: displayAliases(compiled), tiers: new Map(compiled.models.map(model => [model.key, model.tier])),
+      routed: new Set(compiled.families.flatMap(family => [1, 2, 3, 4].map(tier => compiled.rung(family, tier)))) };
+  } catch { return null; }
 }
 
 /** Measured speed as one to five blocks; 0 is unmeasured. */

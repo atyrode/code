@@ -68,7 +68,12 @@ authored tier deliberately; Models' premium question makes that same explicit
 selection before review and promotion. Already reviewed active choices remain usable
 when the selected main provider and model id are unchanged, including legacy visible
 choices. Key or metadata-only refreshes do not invent a new model substitution; merely
-having the premium model somewhere in the old catalog is not prior selection.
+having the premium model somewhere in the old catalog is not prior selection. An unchanged
+identity is consent only at the tier its list stores: where the compiled catalog reads the
+model at a higher named tier than its stored one (below), only a saved capability that
+reaches that actual tier is. `composeSession` admits the saved selection the same way
+before it reads OMP's model list, refusing `code_invalid_selection` with nothing composed,
+so a stored lower rank never launches the premium model; select its actual tier.
 Discarding clears the staged list at the revision it was seen in and refuses `code_catalog_missing`
 when none is staged; the active list, the saved team and the account choices stay as
 they are.
@@ -187,9 +192,18 @@ between the ends where available, otherwise an end's price. This is not measured
 intelligence, and neither higher price nor a higher reasoning ceiling proves quality.
 A rung that is not cheaper than one below it must reach every thinking level of that
 rung. Context is not a ranking input: OpenAI's newer sol and astra carry smaller
-windows than the older terra beneath them. A catalog verified
-under the earlier context rule keeps its ladder, as stored active policy does, until it is
-verified again.
+windows than the older terra beneath them. Compiling reads the same names: a list stored
+under an earlier rule (a sparse Anthropic list laddered by price, a lone Opus on the fast
+rung, or an OpenAI list by context) is read at its models' named tiers wherever routing,
+review, composition and Models use it, while its stored document, digest, provenance and
+kept check stay exactly as they are: nothing migrates, rewrites or checks it again. A model
+whose id names no tier keeps its stored tier. Two stored rungs read at one tier both stay
+listed; the ladder routes the one whose tier did not move, else the higher stored rung. A
+saved capability whose main model that reading would change (Opus stored at normal over
+Haiku at fast: normal now means Haiku) is refused `code_invalid_selection` wherever it is
+reviewed, selected, adopted or composed, choosing neither model and writing nothing, while
+reads still answer the list and the check; the tier a model now holds still selects it, and
+adopting the kept check at that tier spends nothing.
 
 Only a successful canonical configuration read establishes an absent revision 0
 or an initialized-empty positive revision. Loading and failure are not absence.
@@ -1058,7 +1072,10 @@ the provider's hue with its measured speed as five blocks (under 30 tok/s one, t
 one the family offers names the rung the model row lands on instead, while one above the
 family's top (an elite it lacks) says only that it has no model, as the model row refuses
 it. A family Code requires that lacks a rung of its own at fast, normal or smart reads
-**· short** beside its name. The head says
+**· short** beside its name. Each model sits on the rung the compiled catalog reads it
+at, so a list stored under an earlier ladder shows its named models at their actual tiers
+(a lone Opus stored on fast is drawn on smart) without rewriting it; a list that does not
+compile still shows, under its keys and stored tiers, for repair. The head says
 how many models are in use and when they were checked, with **OMP updated since** when
 OMP's runtime or catalog moved after that, or that accounts changed or OMP dropped a routed
 model since they were checked, that a staged list waits beside them, that they are being
