@@ -5331,10 +5331,12 @@ async function keptChecksScenario(browser: BrowserInstance, server: TestServer, 
 
 /**
  * Every window of the fixture's usage is a row (#248): a tiered one, a limit of its own beside the account's shared
- * windows, is labelled with its tier, in the usage and the accounts. A used-up `fable` window makes Claude neither tight
- * nor maxed, as only the shared windows judge a provider's pool, while the same window reported as shared does. Where
- * the usage grid turns to two columns no label squeezes a reset. The observation and the reading are synthetic, a Codex
- * slot beside the Claude one; nothing is saved.
+ * windows, is labelled with its tier, in the usage and the accounts. Only the shared windows judge a provider's pool: at
+ * each width the strain the panel shows while the `fable` window is available, checked against what the pinned starter
+ * leads on at the authored tier and what the observed pool serves, is exactly the strain it shows once only that window
+ * is used up, while the same used-up window reported as shared strikes Claude's leads. Where the usage grid turns to two
+ * columns no label squeezes a reset. The observation and the reading are synthetic, a Codex slot beside the Claude one;
+ * nothing is saved.
  */
 async function tieredUsageScenario(browser: BrowserInstance, server: TestServer, writer: TokenGrant): Promise<void> {
   const workspace = await createContainer(server, "Tiered usage windows", "canvas");
@@ -5342,6 +5344,14 @@ async function tieredUsageScenario(browser: BrowserInstance, server: TestServer,
   const created = await callAction(server, writer.token, "atyrode.code.initializeConfiguration", { ...target, expectedRevision: 0 });
   assert(created.ok);
   const base = await readConfiguration(server, writer, target);
+  // The panel's static ground, read apart from it: an initialized record with no catalog or profile shows the pinned
+  // starter under the served restriction, and its choices exclude no account.
+  assert(base.configuration && base.configuration.active === null && base.configuration.draft === null && base.configuration.selection === null,
+    "The initialized record holds no catalog or profile, so the panel shows the pinned starter");
+  assert.deepEqual(base.configuration.accounts, { activePreset: null, manualDisabled: [], presets: [] }, "The initialized choices exclude no account");
+  const catalogRead = await callAction(server, writer.token, "atyrode.omp.readModelCatalog", { providers: starterProviders });
+  assert(catalogRead.ok, "The pinned OMP bundle supplies the starter's passive metadata");
+  const document = catalogFromMetadata(ModelCatalogSnapshotSchema.parse(catalogRead.result), "any"), compiled = compileCatalog(document);
   await arrangeWorkbench(server, writer);
   const codex = { reference: { kind: "credential" as const, scope: fixtureScope, provider: "openai-codex", credentialId: 3 }, credentialId: 3,
     type: "api_key" as const, identityKey: null, email: null, disabled: false, blocks: [] };
@@ -5349,15 +5359,33 @@ async function tieredUsageScenario(browser: BrowserInstance, server: TestServer,
     const claude = fixtureAccounts([1]);
     return { ...claude, accounts: [...claude.accounts, codex] };
   };
-  // The control: reported as shared, the `fable` window's numbers judge Claude's pool, so the checks below can see a strain.
-  let shared = false;
+  // Static eligibility, from the pinned metadata and the observed pool alone, never a usage reading: the addresses the
+  // pool serves, the families someone has signed in for, and the profile the starter forms on them, Claude's at Claude's
+  // own address. A lead the row shows (Mixed over GPT and Claude, and each listed family someone has signed in for) is
+  // refused, whatever the usage, where a family it leads on has its model at the authored tier at an address no
+  // included account serves.
+  const served = new Set(observation().accounts.filter(account => !account.disabled).map(account => account.reference.provider));
+  const connected = new Set(observation().accounts.map(account => providerPolicy(account.reference.provider).family));
+  const selection = defaultSelection(compiled, provider => served.has(provider));
+  const claudeRoute = reviewCatalog(compiled, selection, Date.now()).routes.find(route => route.role === "default");
+  assert(selection.lane.kind === "provider" && selection.lane.family === "anthropic" && claudeRoute && compiled.model(claudeRoute.lead.key).provider === "anthropic",
+    "On this pool the starter leads on Claude, at Claude's own address");
+  const offered = compiled.families.filter(family => connected.has(family)).map((family): [string, string[]] => [family, [family]]);
+  if (["openai", "anthropic"].every(family => connected.has(family) && compiled.families.includes(family))) offered.unshift(["mixed", ["openai", "anthropic"]]);
+  const refusedLeads = offered.filter(([, families]) => !families.every(family => served.has(compiled.model(compiled.rung(family, selection.capability)).provider)))
+    .map(([lead]) => lead).sort();
+  // The `fable` window, available or used up, its fraction and status set together; reported as shared for the control.
+  // Every other window is the fixture's own.
+  let fable: "available" | "exhausted" = "available", shared = false;
   const fixture = await intercept(browser, server, name => {
     if (name === "atyrode.omp.accounts.accounts") return { ok: true, result: observation() };
     if (name !== "atyrode.omp.accounts.usage") return undefined;
     const reading = fixtureUsage(observation());
-    if (!shared) return { ok: true, result: reading };
+    const set = (window: UsageWindow): UsageWindow => window.tier !== "fable" ? window : {
+      ...window, ...fable === "available" ? { usedFraction: 0.3, quotaStatus: "ok" as const } : { usedFraction: 1, quotaStatus: "exhausted" as const },
+      tier: shared ? null : window.tier };
     return { ok: true, result: { ...reading, snapshot: { ...reading.snapshot!, accounts: reading.snapshot!.accounts.map(account => ({
-      ...account, windows: account.windows.map(window => window.tier === "fable" ? { ...window, tier: null } : window) })) } } };
+      ...account, windows: account.windows.map(set) })) } } };
   });
   const usagePane = `${generator} [data-pane="usage"]`, accountsPane = `${generator} [data-pane="accounts"]`;
   /** Each account's windows as drawn, by provider and account: the label, the tier it names and the window's word. */
@@ -5369,10 +5397,22 @@ async function tieredUsageScenario(browser: BrowserInstance, server: TestServer,
     "Claude API key 1": [["5h", null, ""], ["7d fable", "fable", "maxed"]],
     "Codex API key 3": [["5h", null, ""], ["7d base-model-inference", "base-model-inference", ""]],
   };
+  const availableRows = { ...rows, "Claude API key 1": [["5h", null, ""], ["7d fable", "fable", ""]] };
+  /** Every window the usage draws, in order: its label, tier, level, percent and word. */
+  type WindowFact = [string, string | null, string, string, string];
+  const windowFacts = `[...document.querySelectorAll('${usagePane} .${G}usage-win')].map(row => [row.querySelector('.${G}usage-wl').textContent,
+    row.dataset.tier ?? null, row.dataset.level, row.querySelector('.${G}usage-pct').textContent, row.querySelector('.${G}usage-word')?.textContent ?? ''])`;
+  /** The usage draws the one `fable` row at `level` with `word`. */
+  const fableRow = (level: string, word: string) => `(() => {
+    const tiered = [...document.querySelectorAll('${usagePane} .${G}usage-win[data-tier="fable"]')];
+    return tiered.length === 1 && tiered[0].dataset.level === '${level}' && (tiered[0].querySelector('.${G}usage-word')?.textContent ?? '') === '${word}';
+  })()`;
   /** What would say Claude's pool is strained: a struck lead in the routing or the profile, a refused lane, Claude called tight or maxed. */
+  type Strain = { struck: string[]; refused: string[]; said: boolean };
   const strain = `({ struck: [...document.querySelectorAll('${generator} [data-down]')].map(el => el.textContent),
     refused: [...document.querySelectorAll('${generator} [data-row="lane"] .${G}word[data-off]')].map(el => el.dataset.key),
     said: /Claude (tight|maxed|has no account with room)/.test(${element(stage)}.textContent) })`;
+  const leadKeys = `[...document.querySelectorAll('${generator} [data-row="lane"] .${G}word')].map(el => el.dataset.key)`;
   /** Every reset a pane draws, and those not shown whole on one line inside their column, their window's row, the pane and any box that clips them. */
   const resets = (pane: string) => `(() => {
     const shown = [...document.querySelectorAll('${pane} .${G}usage-rst')].filter(el => el.checkVisibility({ opacityProperty: true, visibilityProperty: true }) && el.getClientRects().length);
@@ -5388,29 +5428,59 @@ async function tieredUsageScenario(browser: BrowserInstance, server: TestServer,
   try {
     await openGenerator(browser, server, workspace.id);
     await until(browser, "the usage draws both accounts' windows", `document.querySelectorAll('${usagePane} .${G}usage-win').length === 4`);
-    assert.deepEqual(await browser.evaluate(windowRows(usagePane)), rows, "Every reported window is its own row in the usage, a tiered one labelled with its tier");
+    await until(browser, "the usage reads the fable window available", fableRow("ok", ""));
+    assert.deepEqual(await browser.evaluate(windowRows(usagePane)), availableRows, "Every reported window is its own row in the usage, a tiered one labelled with its tier");
     await showView(browser, "accounts");
     await until(browser, "the accounts draw both accounts' windows", `document.querySelectorAll('${accountsPane} .${G}usage-win').length === 4`);
-    assert.deepEqual(await browser.evaluate(windowRows(accountsPane)), rows, "Every reported window is its own row in the accounts, a tiered one labelled with its tier");
+    assert.deepEqual(await browser.evaluate(windowRows(accountsPane)), availableRows, "Every reported window is its own row in the accounts, a tiered one labelled with its tier");
     await showView(browser, "main");
     await assertRoutes(browser, true);
+    assert.equal(await browser.evaluate(chosenKey("lane")), "anthropic", "The starter's profile leads on Claude");
+    assert.equal(await browser.evaluate(chosenKey("tier")), TIERS[selection.capability - 1], "The starter's profile is at its authored tier");
+    assert.deepEqual(await routedRoles(browser), expectedRoutes(document, selection), "The routing routes the starter's Claude profile on this pool");
     // Wide, the routing's leads; narrow and too short for routing under the generator, the grouped profile's leads.
     try {
       for (const [width, leads] of [[1280, `[data-pane="routing"] .${G}tok-value`], [390, `.${G}profile-lead`]] as const) {
         await panelWidth(browser, width);
+        if (fable !== "available") {
+          fable = "available";
+          await key(browser, "r", 82);
+        }
+        await until(browser, `at ${width}px the usage reads the fable window available`, fableRow("ok", ""));
         await still(browser);
-        assert.deepEqual(await browser.evaluate(strain), { struck: [], refused: [], said: false },
-          `At ${width}px a used-up fable window strikes no lead, refuses no lane and calls Claude neither tight nor maxed`);
+        const baseline = await browser.evaluate<Strain>(strain), windows = await browser.evaluate<WindowFact[]>(windowFacts);
+        assert.deepEqual(baseline.struck, [], `At ${width}px with the fable window available no lead is struck`);
+        assert.equal(baseline.said, false, `At ${width}px with the fable window available Claude is called neither tight nor maxed`);
+        assert.equal(await browser.evaluate(chosenKey("lane")), "anthropic", `At ${width}px the profile still leads on Claude`);
+        assert.deepEqual([...new Set(await browser.evaluate<string[]>(leadKeys))].sort(), offered.map(([lead]) => lead).sort(),
+          `At ${width}px the lead row offers Mixed and each listed family someone has signed in for`);
+        assert.deepEqual([...new Set(baseline.refused)].sort(), refusedLeads,
+          `At ${width}px the refused leads are exactly those leading on a model at the authored tier that no included account serves`);
+        fable = "exhausted";
+        await key(browser, "r", 82);
+        await until(browser, `at ${width}px the usage reads the fable window used up`, fableRow("error", "maxed"));
+        await still(browser);
+        assert.deepEqual(await browser.evaluate(windowRows(usagePane)), rows, `At ${width}px the used-up fable window is drawn maxed under its tier`);
+        assert.deepEqual((await browser.evaluate<WindowFact[]>(windowFacts)).filter(([, tier]) => tier !== "fable"), windows.filter(([, tier]) => tier !== "fable"),
+          `At ${width}px the shared 5h windows and Codex's window are drawn as before`);
+        assert.deepEqual(await browser.evaluate(strain), baseline,
+          `At ${width}px a used-up fable window strikes no further lead, refuses no further lane and calls Claude neither tight nor maxed`);
         shared = true;
         await key(browser, "r", 82);
         await until(browser, `at ${width}px the same window reported as shared strikes Claude's leads`, `document.querySelector('${generator} ${leads}[data-down]') !== null`);
         shared = false;
         await key(browser, "r", 82);
-        await until(browser, "reported as tiered again it strikes none", `document.querySelector('${generator} [data-down]') === null`);
+        await until(browser, "reported as tiered again the strain is the baseline's",
+          `${fableRow("error", "maxed")} && JSON.stringify(${strain}) === ${JSON.stringify(JSON.stringify(baseline))}`);
+        await still(browser);
+        assert.deepEqual(await browser.evaluate(strain), baseline, `At ${width}px reported as tiered again the used-up fable window leaves the baseline's strain`);
       }
     } finally {
       await browser.send("Emulation.clearDeviceMetricsOverride", {});
     }
+    await showView(browser, "accounts");
+    await until(browser, "the accounts draw both accounts' windows", `document.querySelectorAll('${accountsPane} .${G}usage-win').length === 4`);
+    assert.deepEqual(await browser.evaluate(windowRows(accountsPane)), rows, "The used-up fable window is its own row in the accounts, maxed under its tier");
     const problems: string[] = [];
     try {
       for (const width of [780, 790, 800, 810]) {
