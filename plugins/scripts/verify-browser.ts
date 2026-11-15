@@ -2678,7 +2678,13 @@ async function starterWorkbenchScenario(browser: BrowserInstance, server: TestSe
 
 /** A fresh, known empty account pool keeps local catalog exploration and account repair reachable, never a runnable entitlement. */
 async function emptyPoolStarterScenario(browser: BrowserInstance, server: TestServer, writer: TokenGrant, metadata: OmpResult<"readModelCatalog">): Promise<void> {
-  const fixture = await intercept(browser, server, name => name === "atyrode.omp.accounts.accounts" ? { ok: true, result: fixtureAccounts([]) } : undefined);
+  // The fictional Codex slot the other fixtures use, observed alone once the empty-pool loops are done; no credential exists behind it.
+  const codex = { reference: { kind: "credential" as const, scope: fixtureScope, provider: "openai-codex", credentialId: 3 }, credentialId: 3,
+    type: "api_key" as const, identityKey: null, email: null, disabled: false, blocks: [] };
+  let codexOnly = false;
+  const observation = (): OmpResult<"accounts"> => codexOnly ? { ...fixtureAccounts([]), accounts: [codex] } : fixtureAccounts([]);
+  const fixture = await intercept(browser, server, name => name === "atyrode.omp.accounts.accounts" ? { ok: true, result: observation() }
+    : codexOnly && name === "atyrode.omp.accounts.usage" ? { ok: true, result: fixtureUsage(observation()) } : undefined);
   const trace = await watchActions(browser, server);
   const document = catalogFromMetadata(metadata, "any"), initial = defaultSelection(compileCatalog(document));
   try {
@@ -2713,6 +2719,31 @@ async function emptyPoolStarterScenario(browser: BrowserInstance, server: TestSe
       assert.deepEqual(trace.requests.slice(from).filter(request => /^atyrode\.code\.(initializeConfiguration|adoptStarterProfile|stageCatalog|promoteCatalog|select|changeAccounts)$/.test(request.name)), []);
       noNativeEffects(trace.requests.slice(from));
     }
+    // A fresh workspace whose only account is Codex: its lane dial may explore Claude, which no included account serves,
+    // and Defaults then returns to the served default at its Codex address, never the catalog's own default.
+    codexOnly = true;
+    const compiled = compileCatalog(document), aliases = displayAliases(compiled);
+    const served = defaultSelection(compiled, provider => provider === "openai-codex");
+    const servedLead = reviewCatalog(compiled, served, Date.now()).routes.find(route => route.role === "default");
+    assert(servedLead, "The Codex-only profile includes a default route");
+    assert.equal(compiled.model(servedLead.lead.key).provider, "openai-codex", "A Codex-only pool's default leads at the Codex address, never the API's or Claude's");
+    const servedRoutes = expectedRoutes(document, served);
+    const claudeAliases = compiled.models.filter(model => model.provider === "anthropic").map(model => aliases.get(model.key) ?? model.key);
+    const fresh = await createContainer(server, "First-use Codex-only defaults", "canvas");
+    const before = await readConfiguration(server, writer, { containerId: fresh.id }), from = trace.requests.length;
+    assert.deepEqual(before, { configuration: null, legacyMachineId: null, revision: 0 });
+    await openGenerator(browser, server, fresh.id);
+    await waitFor(async () => JSON.stringify(await routedRoles(browser)) === JSON.stringify(servedRoutes), timeout, 50);
+    await choose(browser, "lane", "anthropic");
+    await waitFor(async () => claudeAliases.includes((await routedRoles(browser)).find(route => route.role === "default")?.alias ?? ""), timeout, 50);
+    await focusRow(browser, "lane");
+    await key(browser, "d", 68);
+    await until(browser, "Defaults leaves the explored Claude lane", `${chosenKey("lane")} !== 'anthropic'`);
+    await waitFor(async () => JSON.stringify(await routedRoles(browser)) === JSON.stringify(servedRoutes), timeout, 50);
+    assert.deepEqual(await routedRoles(browser), servedRoutes, "Defaults routes the Codex pool's served default again, not the explored or catalog default");
+    assert.deepEqual(await readConfiguration(server, writer, { containerId: fresh.id }), before, "Exploring and Defaults save no workspace policy");
+    assert.deepEqual(trace.requests.slice(from).filter(request => /^atyrode\.code\.(initializeConfiguration|adoptStarterProfile|stageCatalog|promoteCatalog|select|changeAccounts)$/.test(request.name)), []);
+    noNativeEffects(trace.requests.slice(from));
     fixture.check();
   } finally {
     await fixture.stop();
