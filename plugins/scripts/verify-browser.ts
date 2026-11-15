@@ -5087,6 +5087,14 @@ async function keptChecksScenario(browser: BrowserInstance, server: TestServer, 
     const checked = checkedRecord?.active;
     assert(checked?.provenance, "The check put a checked list in use");
     assert.equal(checkedRecord?.selection?.thinking, "high", "The check saves the deliberately edited thinking, not the medium default");
+    const sonnet = checked.document.models.find(model => model.provider === "anthropic" && model.tier === 2);
+    assert(sonnet, "The completed check contains the authored Sonnet tier");
+    assert.equal(checkedRecord?.selection?.capability, 2, "Choosing high thinking retains the explicit Sonnet tier");
+    const launched = ompActionSchemas.reviewSession.input.parse(trace.requests.slice(from).find(request => request.name === "atyrode.omp.reviewSession")?.input);
+    const launchModels = launched.overlay?.models;
+    assert(launchModels && typeof launchModels === "object" && !Array.isArray(launchModels));
+    assert.equal(launchModels.default, `${sonnet.provider}/${sonnet.id}:high`,
+      "The actual launch review receives Sonnet at high thinking, without a premium tier bump");
     const checkedPool = checked.provenance.poolIdentityDigest;
     const kept = await readChecks(server, person);
     assert.equal(kept.approvedRequests, charge, "The approval is the person's, kept for their later checks");
