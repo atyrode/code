@@ -171,9 +171,14 @@ export function GeneratorPane(props: GeneratorPaneProps) {
   // The saved workspace profile, while the rows hold an unsaved edit of it: what `z` returns to and the launch's save would change.
   const saved = model.localDraft?.source === "active" ? model.record?.selection ?? null : null;
   const rosterError = model.rosterError !== null;
-  // A starter with no included account is a render-only model preview. Its dials may explore the
-  // catalog; the workbench keeps the exact empty pool for every save, check and launch refusal.
-  const optionServed = model.profile?.source === "starter" && served?.size === 0 ? null : served;
+  // A starter is a render-only model preview while the current, successful read of this workspace says it has no saved
+  // record (`configurationCurrent` also excludes a save receipt that read has not caught up with), or while its pool
+  // includes no account. Its dials may then explore the catalog; the workbench still derives the default and judges
+  // every save, check and launch on the exact pool, so exploring is not entitlement: the first check's existing decision
+  // can narrow the profile to what answered. Otherwise (a saved record with an included account, or a non-starter profile)
+  // the controls keep the served restriction; while no current read stands, `served` is unknown as it always was.
+  const recordAbsent = model.configurationCurrent && model.queries.configuration.data?.configuration === null;
+  const optionServed = model.profile?.source === "starter" && (recordAbsent || served?.size === 0) ? null : served;
   const context = useMemo<StatementContext | null>(() => catalog && selection && controlsReview ? {
     catalog, selection, review: controlsReview, served: optionServed, nowMs: Date.now(), pools, machines, rosterError, machineId: model.machineId, omp: presence,
   } : null, [catalog, selection, controlsReview, optionServed, pools, machines, rosterError, model.machineId, presence]);

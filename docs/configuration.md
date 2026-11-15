@@ -584,8 +584,12 @@ A fresh profile first tries the exact authored Sonnet tier 2 at medium, then exa
 tier 3, each as a complete bounded profile served by the selected pool. Only if neither
 works does it try usable lower authored rungs, with the capability dial set to the
 actual tier; a Haiku-only fallback is fast, not a synthetic normal choice. It never
-fills upward to a premium default. With no included accounts, the bundled starter remains an explicitly
-render-only preview: dials can be explored, but the no-account launch refusal stays.
+fills upward to a premium default. While a current read of the workspace finds no saved record, or with no
+included accounts, the bundled starter is an explicitly render-only preview: its dials can explore the whole catalog, while
+the default above, saving, checks and launch refusals still use the exact selected pool. Choosing a lane
+that pool does not serve is not entitlement; the first check can narrow the profile to what answered
+through its existing decision. Once a record is saved with an included account, or a model list is in
+use or staged, the controls offer only served leads.
 Saved explicit choices remain visible. Routine medium profiles configure planning and
 slow at high on the selected model tier, without a hidden premium tier. Their configured
 effort mapping is `minimal→minimal`, `low→medium`, `medium→high`, `high→xhigh`,
