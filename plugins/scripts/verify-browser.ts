@@ -1539,7 +1539,9 @@ const SAID_WORDS = `element.parentElement?.closest('.${G}readout, .${G}route-rea
 const BOXES = boxesOf(stage, SAID_WORDS);
 /** The whole panel: the stage and, while one is open, the layer over it, laid out in the panel's root. */
 const PANEL_BOXES = boxesOf(generator, SAID_WORDS);
-const SHEET_BOXES = boxesOf(`${generator} ${openSheetHost}`, `element.closest('.${G}sheet-state, .plugin-atyrode_code__sr') || element.parentElement?.closest('[data-readout]')`);
+/** The checked-age text leaf in Setup's profile facts follows the wall clock, like the sheet head's state. */
+const CHECKED_AGE_LEAF = `element.matches('.${G}setup-facts .${G}setup-q') && element.childElementCount === 0 && /^· checked (?:just now|[0-9]+m ago)$/.test((element.textContent ?? '').trim())`;
+const SHEET_BOXES = boxesOf(`${generator} ${openSheetHost}`, `element.closest('.${G}sheet-state, .plugin-atyrode_code__sr') || element.parentElement?.closest('[data-readout]') || (${CHECKED_AGE_LEAF})`);
 const SHIFTED = `(() => {
   const at = element => { let x = 0, y = 0; for (let node = element; node; node = node.offsetParent) { x += node.offsetLeft; y += node.offsetTop; } return [x, y]; };
   const [ox, oy] = at(globalThis.__codeStage);
@@ -7563,6 +7565,12 @@ async function setupSheetScenario(browser: BrowserInstance, server: TestServer, 
       await until(browser, `${name} moves to the ${row} row${says ? ", which says what it means" : ""}`, `document.activeElement.closest('li[data-row]')?.dataset.row === '${row}' &&
         ${row === "machine" ? `document.activeElement.matches('select')` : `document.activeElement.matches('[data-roving][tabindex="0"]')`}${says ? ` && ${sheetSays(setupSheet)} === ${JSON.stringify(says)}` : ""}`);
     }
+    assert(saved.configuration?.active?.provenance, "Setup's profile is the verified fixture, with its provenance");
+    const modelsAge = `[...document.querySelectorAll('${setupSheet} .${G}setup-facts dt')].find(el => el.textContent === 'models')?.nextElementSibling?.querySelector('.${G}setup-q')`;
+    await until(browser, "the models fact shows its checked age", `(element => element instanceof HTMLElement && (${CHECKED_AGE_LEAF}))(${modelsAge})`);
+    await pointOf(browser, modelsAge);
+    const age = await browser.evaluate<{ shown: boolean; width: number; height: number; recognized: boolean } | null>(`(() => { const element = ${modelsAge}; return element instanceof HTMLElement ? { shown: element.checkVisibility({ opacityProperty: true, visibilityProperty: true }), width: element.getBoundingClientRect().width, height: element.getBoundingClientRect().height, recognized: ${CHECKED_AGE_LEAF} } : null; })()`);
+    assert(age?.shown && age.width > 0 && age.height > 0 && age.recognized, "The models fact's checked age is visible and still recognized");
     await sheetZeroShift(browser, setupSheet, "Setup checklist");
     await sheetGeometry(browser, setupSheet, "Setup checklist");
     await sheetCoarseTargets(browser, setupSheet, "Setup checklist");
