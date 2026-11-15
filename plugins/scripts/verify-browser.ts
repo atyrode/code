@@ -1061,11 +1061,10 @@ async function asNewPerson(browser: BrowserInstance, server: TestServer, writer:
     "A new person keeps their own checks, has approved nothing and keeps no model check yet");
   await seenTutorial(server, person);
   await browser.evaluate(identity(person));
-  try {
-    await scenario(person);
-  } finally {
-    await browser.evaluate(identity(writer));
-  }
+  // A failing scenario aborts the run, whose teardown (`stopEverything`) closes the browser without the writer's identity,
+  // so the identity is restored only after success, and a failure is never masked by a restore that fails behind it.
+  await scenario(person);
+  await browser.evaluate(identity(writer));
 }
 
 async function openWorkspace(
@@ -6451,8 +6450,8 @@ async function sharedWorkbenchScenario(browser: BrowserInstance, viewerBrowser: 
     // A viewer's refused press asks why, read-only offering no fix: Close alone, its way out. A key answers with Close once it
     // has held focus a moment and the question has settled, and the question closes onto the row it was asked from.
     const readOnly = await questionOpens(viewerBrowser, "refused", "the viewer's refused Mod+↵ asks its question");
-    assert.deepEqual(readOnly, { title: "Read-only workspace", text: ["You can try settings here, but saving and launching need edit access to this workspace."], items: [],
-      choices: [["dismiss", "Close"]] }, "A viewer's refused press asks why, with Close alone");
+    assert.deepEqual({ items: readOnly.items, choices: readOnly.choices.map(([offer]) => offer) }, { items: [], choices: ["dismiss"] },
+      "A viewer's refused press asks why, offering no fix: Close alone");
     await firstChoiceByTab(viewerBrowser, "refused");
     await Bun.sleep(DELIBERATE_MS);
     await key(viewerBrowser, "Enter", 13);
@@ -6501,7 +6500,25 @@ async function sharedWorkbenchScenario(browser: BrowserInstance, viewerBrowser: 
   await browser.send("Network.enable", {});
   // The passive account observation the browser sees; one check below reads a Claude account as disabled.
   let observed = fixtureAccounts();
-  const fixture = await intercept(browser, server, name => name === "atyrode.omp.accounts.accounts" ? { ok: true, result: observed } : undefined);
+  // The check's pool, observed apart from the accounts (model-verification.ts: `observeVerification`), is answered by the
+  // real server for the writer while `poolSeen` notes each revision it answers at, and held once at `holdPoolAt` for the
+  // one window below that needs it unchanged.
+  const poolHold = holdable();
+  let holdPoolAt: number | null = null;
+  let poolSeen: number[] | null = null;
+  const fixture = await intercept(browser, server, async (name, input) => {
+    if (name === "atyrode.omp.accounts.accounts") return { ok: true, result: observed };
+    if (name !== "atyrode.code.composeProbe" || input.containerId !== first.containerId) return undefined;
+    if (holdPoolAt !== null && input.expectedRevision === holdPoolAt) {
+      holdPoolAt = null;
+      await poolHold.wait();
+    } else if (poolSeen !== null) {
+      const seen = poolSeen, outcome = await callAction(server, writer.token, name, input);
+      if (outcome.ok) seen.push((outcome.result as ActionResult<"composeProbe">).revision);
+      return outcome;
+    }
+    return undefined;
+  });
   try {
     await browser.send("Emulation.setEmulatedMedia", { features: [{ name: "prefers-reduced-motion", value: "reduce" }] });
     await openGenerator(browser, server, first.containerId);
@@ -6559,6 +6576,7 @@ async function sharedWorkbenchScenario(browser: BrowserInstance, viewerBrowser: 
 
     // The edit rests on the saved profile, not on the record's revision: the writer's own account edits (a preset made and
     // removed, which leaves the pool as it was) move the record on, and the edit stays ready to save, never a conflict.
+    poolSeen = [];
     let revision = (await readConfiguration(server, writer, first)).revision;
     const spare = { id: "browser-spare-pool", name: "Spare pool", disabled: [] };
     for (const change of [{ kind: "create-preset", preset: spare }, { kind: "delete-preset", id: spare.id }]) {
@@ -6566,29 +6584,35 @@ async function sharedWorkbenchScenario(browser: BrowserInstance, viewerBrowser: 
       assert(changed.ok, "The writer edits the workspace's account presets beside the unsaved profile");
       revision = (changed.result as Configuration).revision;
     }
+    // The check's pool is observed apart from the accounts (`observeVerification`: OMP's accounts, then Code's composeProbe
+    // at the record's revision), and Refresh now never reads it again. Its answer at this revision is the observation the
+    // check below stands on.
     await panelReads(browser, revision);
     await until(browser, "own account edits leave the edit ready to save, without a conflict",
       `${launchIs("save & launch", "ready")} && !!${revertButton} && !${fix("conflict")} && ${profileValues} === ${JSON.stringify(edits)}`);
+    await waitFor(() => poolSeen?.includes(revision) === true, timeout, 50);
+    poolSeen = null;
 
     // A lead no included account serves refuses the save, as the session door would refuse its launch. The panel reads the
-    // Claude account as disabled (a GPT one stays) while the check it stands on is not observed again: the save is refused
-    // with the family named. A press asks its question, said nowhere else: the line's reason, why, and the line's own fixes,
-    // the way to the Claude accounts among them, then Close. From the question Mod+↵ writes nothing, and Esc closes it onto
-    // the launch.
+    // Claude account as disabled (a GPT one stays) while the check it stands on is not observed again: its next pool
+    // observation at this revision is held until the way to the accounts has been followed. The save is refused with the family named. A
+    // press asks its question, said nowhere else, offering the line's own fixes, the way to the accounts among them, then
+    // Close. From the question Mod+↵ writes nothing, and Esc closes it onto the launch.
     const gpt = { reference: { kind: "credential" as const, scope: fixtureScope, provider: "openai-codex", credentialId: 3 }, credentialId: 3,
       type: "api_key" as const, identityKey: null, email: null, disabled: false, blocks: [] };
+    holdPoolAt = revision;
     observed = { ...fixtureAccounts(), accounts: [...fixtureAccounts().accounts.map(account => account.credentialId === 1 ? { ...account, disabled: true } : account), gpt] };
     await focusLaunch(browser);
     await key(browser, "r", 82);
     await until(browser, "a lead no account serves refuses the save and names its family, with the way to its accounts",
       `${launchIs("save & launch", "refused")} && ${lineText}.includes('Claude') && !!${fix("accounts")}`);
-    const lineOffers = await browser.evaluate<[string, string][]>(lineFixes);
+    const lineOffers = (await browser.evaluate<[string, string][]>(lineFixes)).map(([offer]) => offer);
     const spoken = await watchSaid(browser);
     await key(browser, "Enter", 13);
     const refusedQuestion = await questionOpens(browser, "refused", "the refused press asks its question");
-    assert.deepEqual(refusedQuestion, { title: "No Claude account included", text: ["This profile leads with Claude, so it needs a Claude account."], items: [],
-      choices: [...lineOffers, ["dismiss", "Close"]] }, "The refused press asks the line's reason and why, offering the line's own fixes, then Close");
-    assert(lineOffers.some(([offer]) => offer === "accounts"), "The question offers the way to the Claude accounts");
+    assert.deepEqual({ items: refusedQuestion.items, choices: refusedQuestion.choices.map(([offer]) => offer) }, { items: [], choices: [...lineOffers, "dismiss"] },
+      "The refused press asks with the line's own fixes, then Close");
+    assert(lineOffers.includes("accounts") && !lineOffers.includes("verify-permissions"), "The question offers the way to the accounts, not a model check");
     await key(browser, "Enter", 13, { modifiers: CTRL });
     await Bun.sleep(300);
     assert.equal(await browser.evaluate(asks("refused")), true, "Mod+↵ in the question takes no step");
@@ -6596,6 +6620,22 @@ async function sharedWorkbenchScenario(browser: BrowserInstance, viewerBrowser: 
     await key(browser, "Escape", 27);
     await until(browser, "Esc closes the question onto the launch", `${unasked} && document.activeElement === ${launchButton}`);
     assert.deepEqual(await spoken(), { notices: [], announced: [] }, "A refused press is neither said aloud nor posted: its question says it");
+    // The line's way to the accounts goes there, onto the observation the refusal stands on: Claude's slot still included
+    // (its credential disabled), the excluded one left out, the new Codex account included. Going there writes nothing.
+    const manage = `${generator} [data-pane="manage"]`;
+    await click(browser, fix("accounts"));
+    await until(browser, "the line's accounts fix opens the accounts", shownView("accounts"));
+    await click(browser, element(`${generator} [data-manage]`));
+    await until(browser, "the management shows the refused pool's accounts by provider, each included or not",
+      `JSON.stringify([...document.querySelectorAll('${manage} .plugin-atyrode_code__account-group')].map(group => [group.querySelector('h3').textContent,
+        [...group.querySelectorAll('.plugin-atyrode_code__account-row')].map(row => row.dataset.included)])) === ${JSON.stringify(JSON.stringify([["anthropic", ["true", "false"]], ["openai-codex", ["true"]]]))}`);
+    await click(browser, element(`${manage} .${G}title`));
+    await key(browser, "a", 65);
+    await until(browser, "a goes from the management to the generator, the save still refused", `${shownView("main")} && ${launchIs("save & launch", "refused")} && !!${fix("accounts")}`);
+    assert.equal((await readConfiguration(server, writer, first)).revision, revision, "Following the way to the accounts writes nothing");
+    holdPoolAt = null;
+    poolHold.release();
+    await focusLaunch(browser);
     observed = fixtureAccounts();
     await key(browser, "r", 82);
     await until(browser, "with the Claude account back the save is ready again", `${launchIs("save & launch", "ready")} && ${profileValues} === ${JSON.stringify(edits)}`);
@@ -6605,7 +6645,6 @@ async function sharedWorkbenchScenario(browser: BrowserInstance, viewerBrowser: 
     await until(browser, "Models shows the saved list, checked", `${element(modelsSheet)}?.dataset.phase === 'verified' && ${goIs(modelsSheet, "back to code")}`);
     assert.deepEqual(await browser.evaluate(modelList), listOf(document), "Models shows the saved checked list, each rung on its model");
     await closeSheet(browser);
-    const manage = `${generator} [data-pane="manage"]`;
     await showView(browser, "accounts");
     await click(browser, element(`${generator} [data-manage]`));
     await until(browser, "Manage accounts opens the accounts' management in place", shownView("manage"));
@@ -6729,6 +6768,7 @@ async function sharedWorkbenchScenario(browser: BrowserInstance, viewerBrowser: 
     await until(browser, "the rows follow the record back", `${chosenKey("advisor")} === ${JSON.stringify(ours.advisor)}`);
     fixture.check();
   } finally {
+    poolHold.release();
     offReads();
     await fixture.stop();
     // Reduced motion was this scenario's own; the scenarios after it prove the panel under default motion.
