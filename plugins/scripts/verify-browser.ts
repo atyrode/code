@@ -5091,8 +5091,8 @@ async function keptChecksScenario(browser: BrowserInstance, server: TestServer, 
     assert(sonnet, "The completed check contains the authored Sonnet tier");
     assert.equal(checkedRecord?.selection?.capability, 2, "Choosing high thinking retains the explicit Sonnet tier");
     const launched = ompActionSchemas.reviewSession.input.parse(trace.requests.slice(from).find(request => request.name === "atyrode.omp.reviewSession")?.input);
-    const launchModels = launched.overlay?.models;
-    assert(launchModels && typeof launchModels === "object" && !Array.isArray(launchModels));
+    const launchModels = launched.overlay.modelRoles;
+    assert(launchModels, "The actual launch review names each role's model");
     assert.equal(launchModels.default, `${sonnet.provider}/${sonnet.id}:high`,
       "The actual launch review receives Sonnet at high thinking, without a premium tier bump");
     const checkedPool = checked.provenance.poolIdentityDigest;
