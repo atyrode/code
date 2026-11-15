@@ -5,7 +5,7 @@ import { BenchmarkInputSchema, BenchmarkReceiptSchema, InventoryReceiptSchema, I
 import { CatalogDocumentSchema, SelectionSchema, DomainError, admittedBy, type Selection, type CatalogDocument, type CatalogModel,
   type ProviderPolicy } from "./contracts.ts";
 import { compileCatalog, validTierPair } from "./catalog.ts";
-import { orderedFamilies, familyPolicy, providerPolicy } from "./providers.ts";
+import { orderedFamilies, familyPolicy, providerPolicy, tierWord } from "./providers.ts";
 
 type InventoryModel = z.infer<typeof InventoryModelSchema>;
 /** A quota class OMP names for an inventory row (`quotaTier`), as a separate-quota exclusion carries it. */
@@ -216,10 +216,6 @@ type FamilyLadder = { rungs: Rung[]; rejected: InventoryModel[]; regression?: re
 function ladder(models: readonly InventoryModel[], policy: ProviderPolicy): FamilyLadder {
   const names = policy.tierNames ?? [];
   return models.some(model => names.includes(tierWord(model.id))) ? namedLadder(models, names) : metadataLadder(models);
-}
-/** The word a provider's tier names are matched against: the id's last name token (`gpt-6.1-sol` is `sol`). */
-function tierWord(id: string): string {
-  return modelFamily(id).name.split("-").at(-1)!;
 }
 /**
  * LADDERED BY THE PROVIDER'S NAMES. A model whose id ends in one of them takes that name's tier

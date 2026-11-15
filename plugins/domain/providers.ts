@@ -57,6 +57,15 @@ export function familyPolicy(family: string): ProviderPolicy {
   return providerPolicies.find(value => value.family === family) ?? providerPolicy(family);
 }
 
+/**
+ * The word a provider's tier names (`ProviderPolicy.tierNames`) are matched against: the id's last
+ * name token, version tokens skipped (`gpt-6.1-sol` is `sol`, `claude-opus-4-6` is `opus`). The
+ * probe ladders by it and a compiled catalog reads its effective tiers by it.
+ */
+export function tierWord(id: string): string {
+  return id.split("-").filter(token => !/^\d+(?:\.\d+)*$/.test(token)).at(-1)?.toLowerCase() ?? "";
+}
+
 export function orderedFamilies(families: Iterable<string>, order: readonly string[] = familyOrder): readonly string[] {
   const remaining = new Set(families);
   const ordered = order.filter(family => remaining.delete(family));
