@@ -17,6 +17,10 @@ export const providerPolicies: readonly ProviderPolicy[] = Object.freeze([
     family: "anthropic", providers: ["anthropic"], label: "Anthropic", accountLabel: "Anthropic",
     requiredLadder: true, meteredProviders: ["anthropic"], quotaBucketBase: "claude",
     crossTo: "openai",
+    // Anthropic's reviewed family names, fast to elite, each held at its own tier so a missing
+    // haiku or sonnet leaves that tier empty rather than moving opus or fable down to fill it.
+    // The order is the provider's naming, not a price or intelligence measurement.
+    tierNames: ["haiku", "sonnet", "opus", "fable"],
   }),
   policy({
     family: "openai", providers: ["openai-codex", "openai"], label: "OpenAI", accountLabel: "OpenAI",

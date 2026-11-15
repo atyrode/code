@@ -173,10 +173,14 @@ for one) is excluded, since Code spends no quota of its own. Unmeasured performa
 most 256 budget-eligible candidates before constructing ladders; it never truncates.
 
 Each family is laddered fast, normal, smart, elite (tiers 1–4) after keeping only the
-newest version of each model name. OpenAI names its tiers, so its ladder is those names:
-luna, terra, sol and astra, each at its own tier whatever its price or context window (of
-ids sharing a name, the newest takes it), and a model whose id names none of them is not
-chosen; a listing with none of the names is laddered as any other family is. Any other
+newest version of each model name. OpenAI and Anthropic name their tiers, so their ladders
+are those names: OpenAI's luna, terra, sol and astra and Anthropic's haiku, sonnet, opus and
+fable, each at its own tier whatever its price or context window (of ids sharing a name, the
+newest takes it), and a model whose id names none of them is not chosen. A tier the reached
+names leave empty stays empty and routes to the nearest rung: a lone Opus is tier 3 and a
+lone Sonnet tier 2, never moved down to fill fast or normal. The order is the provider's
+naming, not a price or intelligence measurement. A listing with none of the names is
+laddered as any other family is. Any other
 family's cheapest model is its first rung; the top and up to two middles follow a
 deterministic heuristic of thinking ceiling, then API list price. Middles come from
 between the ends where available, otherwise an end's price. This is not measured

@@ -240,9 +240,30 @@ describe("pure typed scaffolding", () => {
       ["anthropic", 1], ["anthropic", 2], ["anthropic", 3],
     ]);
     // Two rows of a family Code requires are a short ladder: laddered, said short, never refused.
+    // Its named rungs keep their own tiers; the missing fast tier routes to the nearest rung.
     const short = derived({ ...inv, models: inv.models.slice(1) }).document;
-    expect([tiers(short, "anthropic"), compileCatalog(short).short]).toEqual([[[1, "claude-sonnet-5"], [2, "claude-opus-5"]], ["anthropic"]]);
+    expect([tiers(short, "anthropic"), compileCatalog(short).short]).toEqual([[[2, "claude-sonnet-5"], [3, "claude-opus-5"]], ["anthropic"]]);
     expect(compileCatalog(derived(inv).document).short).toEqual([]);
+  });
+  test("Anthropic's named families keep their authored tiers when a lower or middle rung is missing", () => {
+    const inv = fullInventory();
+    inv.models = inv.models.filter(model => model.provider === "anthropic");
+    const measured = (blocked: readonly string[]) => tiers(catalogFromObservations(inv,
+      observed(inv, Object.fromEntries(blocked.map(id => [id, "client_blocked" as const])))).document, "anthropic");
+    expect(measured(["claude-haiku-5", "claude-sonnet-5"])).toEqual([[3, "claude-opus-5"]]);
+    expect(measured(["claude-haiku-5", "claude-opus-5"])).toEqual([[2, "claude-sonnet-5"]]);
+    expect(measured(["claude-sonnet-5"])).toEqual([[1, "claude-haiku-5"], [3, "claude-opus-5"]]);
+    for (const [ids, expected] of [
+      [["claude-haiku-5", "claude-opus-5"], [[1, "claude-haiku-5"], [3, "claude-opus-5"]]],
+      [["claude-opus-5"], [[3, "claude-opus-5"]]],
+    ] satisfies [string[], (string | number)[][]][]) {
+      const snapshot: ModelCatalogSnapshot = { schemaVersion: 1, source: "bundled", ompVersion: "18.1.14", revision: "a".repeat(64),
+        models: inv.models.filter(model => ids.includes(model.id)) };
+      expect(tiers(catalogFromMetadata(snapshot, "any"), "anthropic")).toEqual(expected);
+    }
+    // A listing none of whose ids carries a reviewed family name is still laddered by metadata.
+    const unnamed = { ...inv, models: inv.models.slice(1).map((model, index) => ({ ...model, id: `entry${index + 1}` })) };
+    expect(tiers(derived(unnamed).document, "anthropic")).toEqual([[1, "entry1"], [2, "entry2"]]);
   });
   test("missing, stale and wrong-API probes refuse promotion", () => {
     const inv = fullInventory(), input = benchmarkCandidates(inv), receipt = parseBenchmarkObservation(report(input), input, 101, 200);
