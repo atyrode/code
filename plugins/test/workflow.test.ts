@@ -900,7 +900,7 @@ test("a completed check a price ladder stored with a lone Opus at fast is compos
   }
 });
 
-test("a completed check that stored Haiku at fast and Opus at normal refuses that normal rank, choosing neither model and checking nothing again", async () => {
+test("a completed check that stored Haiku at fast and Opus at normal runs nothing at that unchosen rank, and each tier chosen explicitly resolves canonically from the kept check", async () => {
   const f = verificationFixture(), levels = ["low", "medium", "high", "max"] as const;
   f.omp.accounts.accounts = [f.slot("anthropic", 1)];
   f.omp.inventory.models = [row("anthropic", "claude-haiku-5", 1, 200_000, levels, true), row("anthropic", "claude-opus-5", 5, 200_000, levels, true)];
@@ -913,31 +913,105 @@ test("a completed check that stored Haiku at fast and Opus at normal refuses tha
   const kept = (await f.workflow.readChecks()).checks, spent = f.benchmarked.length, since = f.calls.length, stored = [...f.store];
   const compose = { containerId: target.containerId, accounts: f.omp.accounts, prompt: "" };
   expect(await handlers.composeSession!(f.ctx, { ...compose, expectedRevision: legacy.revision })).toEqual({ refused: "code_invalid_selection" });
-  expect(await handlers.select!(f.ctx, { containerId: target.containerId, expectedRevision: legacy.revision, selection: normal }))
-    .toEqual({ refused: "code_invalid_selection" });
-  expect([f.calls.slice(since), [...f.store]]).toEqual([[], stored]);
+  // A run that keeps the saved selection admits it first: refused while observing, nothing started, written or spent.
+  const background = await stopOf(f.workflow.verifyModels(target, { expectedRevision: legacy.revision, budget: "any", selection: null }));
+  expect([background.step, background.reason]).toEqual(["observe", "code_invalid_selection"]);
+  expect(f.calls.slice(since).filter(door => effects.includes(door) || door === "atyrode.code.adoptCheck" || door === actionDoor("readModelCatalog"))).toEqual([]);
+  expect([...f.store]).toEqual(stored);
   // Reads still answer the stored list and the completed check.
   expect((await f.configuration()).configuration).toEqual(legacy);
   expect(kept).toEqual([expect.objectContaining({ digest: legacy.active!.digest, provenance: verified.provenance,
     models: ["anthropic/claude-haiku-5", "anthropic/claude-opus-5"] })]);
+  // Normal chosen explicitly is a choice of what it names now, Haiku; smart names Opus. Both come from the same kept check.
   const initialized = await f.workflow.code("initializeConfiguration", { containerId: second.containerId, expectedRevision: 0 });
-  const before = [...f.store];
-  const refused = await stopOf(f.workflow.verifyModels(second, { expectedRevision: initialized.revision, budget: "any", selection: normal }));
-  expect([refused.step, refused.reason]).toEqual(["adopt", "code_invalid_selection"]);
-  expect([...f.store]).toEqual(before);
-  // Opus's actual tier names it explicitly: adopted and composed from the same kept check.
-  const adopted = await f.workflow.verifyModels(second, { expectedRevision: initialized.revision, budget: "any", selection: smart });
+  const adopted = await f.workflow.verifyModels(second, { expectedRevision: initialized.revision, budget: "any", selection: normal });
   if (adopted.kind !== "adopted") throw new Error("expected the kept check without another charge");
   expect(adopted.verified.configuration.active).toEqual(legacy.active);
   const catalog = compileCatalog(legacy.active!.document);
-  for (const [containerId, expectedRevision] of [[second.containerId, adopted.verified.configuration.revision],
-    [target.containerId, (await f.workflow.code("select", { containerId: target.containerId, expectedRevision: legacy.revision, selection: smart })).revision]] as const) {
+  for (const [containerId, expectedRevision, id] of [[second.containerId, adopted.verified.configuration.revision, "claude-haiku-5"],
+    [target.containerId, (await f.workflow.code("select", { containerId: target.containerId, expectedRevision: legacy.revision, selection: smart })).revision, "claude-opus-5"]] as const) {
     const composed = await f.workflow.code("composeSession", { ...compose, containerId, expectedRevision });
-    expect(catalog.model(composed.review.routes.find(route => route.role === "default")!.lead.key).id).toBe("claude-opus-5");
+    expect(catalog.model(composed.review.routes.find(route => route.role === "default")!.lead.key).id).toBe(id);
   }
   expect((await f.workflow.readChecks()).checks).toEqual(kept);
   expect(f.benchmarked).toHaveLength(spent);
   expect(f.calls.slice(since).filter(door => door === actionDoor("startInventory") || door === actionDoor("startBenchmark"))).toEqual([]);
+});
+
+test("a kept check whose stored ladder compressed Opus and Sonnet adopts only an explicit choice, witnessed privately, and composes it without checking again", async () => {
+  const f = verificationFixture(), levels = ["low", "medium", "high", "max"] as const;
+  f.omp.accounts.accounts = [f.slot("anthropic", 1)];
+  f.omp.inventory.models = [row("anthropic", "claude-sonnet-5", 3, 200_000, levels, true), row("anthropic", "claude-opus-5", 5, 200_000, levels, true)];
+  f.omp.catalog = { ...f.omp.catalog, models: f.omp.inventory.models };
+  const smart: Selection = { ...preview, lane: { kind: "provider", family: "anthropic", blend: "only" }, capability: 3, thinking: "medium", advisor: "off", spark: false };
+  const normal: Selection = { ...smart, capability: 2 };
+  const verified = await (await prepared(f, 0)).confirm(smart);
+  // Stored Opus at smart and Sonnet at elite, saved at normal, which then meant Opus; read by name, normal is Sonnet.
+  const legacy = storeLegacyCheck(f, verified.configuration, { "claude-opus-5": 3, "claude-sonnet-5": 4 }, normal);
+  const kept = (await f.workflow.readChecks()).checks, spent = f.benchmarked.length, since = f.calls.length;
+  const compose = { accounts: f.omp.accounts, prompt: "" };
+  const configurationKey = (containerId: string) => `configuration/${digestOf({ containerId })}`;
+  expect(await handlers.composeSession!(f.ctx, { ...compose, containerId: target.containerId, expectedRevision: legacy.revision }))
+    .toEqual({ refused: "code_invalid_selection" });
+  const listed = actionSchemas.listProfiles.result.parse(await handlers.listProfiles!(f.ctx, {}));
+  expect(listed.profiles.find(profile => profile.containerId === target.containerId)).toMatchObject({ revision: legacy.revision, selected: null });
+  // A new workspace of the pool, in the background (no selection): the default over that ladder is no choice, so nothing is written or run.
+  const initialized = await f.workflow.code("initializeConfiguration", { containerId: second.containerId, expectedRevision: 0 });
+  const before = [...f.store];
+  let from = f.calls.length;
+  const background = await stopOf(f.workflow.verifyModels(second, { expectedRevision: initialized.revision, budget: "any", selection: null }));
+  expect([background.step, background.reason]).toEqual(["adopt", "code_invalid_selection"]);
+  expect(f.calls.slice(from).filter(door => effects.includes(door) || door === "atyrode.code.adoptCheck")).toEqual(["atyrode.code.adoptCheck"]);
+  expect([...f.store]).toEqual(before);
+  // In the foreground the person's explicit normal adopts the very check and records what it resolved to, privately.
+  from = f.calls.length;
+  const adopted = await f.workflow.verifyModels(second, { expectedRevision: initialized.revision, budget: "any", selection: normal });
+  if (adopted.kind !== "adopted") throw new Error("expected the kept check without another charge");
+  const saved = adopted.verified.configuration;
+  expect([saved.active, saved.selection]).toEqual([legacy.active, normal]);
+  expect(saved.active!.digest).toBe(digestOf(saved.active!.document));
+  expect(saved.active!.provenance).toEqual(verified.provenance);
+  expect(f.calls.slice(from).filter(door => effects.includes(door) || door === "atyrode.code.adoptCheck")).toEqual(["atyrode.code.adoptCheck"]);
+  expect(JSON.parse(f.store.get(configurationKey(second.containerId))!)).toEqual({ ...saved, resolvedSelection: {
+    catalogDigest: legacy.active!.digest, selectionDigest: digestOf(normal), provider: "anthropic", id: "claude-sonnet-5" } });
+  expect((await f.configuration(second)).configuration).toEqual(saved);
+  // The workspace that saved the rank repairs it with the same explicit choice; both then compose and list Sonnet.
+  const repaired = await f.workflow.code("select", { containerId: target.containerId, expectedRevision: legacy.revision, selection: normal });
+  expect(repaired).toEqual({ ...legacy, revision: legacy.revision + 1 });
+  const catalog = compileCatalog(legacy.active!.document);
+  for (const [containerId, expectedRevision] of [[second.containerId, saved.revision], [target.containerId, repaired.revision]] as const) {
+    const composed = await f.workflow.code("composeSession", { ...compose, containerId, expectedRevision });
+    expect(catalog.model(composed.review.routes.find(route => route.role === "default")!.lead.key).id).toBe("claude-sonnet-5");
+  }
+  expect(actionSchemas.listProfiles.result.parse(await handlers.listProfiles!(f.ctx, {})).profiles.map(profile => profile.selected?.model))
+    .toEqual(["anthropic/claude-sonnet-5", "anthropic/claude-sonnet-5"]);
+  // Opus stays reachable at its actual tier; under it, nothing new is admitted and nothing is written.
+  const opus = await f.workflow.code("select", { containerId: target.containerId, expectedRevision: repaired.revision, selection: smart });
+  const held = [...f.store];
+  expect(await handlers.select!(f.ctx, { containerId: target.containerId, expectedRevision: opus.revision, selection: { ...smart, capability: 1 } }))
+    .toEqual({ refused: "code_invalid_selection" });
+  expect([...f.store]).toEqual(held);
+  const composed = await f.workflow.code("composeSession", { ...compose, containerId: target.containerId, expectedRevision: opus.revision });
+  expect(catalog.model(composed.review.routes.find(route => route.role === "default")!.lead.key).id).toBe("claude-opus-5");
+  expect((await f.configuration()).configuration?.active).toEqual(legacy.active);
+  expect((await f.workflow.readChecks()).checks).toEqual(kept);
+  expect(f.benchmarked).toHaveLength(spent);
+  expect(f.calls.slice(since).filter(door => door === actionDoor("startInventory") || door === actionDoor("startBenchmark"))).toEqual([]);
+});
+
+test("a run without a selection keeps a free budget: the default it saves and adopts stays free", async () => {
+  const f = verificationFixture(), levels = ["low", "medium", "high", "max"] as const;
+  f.omp.accounts.accounts = [f.slot("openai-codex", 3)];
+  f.omp.inventory.models = [row("openai-codex", "gpt-6-luna", 0, 200_000, levels, true),
+    row("openai-codex", "gpt-6.1-terra", 0, 200_000, levels, true), row("openai-codex", "gpt-6.1-sol", 0, 200_000, levels, true)];
+  const pending = await f.workflow.verifyModels(target, { expectedRevision: 0, budget: "free", selection: null });
+  if (pending.kind !== "charge") throw new Error("expected a charge");
+  const verified = await pending.confirm(null);
+  expect(verified.configuration.selection).toMatchObject({ lane: { kind: "provider", family: "openai", blend: "only" }, capability: 3, budget: "free" });
+  const adopted = await f.workflow.verifyModels(second, { expectedRevision: 0, budget: "free", selection: null });
+  if (adopted.kind !== "adopted") throw new Error("expected the kept check");
+  expect(adopted.verified.configuration.selection).toEqual(verified.configuration.selection);
+  expect(f.benchmarked).toHaveLength(1);
 });
 
 test("the standing approval is the caller's own, written at its exact revision, and bounds what checks spend without asking", async () => {

@@ -16,7 +16,7 @@ import { compileCatalog, type CompiledCatalog } from "../domain/catalog.ts";
 import { projectUsage } from "../domain/usage.ts";
 import { providerPolicy } from "../domain/providers.ts";
 import { inventoryPlan, type Exclusion } from "../domain/probe.ts";
-import { clampSelection, laneFamilies, newPremiumLead, reviewCatalog, selectionForLane } from "../domain/routing.ts";
+import { clampSelection, defaultSelection, laneFamilies, newPremiumLead, reviewCatalog, selectionForLane } from "../domain/routing.ts";
 import { DomainError, type AccountChoices, type Selection } from "../domain/contracts.ts";
 
 export type Dispatch = (door: string, input: unknown) => Promise<unknown>;
@@ -191,6 +191,13 @@ function hasPremiumProfile(catalog: CompiledCatalog, budget: Selection["budget"]
     }
   }
   return false;
+}
+
+/** The selection a verified list is put in use with: `wanted` narrowed to it or, without one, the
+ * list's default under exactly the charged budget — a free check never becomes an any-spend default. */
+function narrowedSelection(catalog: CompiledCatalog, wanted: Selection | null, budget: Selection["budget"],
+  serves: (provider: string) => boolean): Selection {
+  return clampSelection(catalog, wanted ?? { ...defaultSelection(catalog, serves), budget }, serves);
 }
 
 /** The steps of a model verification, in the order they run; a failure names the one it stopped at. `adopt` replaces
@@ -619,6 +626,10 @@ export function createCodeWorkflowClient(transport: Dispatch) {
     run.enter("observe");
     const observed = await run.call(() => code("readConfiguration", { containerId: target.containerId }));
     if (observed.revision !== input.expectedRevision) throw run.fail("code_stale_preferences");
+    // A run without a selection keeps the saved one. Only Code reads what that saved choice resolved to, so
+    // its own read-only review of the list in use admits it before anything is started, written or spent.
+    if (input.selection === null && observed.configuration?.active && observed.configuration.selection)
+      await run.call(() => code("reviewCatalog", { containerId: target.containerId, expectedRevision: observed.revision, source: "active" }));
     let record = observed.configuration;
     if (record === null) {
       if (input.adoptOnly) return { kind: "none" };
@@ -698,7 +709,7 @@ export function createCodeWorkflowClient(transport: Dispatch) {
     try {
       const catalog = compileCatalog(inventoryPlan(charge.inventory, charge.budget));
       try {
-        const selection = clampSelection(catalog, wanted, provider => charge.pool.providers.includes(provider));
+        const selection = narrowedSelection(catalog, wanted, charge.budget, provider => charge.pool.providers.includes(provider));
         plannedPremium = newPremiumLead(catalog, selection, previous) !== null;
       } catch (error) {
         if (wanted !== null || !(error instanceof DomainError)) throw error;
@@ -745,7 +756,7 @@ export function createCodeWorkflowClient(transport: Dispatch) {
     try {
       const catalog = compileCatalog(derived.document);
       try {
-        selection = clampSelection(catalog, wanted, provider => charge.pool.providers.includes(provider));
+        selection = narrowedSelection(catalog, wanted, charge.budget, provider => charge.pool.providers.includes(provider));
         premium = newPremiumLead(catalog, selection, previous) !== null;
       } catch (error) {
         if (wanted !== null || !(error instanceof DomainError) ||

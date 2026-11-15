@@ -671,7 +671,7 @@ describe("pure client-supplied policy composition", () => {
     }
   });
 
-  test("a stored rank whose model the named tiers would change refuses composition and selection, choosing neither model, while each actual tier still resolves", async () => {
+  test("a stored rank whose model the named tiers would change composes nothing until chosen explicitly, and an explicit choice resolves the canonical model", async () => {
     // Haiku and Opus a price ladder stored at fast and normal, saved at normal, which meant Opus: read by name, normal is Haiku's.
     const f = fixture(), base = document().models;
     const catalog: CatalogDocument = { schemaVersion: 1, models: [{ ...base[0]!, key: "haiku", id: "claude-haiku-5", tier: 1 },
@@ -681,16 +681,119 @@ describe("pure client-supplied policy composition", () => {
     const before = [...f.store];
     expect(await invoke(f, "composeSession", { ...workspace, expectedRevision: legacy.revision, accounts: accounts(), prompt: "" }))
       .toEqual({ refused: "code_invalid_selection" });
-    expect(await invoke(f, "select", { ...workspace, expectedRevision: legacy.revision, selection: legacy.selection! })).toEqual({ refused: "code_invalid_selection" });
+    expect(await invoke(f, "reviewCatalog", { ...workspace, expectedRevision: legacy.revision, source: "active" })).toEqual({ refused: "code_invalid_selection" });
     expect([f.publishedReads, [...f.store]]).toEqual([0, before]);
     expect(await configuration(f)).toEqual(legacy);
-    for (const [capability, key] of [[1, "haiku"], [3, "opus"]] as const) {
+    for (const [capability, key] of [[1, "haiku"], [2, "haiku"], [3, "opus"]] as const) {
       const review = await accepted(f, "reviewCatalog", { ...workspace, expectedRevision: legacy.revision, source: "active", selection: { ...anthropicSmart, capability } });
       expect(review.review.routes.find(route => route.role === "default")?.lead.key).toBe(key);
     }
-    const chosen = await accepted(f, "select", { ...workspace, expectedRevision: legacy.revision, selection: anthropicSmart });
+    // The same rank chosen again is a choice of what it now names, never of the model it once meant.
+    const normal = await accepted(f, "select", { ...workspace, expectedRevision: legacy.revision, selection: legacy.selection! });
+    expect(leadOf(await accepted(f, "composeSession", { ...workspace, expectedRevision: normal.revision, accounts: accounts(), prompt: "" }))).toBe("haiku");
+    const chosen = await accepted(f, "select", { ...workspace, expectedRevision: normal.revision, selection: anthropicSmart });
     expect(leadOf(await accepted(f, "composeSession", { ...workspace, expectedRevision: chosen.revision, accounts: accounts(), prompt: "" }))).toBe("opus");
-    expect(chosen.active).toEqual(legacy.active);
+    expect([normal.active, chosen.active]).toEqual([legacy.active, legacy.active]);
+  });
+
+  describe("the private resolved intent of an explicit choice", () => {
+    // Sonnet and Opus a price ladder stored at elite and smart, saved at normal, which meant Opus: read by name,
+    // Sonnet is normal and Opus smart, so the saved rank alone cannot say which model it chose.
+    const base = document().models;
+    const compressed: CatalogDocument = { schemaVersion: 1, models: [{ ...base[1]!, key: "sonnet", id: "claude-sonnet-5", tier: 4 },
+      { ...base[2]!, key: "opus", id: "claude-opus-5", tier: 3 }] };
+    const normal: Selection = { ...anthropicSmart, capability: 2 };
+    const key = `configuration/${digestOf(workspace)}`;
+    const envelope = (f: Fixture) => JSON.parse(f.store.get(key)!) as Record<string, unknown>;
+    const compose = (f: Fixture, expectedRevision: number) => invoke(f, "composeSession", { ...workspace, expectedRevision, accounts: accounts(), prompt: "" });
+    const profile = async (f: Fixture) => (await accepted(f, "listProfiles", {})).profiles.find(row => row.containerId === workspace.containerId);
+    async function legacyOf(f: Fixture) {
+      f.published = published(compressed.models);
+      return storedChoice(f, compressed, anthropicSmart, normal);
+    }
+
+    test("a deliberate same-rank choice writes its witness in the one CAS, and reads, listing and composition then resolve it without any public field", async () => {
+      const f = fixture(), legacy = await legacyOf(f);
+      // Unwitnessed, the saved rank composes nothing and lists no model, before OMP is read; the record still reads and lists.
+      expect(await compose(f, legacy.revision)).toEqual({ refused: "code_invalid_selection" });
+      expect(await invoke(f, "reviewCatalog", { ...workspace, expectedRevision: legacy.revision, source: "active" })).toEqual({ refused: "code_invalid_selection" });
+      expect(await profile(f)).toMatchObject({ revision: legacy.revision, selected: null });
+      expect(f.publishedReads).toBe(0);
+      // A caller cannot supply a witness: the published input grammar has no place for one.
+      expect(await invoke(f, "select", { ...workspace, expectedRevision: legacy.revision, selection: normal,
+        resolvedSelection: { catalogDigest: legacy.active!.digest, selectionDigest: digestOf(normal), provider: "anthropic", id: "claude-opus-5" } } as never))
+        .toEqual({ refused: "code_invalid_request" });
+      const writes = f.store.size;
+      const saved = await accepted(f, "select", { ...workspace, expectedRevision: legacy.revision, selection: normal });
+      expect(saved).toEqual({ ...legacy, revision: legacy.revision + 1, updatedAt: now });
+      expect(f.store.size).toBe(writes);
+      expect(envelope(f)).toEqual({ ...saved, resolvedSelection: { catalogDigest: legacy.active!.digest, selectionDigest: digestOf(normal),
+        provider: "anthropic", id: "claude-sonnet-5" } });
+      // Every public answer is the strict record: `accepted` parses each through its published schema.
+      expect(await configuration(f)).toEqual(saved);
+      expect(Object.keys((await accepted(f, "readConfiguration", workspace)).configuration!)).not.toContain("resolvedSelection");
+      const reviewed = await accepted(f, "reviewCatalog", { ...workspace, expectedRevision: saved.revision, source: "active" });
+      expect(reviewed.review.routes.find(route => route.role === "default")?.lead.key).toBe("sonnet");
+      expect(await profile(f)).toMatchObject({ selected: { model: "anthropic/claude-sonnet-5", capability: 2 } });
+      expect(leadOf(await accepted(f, "composeSession", { ...workspace, expectedRevision: saved.revision, accounts: accounts(), prompt: "" }))).toBe("sonnet");
+      // The raw list, its digest and its provenance are exactly the ones saved before.
+      expect(saved.active).toEqual(legacy.active);
+      expect(saved.active!.digest).toBe(digestOf(compressed));
+    });
+
+    test("a malformed, stale or mismatched witness is no witness: reads keep working and keep its bytes, composition refuses", async () => {
+      const f = fixture(), legacy = await legacyOf(f);
+      const saved = await accepted(f, "select", { ...workspace, expectedRevision: legacy.revision, selection: normal });
+      const valid = envelope(f).resolvedSelection as Record<string, string>;
+      for (const witness of [{ ...valid, provider: 7 }, "sonnet", null, { ...valid, extra: true },
+        { ...valid, catalogDigest: "0".repeat(64) }, { ...valid, selectionDigest: digestOf({ ...normal, thinking: "high" }) },
+        { ...valid, id: "claude-opus-5" }, { ...valid, provider: "openai" }]) {
+        const raw = JSON.stringify({ ...saved, resolvedSelection: witness });
+        f.store.set(key, raw);
+        expect(await configuration(f)).toEqual(saved);
+        expect(await profile(f)).toMatchObject({ revision: saved.revision, selected: null });
+        expect(await invoke(f, "reviewCatalog", { ...workspace, expectedRevision: saved.revision, source: "active" })).toEqual({ refused: "code_invalid_selection" });
+        expect(await compose(f, saved.revision)).toEqual({ refused: "code_invalid_selection" });
+        expect(f.store.get(key)).toBe(raw);
+      }
+      expect(f.publishedReads).toBe(0);
+      // An unrelated write drops what no longer binds rather than carrying it.
+      const changed = await accepted(f, "changeAccounts", { ...workspace, expectedRevision: saved.revision,
+        change: { kind: "set-account", reference: accounts().accounts[2]!.reference, enabled: false } });
+      expect(envelope(f)).toEqual(changed);
+    });
+
+    test("unrelated writes carry a still-bound witness; a new explicit choice rebinds it and an automatic one never creates it", async () => {
+      const f = fixture(), legacy = await legacyOf(f);
+      const saved = await accepted(f, "select", { ...workspace, expectedRevision: legacy.revision, selection: normal });
+      const witness = envelope(f).resolvedSelection;
+      const refreshed = { ...compressed, models: compressed.models.map(model => ({ ...model, contextWindow: 199_999 })) };
+      const stagedNext = await accepted(f, "stageCatalog", { ...workspace, expectedRevision: saved.revision, document: refreshed });
+      const changed = await accepted(f, "changeAccounts", { ...workspace, expectedRevision: stagedNext.revision,
+        change: { kind: "set-account", reference: accounts().accounts[2]!.reference, enabled: false } });
+      const discarded = await accepted(f, "discardCatalog", { ...workspace, expectedRevision: changed.revision });
+      expect(envelope(f)).toEqual({ ...discarded, resolvedSelection: witness });
+      // Re-saving the list in use with no new choice carries the same witness.
+      const kept = await accepted(f, "reviewCatalog", { ...workspace, expectedRevision: discarded.revision, source: "active" });
+      const repromoted = await accepted(f, "promoteCatalog", { ...workspace, expectedRevision: discarded.revision, source: "active", reviewDigest: kept.reviewDigest });
+      expect(envelope(f)).toEqual({ ...repromoted, resolvedSelection: witness });
+      expect(leadOf(await accepted(f, "composeSession", { ...workspace, expectedRevision: repromoted.revision, accounts: accounts(), prompt: "" }))).toBe("sonnet");
+      // A changed selector is a new choice: the server rebinds the witness to the model it now names.
+      const smart = await accepted(f, "select", { ...workspace, expectedRevision: repromoted.revision, selection: anthropicSmart });
+      expect(envelope(f).resolvedSelection).toEqual({ catalogDigest: legacy.active!.digest, selectionDigest: digestOf(anthropicSmart),
+        provider: "anthropic", id: "claude-opus-5" });
+      // A new list promoted with no choice of its own keeps no witness, even over a witnessed saved choice.
+      const draft = await accepted(f, "stageCatalog", { ...workspace, expectedRevision: smart.revision, document: document() });
+      const automatic = await accepted(f, "reviewCatalog", { ...workspace, expectedRevision: draft.revision, source: "draft" });
+      const promoted = await accepted(f, "promoteCatalog", { ...workspace, expectedRevision: draft.revision, source: "draft", reviewDigest: automatic.reviewDigest });
+      expect(envelope(f)).toEqual(promoted);
+      // The same list chosen explicitly at review and promotion is witnessed in that promotion's CAS.
+      const again = await accepted(f, "stageCatalog", { ...workspace, expectedRevision: promoted.revision, document: compressed });
+      const input = { ...workspace, expectedRevision: again.revision, source: "draft" as const, selection: normal };
+      const explicit = await accepted(f, "reviewCatalog", input);
+      const chosen = await accepted(f, "promoteCatalog", { ...input, reviewDigest: explicit.reviewDigest });
+      expect(envelope(f)).toEqual({ ...chosen, resolvedSelection: witness });
+    });
   });
 
   test("freshness and complete route-provider coverage cannot be supplied by stale or empty pools", async () => {

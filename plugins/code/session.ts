@@ -14,14 +14,14 @@ import type { ActionCallRefusal } from "@manifold/protocol";
 import { z } from "zod";
 import { selectedAccountPool } from "../domain/accounts.ts";
 import { compileCatalog, type CompiledCatalog } from "../domain/catalog.ts";
-import { DomainError, type AccountChoices, type CatalogDocument, type Selection } from "../domain/contracts.ts";
+import { DomainError, type AccountChoices, type Selection } from "../domain/contracts.ts";
 import { compileOmpOverlay, newPremiumLead, reviewCatalog, routedModels, servedRoutes, unpublishedModels,
-  type Review } from "../domain/routing.ts";
+  type ModelAddress, type Review } from "../domain/routing.ts";
 import { digest, id, revision, reviewedSessionOptions, sessionInput, type ActionInput, type ActionResult,
-  type Profile, type SessionComposition } from "./contract.ts";
+  type Configuration, type Profile, type SessionComposition } from "./contract.ts";
 import { CodeRefusal, digestOf, type CodeContext } from "./context.ts";
-import { authorizeTarget, expectRevision, readConfiguration,
-  readableConfigurations, requireConfiguration } from "./state.ts";
+import { admitStored, authorizeTarget, expectRevision, readConfiguration, readableConfigurations, requireConfiguration,
+  resolvedIntent, type ResolvedSelection } from "./state.ts";
 
 /** What Code keeps of a session it posted: the composition it was, the workspace it belongs
  * to, and the OMP job that carries it. It is the whole basis on which `readSession` speaks for
@@ -66,7 +66,7 @@ export async function composeSession(ctx: CodeContext, args: ActionInput<"compos
   const accountPool = selectedAccountPool(args.accounts, record.accounts);
   const serves = (provider: string): boolean => (accountPool[provider]?.length ?? 0) > 0;
   const catalog = compileCatalog(record.active.document);
-  const reviewed = savedReview(catalog, record.selection, receivedAt);
+  const reviewed = savedReview(catalog, record.selection, receivedAt, resolvedIntent(previous.resolved, record.active, record.selection, catalog));
   const review = { ...reviewed, routes: servedRoutes(catalog, reviewed.routes, serves) };
   const routed = routedModels(catalog, review.routes);
   const published = await ompCall(ctx, "readModelCatalog", { providers: [...new Set(routed.map(model => model.provider))].sort() });
@@ -85,13 +85,16 @@ export async function composeSession(ctx: CodeContext, args: ActionInput<"compos
 }
 /**
  * The saved selection, reviewed and admitted as `select` admits one, against the record it is
- * itself: an unchanged authored lead keeps its meaning, while a rank a stored ladder recorded
- * under an older tier rule is not consent to the premium model its canonical tier now names
- * (`newPremiumLead`). Refused as `invalid_selection`; it reads nothing beyond the record.
+ * itself: the model its valid private witness vouches for, or else the model its stored tiers named
+ * (`admitStored`) — a rank a stored ladder recorded under an older tier rule is no choice of the
+ * model its canonical tier now names — and then no premium lead it never chose (`newPremiumLead`).
+ * Refused as `invalid_selection`; it reads nothing beyond the record.
  */
-function savedReview(catalog: CompiledCatalog, selection: Selection, now: number): Review {
+function savedReview(catalog: CompiledCatalog, selection: Selection, now: number, intent: ModelAddress | null): Review {
+  admitStored(catalog, selection, intent);
   const review = reviewCatalog(catalog, selection, now);
-  if (newPremiumLead(catalog, selection, { catalog, selection })) throw new DomainError("invalid_selection");
+  if (newPremiumLead(catalog, selection, { catalog, selection, ...(intent === null ? {} : { resolved: intent }) }))
+    throw new DomainError("invalid_selection");
   return review;
 }
 
@@ -169,10 +172,10 @@ export async function listProfiles(ctx: CodeContext, _args: ActionInput<"listPro
     if (!(error instanceof CodeRefusal)) throw error;
   }
   const profiles: Profile[] = [];
-  for (const record of await readableConfigurations(ctx)) {
+  for (const { record, resolved } of await readableConfigurations(ctx)) {
     if (!record.active || !record.selection) continue;
     profiles.push({ containerId: record.containerId, revision: record.revision,
-      selected: selectedModel(record.active.document, record.selection, ctx.now()),
+      selected: selectedModel(record.active, record.selection, resolved, ctx.now()),
       machineId: await lastDestination(ctx, record.containerId),
       ...spentAccounts(observed, record.accounts) });
   }
@@ -202,12 +205,14 @@ function spentAccounts(observed: AccountsObservation | null, choices: AccountCho
     throw error;
   }
 }
-/** A selection its catalog no longer supports or admits summarises as nothing: the generator is
+/** A selection its catalog no longer supports or admits — including a stored rank no valid witness
+ * vouches for whose model the canonical tiers changed — summarises as nothing: the generator is
  * where it is resolved, and a caller must not read a stale dial as the model a run would use. */
-function selectedModel(document: CatalogDocument, selection: Selection, now: number): Profile["selected"] {
+function selectedModel(active: NonNullable<Configuration["active"]>, selection: Selection, resolved: ResolvedSelection | null,
+  now: number): Profile["selected"] {
   try {
-    const catalog = compileCatalog(document);
-    const review = savedReview(catalog, selection, now);
+    const catalog = compileCatalog(active.document);
+    const review = savedReview(catalog, selection, now, resolvedIntent(resolved, active, selection, catalog));
     const lead = review.routes.find(route => route.role === "default")?.lead;
     if (!lead) return null;
     const model = catalog.model(lead.key);

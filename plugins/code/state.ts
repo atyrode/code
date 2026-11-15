@@ -2,11 +2,11 @@ import { z } from "zod";
 import type { GuestStorage, ServerMigration } from "@manifold/plugin-kit/server";
 import type { RuntimeAccountPool } from "@atyrode/manifold-omp";
 import { initialAccountChoices, selectedAccountPool } from "../domain/accounts.ts";
-import { compileCatalog } from "../domain/catalog.ts";
+import { compileCatalog, type CompiledCatalog } from "../domain/catalog.ts";
 import { DomainError, type CatalogDocument, type Selection } from "../domain/contracts.ts";
-import { defaultSelection, newPremiumLead, reviewCatalog } from "../domain/routing.ts";
+import { defaultSelection, newPremiumLead, reviewCatalog, type ModelAddress } from "../domain/routing.ts";
 import { CODE_PREFERENCES_EVENT, CatalogRevisionSchema, ConfigurationSchema, VerificationProvenanceSchema,
-  ConfigurationLookupSchema, TargetSchema, type Configuration, type Workspace, type CatalogReview,
+  ConfigurationLookupSchema, TargetSchema, digest, id, type Configuration, type Workspace, type CatalogReview,
   type ActionInput, type VerificationProvenance } from "./contract.ts";
 import { CodeRefusal, digestOf, type CodeContext } from "./context.ts";
 
@@ -19,13 +19,29 @@ export async function allowsWorkspace(ctx: CodeContext, target: Workspace, write
 export async function authorizeTarget(ctx: CodeContext, target: Workspace, write = false): Promise<void> {
   if (!(await allowsWorkspace(ctx, target, write))) throw new CodeRefusal("scope_refused");
 }
+/**
+ * THE RESOLVED INTENT OF A SAVED SELECTION, private to storage. A selection is only numbers — a
+ * lane, a tier and preferences — so a capability saved before a catalog's tiers were read by name
+ * cannot say which model it chose. A selection someone chose explicitly against the canonical
+ * tiers records the model it resolved to here, bound to the exact catalog bytes (`catalogDigest`),
+ * the whole saved selection (`selectionDigest`) and that model's provider/id; it is written in the
+ * same CAS as the selection and never leaves storage. A witness that is malformed, or that no
+ * longer binds the record's active catalog, selection and canonical model, is no witness at all:
+ * the saved selection then answers to the strict stored-identity guard.
+ */
+const ResolvedSelectionSchema = z.strictObject({ catalogDigest: digest, selectionDigest: digest, provider: id, id });
+export type ResolvedSelection = z.infer<typeof ResolvedSelectionSchema>;
 export interface StoredConfiguration {
   key: string;
   raw: string | null;
   record: Configuration | null;
+  /** The stored witness as it parsed, not yet checked against the record; see `resolvedIntent`. */
+  resolved: ResolvedSelection | null;
   workspace: Workspace;
   legacyMachineId: string | null;
 }
+/** A canonical configuration as stored: its public record and, beside it, its private witness. */
+export interface ConfigurationEntry { record: Configuration; resolved: ResolvedSelection | null }
 // Schema 3 is schema 4 without verification provenance on either catalog.
 const Version3CatalogSchema = CatalogRevisionSchema.omit({ provenance: true });
 const Version3ConfigurationSchema = ConfigurationSchema.extend({
@@ -69,6 +85,16 @@ const StoredVersion4Schema = ConfigurationSchema.extend({ draft: StoredCatalogSc
 const StoredConfigurationSchema = z.union([StoredVersion4Schema, Version3ConfigurationSchema.transform(unverified),
   Version2To3Schema.transform(unverified)]);
 const ConfigurationVersionSchema = z.object({ schemaVersion: z.number().int() });
+/** The stored envelope split in two: the private witness is read leniently (malformed reads as
+ * none) and removed before the public record meets its strict schema, whose corruption rules are
+ * unchanged. Nothing is rewritten on read. */
+function hydrate(value: unknown): ConfigurationEntry {
+  if (typeof value !== "object" || value === null || Array.isArray(value) || !Object.hasOwn(value, "resolvedSelection"))
+    return { record: StoredConfigurationSchema.parse(value), resolved: null };
+  const { resolvedSelection, ...record } = value as Record<string, unknown>;
+  const witness = ResolvedSelectionSchema.safeParse(resolvedSelection);
+  return { record: StoredConfigurationSchema.parse(record), resolved: witness.success ? witness.data : null };
+}
 
 /** One migration's pass: every canonical record below schema `target` is rewritten by `upgrade`
  * under exact CAS, and every record is checked to be bound to its own container's key. Schema-1
@@ -80,7 +106,7 @@ async function upgradeConfigurations(storage: GuestStorage, target: number, upgr
     const value: unknown = JSON.parse(raw);
     const { schemaVersion } = ConfigurationVersionSchema.parse(value);
     if (schemaVersion === 1) continue;
-    const record = schemaVersion < target ? upgrade(value) : StoredConfigurationSchema.parse(value);
+    const record = schemaVersion < target ? upgrade(value) : hydrate(value).record;
     if (key !== `configuration/${digestOf({ containerId: record.containerId })}`) throw new CodeRefusal("invalid_configuration");
     if (schemaVersion >= target) continue;
     if (!await storage.compareAndSet(key, raw, JSON.stringify(record))) throw new CodeRefusal("stale_preferences");
@@ -98,7 +124,8 @@ export async function readConfiguration(ctx: CodeContext, input: z.infer<typeof 
   const workspace = { containerId: input.containerId };
   const key = `configuration/${digestOf(workspace)}`;
   const raw = await ctx.storage.get(key);
-  let record = raw === null ? null : StoredConfigurationSchema.parse(JSON.parse(raw));
+  const stored = raw === null ? null : hydrate(JSON.parse(raw));
+  let record = stored?.record ?? null;
   let legacyMachineId: string | null = null;
   if (record && record.containerId !== input.containerId) throw new CodeRefusal("invalid_configuration");
   // Only an explicitly selected legacy destination may be adopted. The canonical
@@ -112,7 +139,7 @@ export async function readConfiguration(ctx: CodeContext, input: z.infer<typeof 
       legacyMachineId = machineId;
     }
   }
-  return { key, raw, record, workspace, legacyMachineId };
+  return { key, raw, record, resolved: stored?.resolved ?? null, workspace, legacyMachineId };
 }
 /**
  * Every canonical configuration this principal may read, ordered by container. A schema-1
@@ -120,18 +147,18 @@ export async function readConfiguration(ctx: CodeContext, input: z.infer<typeof 
  * names it — and a record whose key does not bind its own container refuses the read here as
  * it does there, because a misbound record is corruption and not a workspace.
  */
-export async function readableConfigurations(ctx: CodeContext): Promise<Configuration[]> {
-  const records: Configuration[] = [];
+export async function readableConfigurations(ctx: CodeContext): Promise<ConfigurationEntry[]> {
+  const entries: ConfigurationEntry[] = [];
   for (const key of await ctx.storage.keys("configuration/")) {
     const raw = await ctx.storage.get(key);
     if (raw === null) continue;
     const value: unknown = JSON.parse(raw);
     if (ConfigurationVersionSchema.parse(value).schemaVersion === 1) continue;
-    const record = StoredConfigurationSchema.parse(value);
-    if (key !== `configuration/${digestOf({ containerId: record.containerId })}`) throw new CodeRefusal("invalid_configuration");
-    if (await allowsWorkspace(ctx, record)) records.push(record);
+    const entry = hydrate(value);
+    if (key !== `configuration/${digestOf({ containerId: entry.record.containerId })}`) throw new CodeRefusal("invalid_configuration");
+    if (await allowsWorkspace(ctx, entry.record)) entries.push(entry);
   }
-  return records.sort((left, right) => left.containerId.localeCompare(right.containerId));
+  return entries.sort((left, right) => left.record.containerId.localeCompare(right.record.containerId));
 }
 export function expectRevision(previous: StoredConfiguration, expected: number): void {
   if ((previous.record?.revision ?? 0) !== expected || expected === Number.MAX_SAFE_INTEGER) throw new CodeRefusal("stale_preferences");
@@ -140,12 +167,21 @@ export function requireConfiguration(previous: StoredConfiguration): Configurati
   if (!previous.record) throw new CodeRefusal("configuration_missing");
   return previous.record;
 }
-export async function commitConfiguration(ctx: CodeContext, previous: StoredConfiguration, next: Configuration): Promise<Configuration> {
+/**
+ * One CAS of the public record and, beside it, the private witness. `resolved` is the witness an
+ * explicit choice derived (or `null`: none); left out, the stored witness carries across this
+ * write while it still binds the next record. Either way only a witness that binds the record
+ * written is written, and only the public record is answered.
+ */
+export async function commitConfiguration(ctx: CodeContext, previous: StoredConfiguration, next: Configuration,
+  resolved?: ResolvedSelection | null): Promise<Configuration> {
   await authorizeTarget(ctx, previous.workspace, true);
   if (next.containerId !== previous.workspace.containerId) throw new CodeRefusal("invalid_configuration");
   const record = ConfigurationSchema.parse({ ...next, revision: (previous.record?.revision ?? 0) + 1,
     updatedBy: ctx.auth.principal.id, updatedAt: ctx.now() });
-  const encoded = JSON.stringify(record);
+  const witness = resolved === undefined ? previous.resolved : resolved;
+  const bound = witness !== null && resolvedIntent(witness, record.active, record.selection) !== null;
+  const encoded = JSON.stringify(bound ? { ...record, resolvedSelection: witness } : record);
   if (Buffer.byteLength(encoded) > 512 << 10) throw new CodeRefusal("input_too_large");
   if (!(await ctx.storage.compareAndSet(previous.key, previous.raw, encoded))) throw new CodeRefusal("stale_preferences");
   ctx.emit({ kind: "container", containerId: record.containerId }, CODE_PREFERENCES_EVENT);
@@ -160,22 +196,96 @@ export async function initializeConfiguration(ctx: CodeContext, input: z.infer<t
     selection: null, updatedBy: ctx.auth.principal.id, updatedAt: ctx.now(),
   });
 }
-export function catalogReview(ctx: CodeContext, record: Configuration, source: "active" | "draft", wanted?: Selection): CatalogReview {
+
+type CatalogRevision = NonNullable<Configuration["active"]>;
+/** The witness of `selection` resolved on `catalog` — the main model routing leads it with, its primary
+ * family's rung at its capability — or null when that model sits above the requested tier: an
+ * over-ceiling lead is at most a kept legacy identity, never a resolved choice. */
+function witnessOf(catalog: CatalogRevision, compiled: CompiledCatalog, selection: Selection): ResolvedSelection | null {
+  const lane = selection.lane;
+  const model = compiled.model(compiled.rung(lane.kind === "mixed" ? "openai" : lane.family, selection.capability));
+  return model.tier > selection.capability ? null
+    : { catalogDigest: catalog.digest, selectionDigest: digestOf(selection), provider: model.provider, id: model.id };
+}
+/**
+ * The model a stored witness vouches `selection` on `catalog` resolves to, or null when there is
+ * no witness or it binds anything else: other catalog bytes, any other selection, or a model the
+ * canonical tiers no longer resolve it to. Null is the strict stored-identity guard's case, never
+ * a refusal of its own.
+ */
+export function resolvedIntent(resolved: ResolvedSelection | null, catalog: CatalogRevision | null, selection: Selection | null,
+  compiled?: CompiledCatalog): ModelAddress | null {
+  if (resolved === null || catalog === null || selection === null || resolved.catalogDigest !== catalog.digest ||
+    resolved.selectionDigest !== digestOf(selection)) return null;
+  try {
+    const expected = witnessOf(catalog, compiled ?? compileCatalog(catalog.document), selection);
+    return expected !== null && expected.provider === resolved.provider && expected.id === resolved.id
+      ? { provider: resolved.provider, id: resolved.id } : null;
+  } catch (error) {
+    if (error instanceof DomainError) return null;
+    throw error;
+  }
+}
+/**
+ * A stored or automatic selection without a valid witness must still name the model its catalog's
+ * stored tiers named (`assertUnambiguousSelection`): a rank saved under an older tier reading is no
+ * choice of the model the canonical tiers give it. Refuses `invalid_selection`.
+ */
+export function admitStored(compiled: CompiledCatalog, selection: Selection, intent: ModelAddress | null): void {
+  if (intent !== null) return;
+  const lane = selection.lane;
+  compiled.assertUnambiguousSelection(lane.kind === "mixed" ? "openai" : lane.family, selection.capability);
+}
+/**
+ * The witness an EXPLICIT choice records, derived here and never supplied by a caller; the caller
+ * has already applied every review, premium, budget and pool guard. A choice whose model sits above
+ * its tier records none, and is admitted unwitnessed only where its stored identity is unambiguous.
+ */
+export function explicitWitness(catalog: CatalogRevision, compiled: CompiledCatalog, selection: Selection): ResolvedSelection | null {
+  const witness = witnessOf(catalog, compiled, selection);
+  if (witness === null) admitStored(compiled, selection, null);
+  return witness;
+}
+/** The saved choice `newPremiumLead` weighs a new one against, with the model its valid witness
+ * vouches for; null without an active catalog and selection. */
+export function previousChoice(record: Configuration, resolved: ResolvedSelection | null,
+  compiledActive?: CompiledCatalog): Parameters<typeof newPremiumLead>[2] {
+  if (!record.active || !record.selection) return null;
+  const catalog = compiledActive ?? compileCatalog(record.active.document);
+  const intent = resolvedIntent(resolved, record.active, record.selection, catalog);
+  return { catalog, selection: record.selection, ...(intent === null ? {} : { resolved: intent }) };
+}
+/**
+ * A catalog's review and the witness promoting it would write. An optional `wanted` selection is a
+ * new explicit choice: reviewed canonically, weighed against the saved choice, and witnessed. Without
+ * one the saved (or default) selection is automatic: its valid witness, or the strict stored-identity
+ * guard, admits it, and a valid witness carries to the selection as reviewed but is never created.
+ */
+export function catalogReview(ctx: CodeContext, previous: StoredConfiguration, source: "active" | "draft",
+  wanted?: Selection): { review: CatalogReview; resolved: ResolvedSelection | null } {
+  const record = requireConfiguration(previous);
   const catalog = record[source];
   if (!catalog) throw new CodeRefusal("catalog_missing");
   const compiled = compileCatalog(catalog.document);
-  const providers = catalog.provenance?.providers;
-  const selection = wanted ?? (source === "active" && record.selection ? record.selection
-    : defaultSelection(compiled, providers ? provider => providers.includes(provider) : undefined));
+  const prior = previousChoice(record, previous.resolved, source === "active" ? compiled : undefined);
+  let selection: Selection, intent: ModelAddress | null = null;
+  if (wanted !== undefined) selection = wanted;
+  else {
+    const providers = catalog.provenance?.providers;
+    selection = source === "active" && record.selection ? record.selection
+      : defaultSelection(compiled, providers ? provider => providers.includes(provider) : undefined);
+    intent = resolvedIntent(previous.resolved, catalog, selection, compiled);
+    admitStored(compiled, selection, intent);
+  }
   const review = reviewCatalog(compiled, selection, ctx.now());
-  if (newPremiumLead(compiled, review.selection, record.active && record.selection
-    ? { catalog: source === "active" ? compiled : compileCatalog(record.active.document), selection: record.selection } : null))
-    throw new DomainError("invalid_selection");
+  if (newPremiumLead(compiled, review.selection, prior)) throw new DomainError("invalid_selection");
+  const resolved = wanted !== undefined ? explicitWitness(catalog, compiled, review.selection)
+    : intent && witnessOf(catalog, compiled, review.selection);
   const facts = { revision: record.revision, source, catalogDigest: catalog.digest, provenance: catalog.provenance, review };
   // Time-dependent estimates do not change the reviewed route and selection. Provenance is bound:
   // promoting a reviewed catalog promotes the verification it was reviewed with, and no other.
-  return { ...facts, reviewDigest: digestOf({ containerId: record.containerId, revision: facts.revision, source,
-    catalogDigest: catalog.digest, provenance: catalog.provenance, selection: review.selection, routes: review.routes }) };
+  return { resolved, review: { ...facts, reviewDigest: digestOf({ containerId: record.containerId, revision: facts.revision, source,
+    catalogDigest: catalog.digest, provenance: catalog.provenance, selection: review.selection, routes: review.routes }) } };
 }
 
 /**

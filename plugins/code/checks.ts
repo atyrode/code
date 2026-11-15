@@ -3,12 +3,13 @@ import { epochMilliseconds, probeAddress } from "@atyrode/manifold-omp";
 import { selectedAccountPool } from "../domain/accounts.ts";
 import { compileCatalog } from "../domain/catalog.ts";
 import { CatalogDocumentSchema, DomainError, SelectionSchema, type CatalogDocument, type Selection } from "../domain/contracts.ts";
-import { clampSelection, newPremiumLead } from "../domain/routing.ts";
+import { clampSelection, defaultSelection, newPremiumLead } from "../domain/routing.ts";
 import { ChecksSchema, MAX_CHECKS, VerificationProvenanceSchema, digest, id, revision, type ActionInput, type Checks,
   type Configuration, type ModelCheck, type VerificationProvenance } from "./contract.ts";
-import { CodeRefusal, type CodeContext } from "./context.ts";
+import { CodeRefusal, digestOf, type CodeContext } from "./context.ts";
 import { bound, keeperOf, personOf } from "./person.ts";
-import { commitConfiguration, expectRevision, poolIdentity, readConfiguration, requireConfiguration } from "./state.ts";
+import { admitStored, commitConfiguration, expectRevision, explicitWitness, poolIdentity, previousChoice, readConfiguration,
+  requireConfiguration, resolvedIntent, type ResolvedSelection } from "./state.ts";
 
 /*
   A PERSON'S MODEL CHECKS. Which models answer through an account pool is a fact about those
@@ -113,6 +114,12 @@ export async function recordCheck(ctx: CodeContext, list: { document: CatalogDoc
  * is recomputed from the observation and the saved choices and must be the one the caller found a
  * check for. A list the workspace already holds for that pool, measured no earlier, refuses
  * `check_current`; the workspace's staged list stays as it is.
+ *
+ * A `selection` is the caller's explicit choice: narrowed to the list, weighed against the saved
+ * choice, and written with the witness of the model it resolves to. A null one is automatic: the
+ * saved selection (else the list's default, under exactly `budget`) is admitted only by a valid
+ * witness or the strict stored-identity guard, and a witness is never created for it. A refusal
+ * writes nothing.
  */
 export async function adoptCheck(ctx: CodeContext, args: ActionInput<"adoptCheck">): Promise<Configuration> {
   const previous = await readConfiguration(ctx, args, true); expectRevision(previous, args.expectedRevision);
@@ -129,11 +136,20 @@ export async function adoptCheck(ctx: CodeContext, args: ActionInput<"adoptCheck
   if (check.document.models.some(model => !pool.providers.includes(model.provider))) throw new CodeRefusal("invalid_provenance");
   if (inUse && inUse.poolIdentityDigest === check.poolIdentityDigest && inUse.benchmarkCompletedAt >= check.provenance.benchmarkCompletedAt)
     throw new CodeRefusal("check_current");
-  const catalog = compileCatalog(check.document);
-  const selection = clampSelection(catalog, args.selection ?? record.selection, provider => pool.providers.includes(provider));
-  if (newPremiumLead(catalog, selection, record.active && record.selection
-    ? { catalog: compileCatalog(record.active.document), selection: record.selection } : null))
-    throw new DomainError("invalid_selection");
-  return commitConfiguration(ctx, previous, { ...record,
-    active: { document: check.document, digest: check.digest, provenance: check.provenance }, selection });
+  const active = { document: check.document, digest: check.digest, provenance: check.provenance };
+  const catalog = compileCatalog(check.document), serves = (provider: string) => pool.providers.includes(provider);
+  // A default stands under the very budget the check was derived for, never relaxed to any spend.
+  const selection = clampSelection(catalog, args.selection ?? record.selection ?? { ...defaultSelection(catalog, serves), budget: args.budget }, serves);
+  if (newPremiumLead(catalog, selection, previousChoice(record, previous.resolved))) throw new DomainError("invalid_selection");
+  // Narrowing that moved the chosen lane or tier is not the caller's choice of what it resolves to.
+  const explicit = args.selection !== null && selection.capability === args.selection.capability &&
+    digestOf(selection.lane) === digestOf(args.selection.lane);
+  let resolved: ResolvedSelection | null;
+  if (explicit) resolved = explicitWitness(active, catalog, selection);
+  else {
+    const intent = resolvedIntent(previous.resolved, active, selection, catalog);
+    admitStored(catalog, selection, intent);
+    resolved = intent === null ? null : previous.resolved;
+  }
+  return commitConfiguration(ctx, previous, { ...record, active, selection }, resolved);
 }
