@@ -444,7 +444,7 @@ describe("a stored catalog read at its named families' actual tiers", () => {
     for (const capability of [2, 3]) expect(() => catalog.assertUnambiguousSelection("anthropic", capability)).not.toThrow();
     expect([leadKey(catalog, 2), leadKey(catalog, 3)]).toEqual(["sonnet", "opus"]);
     // A new rank 1 previews Sonnet, read above it: that needs Sonnet's actual tier, whatever came before or proves it.
-    const sonnet = { provider: "anthropic", id: "claude-sonnet-5", tier: 2 };
+    const sonnet = { provider: "anthropic", id: "claude-sonnet-5", tier: 2 as const };
     expect(leadKey(catalog, 1)).toBe("sonnet");
     expect(newPremiumLead(catalog, anthropicOnly(1), null)).toEqual(sonnet);
     expect(newPremiumLead(catalog, anthropicOnly(1), { catalog, selection: anthropicOnly(2) })).toEqual(sonnet);
@@ -455,7 +455,7 @@ describe("a stored catalog read at its named families' actual tiers", () => {
 
   test("an under-rank model that keeps its identity stays previewable, but its old rank is never premium consent", () => {
     const lone = compileCatalog({ schemaVersion: 1, models: [model("opus", "anthropic", 1, { id: "claude-opus-5" })] });
-    const cheap = anthropicOnly(1), opus = { provider: "anthropic", id: "claude-opus-5" }, premium = { ...opus, tier: 3 };
+    const cheap = anthropicOnly(1), opus = { provider: "anthropic", id: "claude-opus-5" }, premium = { ...opus, tier: 3 as const };
     expect(leadKey(lone, 1)).toBe("opus");
     expect(newPremiumLead(lone, cheap, { catalog: lone, selection: cheap })).toEqual(premium);
     expect(newPremiumLead(lone, cheap, null)).toEqual(premium);
@@ -483,7 +483,7 @@ describe("a stored catalog read at its named families' actual tiers", () => {
     expect(() => sparse.assertUnambiguousSelection("anthropic", 2)).toThrow("code_invalid_selection");
     expect(leadKey(sparse, 2)).toBe("sonnet");
     // An active rank whose model changed names no active identity to exempt, and no proof makes a reclassified model consent.
-    const sonnet = { provider: "anthropic", id: "claude-sonnet-5", tier: 2 };
+    const sonnet = { provider: "anthropic", id: "claude-sonnet-5", tier: 2 as const };
     expect(newPremiumLead(sparse, cheap, { catalog: sparse, selection: anthropicOnly(2) })).toEqual(sonnet);
     expect(newPremiumLead(sparse, cheap, { catalog: sparse, selection: anthropicOnly(2), resolved: sonnet })).toEqual(sonnet);
   });
@@ -496,7 +496,7 @@ describe("a stored catalog read at its named families' actual tiers", () => {
       model("opus", "anthropic", 3, { id: "claude-opus-5" }),
     ] });
     const authored = compileCatalog({ schemaVersion: 1, models: [model("fable", "anthropic", 4, { id: fable.id })] });
-    const elite = { catalog: ranked, selection: anthropicOnly(4) }, premium = { ...fable, tier: 4 };
+    const elite = { catalog: ranked, selection: anthropicOnly(4) }, premium = { ...fable, tier: 4 as const };
     // Unproved, the kept rank names no active identity; proved as the very Fable it now names at 4, it does.
     expect(newPremiumLead(authored, anthropicOnly(2), elite)).toEqual(premium);
     expect(newPremiumLead(authored, anthropicOnly(2), { ...elite, resolved: fable })).toBeNull();
