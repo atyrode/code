@@ -261,8 +261,13 @@ describe("pure typed scaffolding", () => {
         models: inv.models.filter(model => ids.includes(model.id)) };
       expect(tiers(catalogFromMetadata(snapshot, "any"), "anthropic")).toEqual(expected);
     }
-    // A listing none of whose ids carries a reviewed family name is still laddered by metadata.
-    const unnamed = { ...inv, models: inv.models.slice(1).map((model, index) => ({ ...model, id: `entry${index + 1}` })) };
+    // A listing none of whose ids carries a reviewed family name is still laddered by metadata. The receipt lists its rows by
+    // address, so the anonymous names follow price, not that order: entry1 is Sonnet's cheaper, shallower row and entry2 Opus's dearer, deeper one.
+    const unnamed = { ...inv, models: inv.models.filter(model => model.id !== "claude-haiku-5")
+      .sort((left, right) => left.inputCostPerMillion - right.inputCostPerMillion)
+      .map((model, index) => ({ ...model, id: `entry${index + 1}` })) };
+    expect(unnamed.models.map(model => [model.id, model.inputCostPerMillion, model.thinkingLevels]))
+      .toEqual([["entry1", 3, ["high"]], ["entry2", 5, ["max"]]]);
     expect(tiers(derived(unnamed).document, "anthropic")).toEqual([[1, "entry1"], [2, "entry2"]]);
   });
   test("missing, stale and wrong-API probes refuse promotion", () => {

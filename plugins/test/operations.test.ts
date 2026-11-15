@@ -201,7 +201,11 @@ describe("container-owned policy configuration", () => {
     const next = await accepted(f, "select", { ...workspace, expectedRevision: saved.revision,
       selection: { ...saved.selection!, prewalk: true } });
     expect(next).toEqual({ ...saved, revision: saved.revision + 1, selection: { ...saved.selection!, prewalk: true } });
-    expect(JSON.parse(f.store.get(key)!)).toEqual(next);
+    // The explicit choice's one CAS stores the public record and, beside it, the private witness of the model it resolved to;
+    // the unparsed public answer is the record alone.
+    expect(JSON.parse(f.store.get(key)!)).toEqual({ ...next, resolvedSelection: { catalogDigest: digestOf(document()),
+      selectionDigest: digestOf(next.selection), provider: "anthropic", id: "native-model2" } });
+    expect(await invoke(f, "readConfiguration", workspace)).toEqual({ revision: next.revision, configuration: next, legacyMachineId: null });
     expect(await invoke(f, "changeAccounts", { ...workspace, expectedRevision: saved.revision,
       change: { kind: "delete-preset", id: "focus" } })).toEqual({ refused: "code_stale_preferences" });
     expect((await configuration(f))?.accounts).toEqual(saved.accounts);
@@ -232,7 +236,9 @@ describe("container-owned policy configuration", () => {
       selection: { ...saved.selection!, planYolo: true } });
     expect(next.revision).toBe(saved.revision + 1);
     expect(next.accounts).toEqual(saved.accounts);
-    expect(JSON.parse(f.store.get(key)!)).toEqual(next);
+    expect(JSON.parse(f.store.get(key)!)).toEqual({ ...next, resolvedSelection: { catalogDigest: digestOf(document()),
+      selectionDigest: digestOf(next.selection), provider: "anthropic", id: "native-model2" } });
+    expect(await invoke(f, "readConfiguration", workspace)).toEqual({ revision: next.revision, configuration: next, legacyMachineId: null });
     expect(next.schemaVersion).toBe(4);
   });
 
