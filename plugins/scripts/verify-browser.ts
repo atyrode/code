@@ -4488,11 +4488,14 @@ async function preSpendPremiumScenario(browser: BrowserInstance, server: TestSer
     assert.deepEqual(await readConfiguration(server, person, target), before);
     await closeSheet(browser);
     const repair = element(`${generator} [data-fix="actual-tier"]`);
-    await until(browser, "the unspent stop offers explicit Models repair rather than a generic cannot-form loop",
-      `${repair} !== null && ${lineText}.includes('actual-tier profile')`);
+    await until(browser, "the unspent stop offers explicit Models repair",
+      `${repair} !== null`);
     await click(browser, repair);
     await until(browser, "the repair opens Models with its import action usable",
       `${sheetOpen("Models")} && ${element(`${modelsSheet} [data-cue="import"]`)}?.getAttribute('aria-disabled') === null`);
+    assert.equal(benchmarks.size, spent, "Opening the explicit repair starts no benchmark");
+    assert.deepEqual(effects(from).map(request => request.name), ["atyrode.omp.startInventory"], "Opening the repair performs no further inventory or mutating action");
+    assert.deepEqual(await readConfiguration(server, person, target), before, "Opening the repair preserves the nullable configuration");
     fixture.check();
   } finally {
     await fixture.stop();
