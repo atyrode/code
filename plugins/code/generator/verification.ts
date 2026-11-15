@@ -1,5 +1,10 @@
+import { compileCatalog, type CompiledCatalog } from "../../domain/catalog.ts";
+import type { Selection } from "../../domain/contracts.ts";
+import { inventoryPlan } from "../../domain/probe.ts";
+import { clampSelection, newPremiumLead } from "../../domain/routing.ts";
 import type { VerificationProvenance } from "../contract.ts";
-import { approvalCovers } from "../workflow.ts";
+import { approvalCovers, type ChargeReview } from "../workflow.ts";
+import { previewSelection } from "./dial-space.ts";
 
 /**
  * Whether the active catalog's model check still describes the world a launch would meet.
@@ -131,6 +136,30 @@ export function spendsWithoutAsking(mode: VerificationMode, renews: boolean, app
  */
 export function adoptsOnly(mode: VerificationMode, renews: boolean, approvedRequests: number): boolean {
   return mode === "background" && !(renews && approvedRequests > 0);
+}
+
+/** A proposed actual-tier profile, not evidence that any account can use its advertised model. */
+export type PremiumProfile = {
+  readonly selection: Selection; readonly model: string; readonly tier: Selection["capability"]; readonly effort: string;
+};
+/**
+ * Inventory is enough to notice known premium intent before a check spends. It is not a probe:
+ * an incomplete provisional ladder leaves the completed benchmark's admission guard authoritative.
+ * The explicit choice raises the narrowed profile to its actual tier, retaining its other preferences and budget.
+ */
+export function inventoryPremium(charge: Pick<ChargeReview, "inventory" | "budget" | "pool">, wanted: Selection | null,
+  previous: { catalog: CompiledCatalog; selection: Selection } | null): PremiumProfile | null {
+  try {
+    const catalog = compileCatalog(inventoryPlan(charge.inventory, charge.budget));
+    const narrowed = clampSelection(catalog, wanted, provider => charge.pool.providers.includes(provider));
+    const lead = newPremiumLead(catalog, narrowed, previous);
+    if (!lead) return null;
+    const selection: Selection = { ...narrowed, capability: lead.tier };
+    const review = previewSelection(catalog, selection);
+    if (!review) return null;
+    return { selection, model: `${lead.provider}/${lead.id}`, tier: lead.tier,
+      effort: review.routes.find(route => route.role === "default")!.lead.thinking };
+  } catch { return null; }
 }
 /** What decides whether the panel starts a check on its own (`backgroundCheckDue`). */
 export type BackgroundFacts = {

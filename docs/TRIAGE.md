@@ -54,21 +54,30 @@ Recommended: <letter and reason>
 Unblocks: <state, scope and next action>
 ```
 
-During every triage pass, actively present all unresolved holds to the operator, using the interactive question tool when available. Group related questions, give concrete options and a recommendation, and continue independent work. Do not implement the held scope. Silence, a deadline and another agent's opinion never resolve a hold.
+During a triage pass, present unresolved holds within its assigned scope to the operator, using the interactive question tool when available. Group related questions, give concrete options and a recommendation, and continue independent work. Read-only investigation need not resolve unrelated queue holds. Do not implement held scope. Silence, a deadline and another agent's opinion never resolve a hold.
 
 After an explicit answer, record `## Decision recorded (YYYY-MM-DD)` with only the technical outcome, scope and constraints; apply the resulting state or disposition. Never quote, paraphrase or narrate private exchanges or personal context as authorization evidence. A public technical receipt records a separately received decision, not an invented grant. Keep private evidence private. Existing explicit grants remain usable within their bounds; neither file paths nor transition from implementation to integration require redundant approval.
 
 ## Claims and dispatch
 
-Before new implementation, reconcile every open non-draft PR: review/correct/merge it, or route a genuine operator hold to draft. One initiative has one open PR. Read open drafts and issue comments too; old claims and unique work remain owned until released, explicitly superseded with preservation, or reassigned by the operator. Never push another contributor's branch.
+Before implementation, inspect open PRs and issue claims for overlapping ownership.
+Reconcile overlapping non-draft work before claiming it; unrelated ready PRs do not
+block an independent initiative. One initiative has one open PR. Read overlapping
+drafts and issue comments too: old claims and unique work remain owned until released,
+explicitly superseded with preservation, or reassigned by the operator. Never push
+another contributor's branch.
 
-Choose ready work by p0 through p3, then oldest first. Take at most two concurrent implementation claims per contributor session. Before a substantive commit, comment:
+Read-only audits and independent, nonoverlapping investigations require neither a
+public claim nor a full queue drain. When choosing from the ready queue, prefer p0
+through p3, then oldest first; explicit assigned scope is not a request to implement
+unrelated queue items. Take at most two concurrent implementation claims per
+contributor session. Before a substantive commit, comment:
 
 ```text
 Claim: <branch> — <bounded scope>
 ```
 
-Triage-only work may claim the issue without a branch. Release with `Release: <reason and next action>` when stopping. A quiet claim is not permission to take over. The queue report conservatively excludes issues referenced by open PRs and unresolved `Claim:` comments; inspect older claim formats manually.
+Release with `Release: <reason and next action>` when stopping an implementation claim. A quiet claim is not permission to take over. The queue report conservatively excludes issues referenced by open PRs and unresolved `Claim:` comments; inspect older claim formats manually.
 
 Use an isolated worktree based on `origin/main`. A real dependency may stack on one open PR: state `Depends-on: #N`, use that head as the actual base, and merge in order. Inspect overlapping claims before editing and before publication. Do not create a second design/integration PR for the same outcome.
 
@@ -119,8 +128,8 @@ Do not transfer work to another repository merely to make the issue count zero. 
 
 ## Runbook
 
-1. Inventory all open issues and PRs with comments; run the read-only report. Inspect current main, not a stale checkout, and compare actual merged delivery with the original acceptance.
-2. Reconcile non-draft PRs before dispatch. For every issue, record exactly one disposition: completed, justified non-work, ready, named dependency or operator decision. Preserve unique work.
-3. Interview every unresolved operator hold, record technical outcomes and update states. Do not leave a hold buried in a progress report.
-4. Claim ready work, implement in isolation, prove behavior, pass the Code gate/CI, review the current head, then merge under the applicable grant. Reconcile dependents and operational acceptance.
-5. Re-run the report and inventory. Report counts, closures/merges and exact remaining blockers. Zero open issues is a desired outcome, never permission to conceal unfinished work.
+1. For an assigned triage pass, inventory its issues and PRs with comments and run the read-only report. Inspect current main, not a stale checkout, and compare actual merged delivery with acceptance.
+2. Reconcile overlapping ownership before dispatch. Record the scoped issues' disposition: completed, justified non-work, ready, named dependency or operator decision. Preserve unique work.
+3. Present unresolved in-scope operator holds, record technical outcomes and update states. A read-only audit is not an obligation to drain the implementation queue.
+4. Claim ready implementation, work in isolation, prove behavior, pass the Code gate/CI and current-head review, then merge under the applicable grant. Reconcile dependents and operational acceptance.
+5. Update the owning issues with exercised evidence and exact remaining blockers. An empty queue is not an acceptance criterion and never justifies concealing unfinished work.

@@ -5,7 +5,7 @@ import { BenchmarkInputSchema, BenchmarkReceiptSchema, InventoryReceiptSchema, I
 import { CatalogDocumentSchema, SelectionSchema, DomainError, admittedBy, type Selection, type CatalogDocument, type CatalogModel,
   type ProviderPolicy } from "./contracts.ts";
 import { compileCatalog, validTierPair } from "./catalog.ts";
-import { orderedFamilies, familyPolicy, providerPolicy } from "./providers.ts";
+import { orderedFamilies, familyPolicy, providerPolicy, tierWord } from "./providers.ts";
 
 type InventoryModel = z.infer<typeof InventoryModelSchema>;
 /** A quota class OMP names for an inventory row (`quotaTier`), as a separate-quota exclusion carries it. */
@@ -194,15 +194,15 @@ function ranked(model: InventoryModel): Ranked {
   for (const level of model.thinkingLevels) ceiling = Math.max(ceiling, ThinkingLevelSchema.options.indexOf(level));
   return { model, price: model.inputCostPerMillion, ceiling, address: probeAddress(model) };
 }
-/** Tier order. At one price the weaker model comes first: the only order in which two
+/** Tier order. At one price the lower thinking ceiling comes first: the only order in which
  * equal-price rungs can pass `validTierPair`, and the order a free ladder climbs in. */
 function tierOrder(a: Ranked, b: Ranked): number {
   return a.price - b.price || a.ceiling - b.ceiling || compare(a.address, b.address);
 }
-/** Capability: the thinking ceiling, then the price, the provider's own statement of size where
- * the thinking is alike. A context window is not a capability: providers give newer, stronger
- * models smaller windows than older ones, as OpenAI's sol and astra have beside terra. */
-function moreCapable(a: Ranked, b: Ranked): number {
+/** A deterministic ladder heuristic: prefer the thinking ceiling, then API list price.
+ * Neither the reasoning ceiling nor price proves intelligence. Context is not a ranking input;
+ * named provider tiers, where available, take precedence over this heuristic. */
+function rungPreference(a: Ranked, b: Ranked): number {
   return b.ceiling - a.ceiling || b.price - a.price || compare(a.address, b.address);
 }
 type Rung = { readonly model: InventoryModel; readonly tier: CatalogModel["tier"] };
@@ -216,10 +216,6 @@ type FamilyLadder = { rungs: Rung[]; rejected: InventoryModel[]; regression?: re
 function ladder(models: readonly InventoryModel[], policy: ProviderPolicy): FamilyLadder {
   const names = policy.tierNames ?? [];
   return models.some(model => names.includes(tierWord(model.id))) ? namedLadder(models, names) : metadataLadder(models);
-}
-/** The word a provider's tier names are matched against: the id's last name token (`gpt-6.1-sol` is `sol`). */
-function tierWord(id: string): string {
-  return modelFamily(id).name.split("-").at(-1)!;
 }
 /**
  * LADDERED BY THE PROVIDER'S NAMES. A model whose id ends in one of them takes that name's tier
@@ -248,16 +244,16 @@ function namedLadder(models: readonly InventoryModel[], names: readonly string[]
  * OLD CODE'S `pickLadder` (`0035b4f:generate_init.go:187-278`), NOT THE LONGEST VALID CHAIN, for a
  * family whose provider does not name its tiers.
  *
- * The bottom is the cheapest model and the top the most capable of the rest (`moreCapable`); up
- * to two middles are the most capable models priced strictly between them. Old Code also read the
- * context window as capability, which no longer ranks or refuses anything.
+ * The bottom is the cheapest model; the top and up to two middles follow `rungPreference`,
+ * a thinking-ceiling/list-price heuristic, not measured intelligence. Middles are priced
+ * strictly between the ends when available. Context no longer ranks or refuses anything.
  *
- * One deliberate deviation: old Code took the middles by capability and then refused the file
+ * One deliberate deviation: old Code took the middles by its heuristic and then refused the file
  * when one regressed. Here a middle is taken only if every pair still passes `validTierPair`, and
  * the one passed over is returned as rejected. A top that regresses on the bottom is not repaired
  * by searching for a different top: the pair is returned, for the caller to refuse or drop.
  *
- * At one price the weaker model is the cheaper rung (`tierOrder`), and the middles the price gap
+ * At one price the lower thinking ceiling is the earlier rung (`tierOrder`), and the middles the price gap
  * cannot supply come from candidates sharing an end's price, as old Code's median fallback did.
  * That is what lets a free ladder, every rung $0 (#201), progress at all. A twin of an end (same
  * price and thinking ceiling) is never a middle.
@@ -267,7 +263,7 @@ function metadataLadder(models: readonly InventoryModel[]): FamilyLadder {
   const ordered = models.map(ranked).sort(tierOrder);
   const bottom = ordered[0]!;
   let found: Ranked | undefined;
-  for (const candidate of ordered.slice(1)) if (!found || moreCapable(candidate, found) < 0) found = candidate;
+  for (const candidate of ordered.slice(1)) if (!found || rungPreference(candidate, found) < 0) found = candidate;
   if (!found) return { rungs: [{ model: bottom.model, tier: 1 }], rejected: [] };
   const top = found;
   if (!validTierPair(bottom.model, top.model)) return { rungs: [], rejected: [], regression: [bottom.model, top.model] };
@@ -279,7 +275,7 @@ function metadataLadder(models: readonly InventoryModel[]): FamilyLadder {
     else if (![bottom, top].some(end => end.price === candidate.price && end.ceiling === candidate.ceiling)) shared.push(candidate);
   }
   const middles: Ranked[] = [], rejected: InventoryModel[] = [];
-  for (const candidate of [...gap.sort(moreCapable), ...shared.sort(moreCapable)]) {
+  for (const candidate of [...gap.sort(rungPreference), ...shared.sort(rungPreference)]) {
     if (middles.length === 2) break;
     const rungs = [bottom, ...middles, candidate, top].sort(tierOrder);
     if (rungs.every((lower, index) => rungs.slice(index + 1).every(higher => validTierPair(lower.model, higher.model)))) middles.push(candidate);
@@ -412,6 +408,19 @@ export function inventoryDraft(inventoryValue: unknown, budget: Selection["budge
   const { models, unprobed } = probeSet(inventory, options.budget);
   return { schemaVersion: 1, kind: "draft", inventoryObservedAt: inventory.observedAt, benchmark: benchmarkInput(inventory, models),
     exclusions: [...unstableExclusions(inventory, options.budget), ...unprobed].sort((a, b) => compare(probeAddress(a), probeAddress(b))) };
+}
+/**
+ * An unmeasured advertised-candidate ladder for source planning, never reachability or entitlement
+ * evidence. Keep the benchmark's candidate bounds and identity checks, but supply no probe facts.
+ */
+export function inventoryPlan(inventoryValue: unknown, budget: Selection["budget"]): CatalogDocument {
+  const inventory = parse(InventoryReceiptSchema, inventoryValue);
+  if (budget === undefined) throw new ProbeError("invalid_input");
+  const options = parse(ScaffoldOptionsSchema, { budget }, "invalid_input");
+  unique(inventory.models);
+  const { models } = probeSet(inventory, options.budget);
+  benchmarkInput(inventory, models);
+  return scaffold(models, []).document;
 }
 /**
  * Every probed candidate (`probeSet`) must have an exact probe, before superseding older versions.

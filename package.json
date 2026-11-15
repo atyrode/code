@@ -1,6 +1,6 @@
 {
   "name": "@atyrode/manifold-code",
-  "version": "0.1.0",
+  "version": "0.2.0",
   "private": true,
   "type": "module",
   "description": "Typed caller API for the native Code Manifold plugin family",
@@ -15,7 +15,7 @@
     "plugins/domain"
   ],
   "dependencies": {
-    "@atyrode/manifold-omp": "github:atyrode/manifold-omp#0639a16900ae145677370a4ced669afcc5d19faf",
+    "@atyrode/manifold-omp": "github:atyrode/manifold-omp#a538300d2832dc4a8a006a72a5fd348e829d8f08",
     "zod": "4.4.3"
   }
 }

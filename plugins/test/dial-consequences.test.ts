@@ -4,7 +4,7 @@ import { initialAccountChoices, reduceAccountChoices } from "../domain/accounts.
 import { compileCatalog } from "../domain/catalog.ts";
 import type { CatalogModel, Selection } from "../domain/contracts.ts";
 import { quotaPools, type QuotaPool } from "../domain/quota.ts";
-import { reviewCatalog, type Review } from "../domain/routing.ts";
+import { newPremiumLead, reviewCatalog, type Review } from "../domain/routing.ts";
 import { projectUsage } from "../domain/usage.ts";
 import { optionConsequence, rescue, seatRole, type OptionContext } from "../code/generator/consequences.ts";
 import { chooseOption } from "../code/generator/dial-space.ts";
@@ -22,8 +22,8 @@ function model(key: string, provider: string, tier: CatalogModel["tier"], change
   };
 }
 const catalog = compileCatalog({ schemaVersion: 1, models: [
-  model("o1", "openai-codex", 1), model("o2", "openai-codex", 2), model("o3", "openai-codex", 3),
-  model("a1", "anthropic", 1), model("a2", "anthropic", 2), model("a3", "anthropic", 3),
+  model("o1", "openai-codex", 1), model("o2", "openai-codex", 2), model("o3", "openai-codex", 3), model("o4", "openai-codex", 4),
+  model("a1", "anthropic", 1), model("a2", "anthropic", 2), model("a3", "anthropic", 3), model("a4", "anthropic", 4),
   model("d1", "deepseek", 1, { images: false }),
 ] });
 const gptOnly: Selection["lane"] = { kind: "provider", family: "openai", blend: "only" };
@@ -70,56 +70,125 @@ function pools(options: { blocked?: Partial<Record<Provider, number>>; codexUsed
 
 describe("what an option would do before it is chosen", () => {
   test("the roles that move, from and to, and nothing for roles whose only change is their fallback chain", () => {
-    const consequence = optionConsequence(catalog, review(), "lane", "gpt-led", { ...known, pools: pools() });
-    // GPT-led sends reviews to Claude; every other role keeps its lead and only gains Claude fallbacks.
+    const consequence = optionConsequence(catalog, review(), "lane", "mixed", { ...known, pools: pools() });
+    // Mixed moves shared planning and slow work across providers, without promoting their selected rung.
     expect(consequence?.moves).toEqual([
-      { role: "reviewer", from: { key: "o3", thinking: "high" }, to: { key: "a3", thinking: "high" } },
-      { role: "security-reviewer", from: { key: "o3", thinking: "high" }, to: { key: "a3", thinking: "high" } },
+      { role: "plan", from: { key: "o2", thinking: "high" }, to: { key: "a2", thinking: "high" } },
+      { role: "slow", from: { key: "o2", thinking: "high" }, to: { key: "a2", thinking: "high" } },
     ]);
     expect(consequence?.redline).toBeNull();
+    // A provider-led lane changes the chains, not the shared-role leads.
+    expect(optionConsequence(catalog, review(), "lane", "gpt-led", { ...known, pools: pools() })?.moves).toEqual([]);
     const advisor = optionConsequence(catalog, review(), "advisor", "glance", { ...known, pools: pools() });
     expect(advisor?.moves).toEqual([{ role: "advisor", from: null, to: { key: "o1", thinking: "low" } }]);
+    expect(optionConsequence(catalog, review({ advisor: "glance" }), "advisor", "off", { ...known, pools: pools() })?.moves)
+      .toEqual([{ role: "advisor", from: { key: "o1", thinking: "low" }, to: null }]);
   });
 
   test("a redline when the option would lead on a blocked, tight or unserved pool, naming the roles that would", () => {
     const blocked = pools({ blocked: { anthropic: now + 2 * HOUR } });
-    expect(optionConsequence(catalog, review(), "lane", "gpt-led", { ...known, pools: blocked })?.redline)
-      .toMatchObject({ reason: "blocked", pool: { id: "anthropic:claude" }, until: now + 2 * HOUR, roles: ["reviewer", "security-reviewer"] });
+    expect(optionConsequence(catalog, review(), "lane", "mixed", { ...known, pools: blocked })?.redline)
+      .toMatchObject({ reason: "blocked", pool: { id: "anthropic:claude" }, until: now + 2 * HOUR, roles: ["plan", "slow"] });
     // An option that keeps every lead off the blocked pool is not redlined by it.
     expect(optionConsequence(catalog, review(), "thinking", "high", { ...known, pools: blocked })?.redline).toBeNull();
     expect(optionConsequence(catalog, review(), "thinking", "high", { ...known, pools: pools({ codexUsed: 0.85 }) })?.redline)
       .toMatchObject({ reason: "tight", pool: { id: "openai-codex:codex" } });
     // Unserved outranks tight, and the lane the dial would refuse once accounts are known is not offered at all.
     const unserved = pools({ claudeExcluded: true, codexUsed: 0.85 });
-    expect(optionConsequence(catalog, review(), "lane", "gpt-led", { ...known, pools: unserved })?.redline)
-      .toMatchObject({ reason: "no-account", pool: { id: "anthropic:claude" }, roles: ["reviewer", "security-reviewer"] });
-    expect(optionConsequence(catalog, review(), "lane", "gpt-led", { ...known, served: new Set(["openai-codex"]), pools: unserved })).toBeNull();
+    expect(optionConsequence(catalog, review(), "lane", "mixed", { ...known, pools: unserved })?.redline)
+      .toMatchObject({ reason: "no-account", pool: { id: "anthropic:claude" }, roles: ["plan", "slow"] });
+    expect(optionConsequence(catalog, review(), "lane", "mixed", { ...known, served: new Set(["openai-codex"]), pools: unserved })).toBeNull();
+  });
+
+  test("tier and effort dials preserve explicit premium choices without raising utility effort or hiding a planning promotion", () => {
+    const base = review();
+    expect(base.routes.filter(route => route.role === "plan" || route.role === "slow").map(route => route.lead))
+      .toEqual([{ key: "o2", thinking: "high" }, { key: "o2", thinking: "high" }]);
+    for (const [word, key] of [["smart", "o3"], ["elite", "o4"]] as const) {
+      const chosen = chooseOption(catalog, base.selection, base, "model", word, known);
+      expect(chosen.refusal).toBeNull();
+      expect(chosen.review?.routes.filter(route => ["default", "task", "plan", "slow"].includes(route.role)).map(route => route.lead.key))
+        .toEqual([key, key, key, key]);
+    }
+    for (const [thinking, deliberative] of [
+      ["minimal", "minimal"], ["low", "medium"], ["medium", "high"],
+      ["high", "xhigh"], ["xhigh", "xhigh"], ["max", "max"],
+    ] as const) {
+      const chosen = chooseOption(catalog, base.selection, base, "thinking", thinking, known);
+      expect(chosen.refusal).toBeNull();
+      const selected = chosen.review!;
+      expect(selected.selection.thinking).toBe(thinking);
+      expect(selected.routes.filter(route => route.role === "default" || route.role === "task").map(route => route.lead))
+        .toEqual([{ key: "o2", thinking }, { key: "o2", thinking }]);
+      expect(selected.routes.filter(route => route.role === "plan" || route.role === "slow").map(route => route.lead))
+        .toEqual([{ key: "o2", thinking: deliberative }, { key: "o2", thinking: deliberative }]);
+      for (const role of ["smol", "memory"]) expect(selected.routes.find(route => route.role === role)?.lead).toEqual({ key: "o1", thinking: "medium" });
+      for (const role of ["widget", "tiny", "commit"]) expect(selected.routes.find(route => route.role === role)?.lead).toEqual({ key: "o1", thinking: "low" });
+      expect(selected.routes.find(route => route.role === "vision")?.lead.thinking).toBe("low");
+      for (const role of ["memory", "widget"]) expect(selected.routes.find(route => route.role === role)?.fallback).toEqual([]);
+    }
+    const max = chooseOption(catalog, base.selection, base, "thinking", "max", known).review!;
+    const withoutFallbacks = chooseOption(catalog, max.selection, max, "fallbacks", "off", known).review!;
+    for (const [role, thinking] of [["memory", "medium"], ["widget", "low"]] as const) {
+      expect(withoutFallbacks.routes.find(route => route.role === role)).toMatchObject({ lead: { key: "o1", thinking }, fallback: [] });
+    }
+    for (const [word, key, thinking] of [["glance", "o1", "low"], ["review", "o2", "medium"], ["audit", "o3", "high"]] as const) {
+      expect(chooseOption(catalog, max.selection, max, "advisor", word, known).review?.routes.find(route => route.role === "advisor")?.lead)
+        .toEqual({ key, thinking });
+    }
+  });
+
+  test("a sparse lane preview retains preferences until an actual-tier choice, with the unchanged active address exempt", () => {
+    for (const capability of [3, 4] as const) {
+      const sparse = compileCatalog({ schemaVersion: 1, models: [
+        model("o1", "openai-codex", 1, { inputCostPerMillion: 0, outputCostPerMillion: 0 }),
+        model("o2", "openai-codex", 2, { inputCostPerMillion: 0, outputCostPerMillion: 0 }),
+        model("premium", "anthropic", capability, { inputCostPerMillion: 0, outputCostPerMillion: 0 }),
+      ] });
+      const selected: Selection = { ...review().selection, thinking: "max", advisor: "off", prewalk: true, planYolo: true, fallback: false, budget: "free" };
+      const active = reviewCatalog(sparse, selected, now);
+      const chosen = chooseOption(sparse, selected, active, "lane", "claude-only", known);
+      expect(chosen.refusal).toBeNull();
+      const draft = chosen.selection!;
+      expect(draft).toEqual({ ...selected, lane: claudeOnly });
+      expect(chosen.review?.routes.find(route => route.role === "default")?.lead.key).toBe("premium");
+      const previous = { catalog: sparse, selection: selected };
+      const lead = newPremiumLead(sparse, draft, previous);
+      expect(lead).toEqual({ provider: "anthropic", id: "native-premium", tier: capability });
+      const explicit: Selection = { ...draft, capability: lead!.tier };
+      const confirmed = reviewCatalog(sparse, explicit, now);
+      expect(confirmed.selection).toEqual({ ...draft, capability });
+      expect(confirmed.routes.find(route => route.role === "default")?.lead).toEqual({ key: "premium", thinking: "max" });
+      expect(newPremiumLead(sparse, explicit, previous)).toBeNull();
+      expect(newPremiumLead(sparse, draft, { catalog: sparse, selection: explicit })).toBeNull();
+      expect(draft.capability).toBe(2);
+    }
   });
 });
 
 describe("the smallest dial move that seats a role on a model", () => {
   test("one move when one suffices, preferring the move that disturbs the fewest other roles over dial order", () => {
-    expect(seatRole(catalog, review(), "reviewer", "a3", known)).toMatchObject({ moves: [{ dial: "lane", word: "gpt-led" }], othersMoved: 1 });
-    // From Claude only, GPT only and GPT-led also seat default on o2, but Mixed keeps planning and reviews where they are.
+    expect(seatRole(catalog, review(), "slow", "a2", known)).toMatchObject({ moves: [{ dial: "lane", word: "mixed" }], othersMoved: 1 });
+    // From Claude only, GPT only and GPT-led also seat default on o2, but Mixed keeps planning and slow work where they are.
     const fromClaude = seatRole(catalog, review({ lane: claudeOnly }), "default", "o2", known);
     expect(fromClaude?.moves).toEqual([{ dial: "lane", word: "mixed" }]);
-    expect(fromClaude?.review.routes.find(route => route.role === "reviewer")?.lead.key).toBe("a3");
+    expect(fromClaude?.review.routes.find(route => route.role === "slow")?.lead.key).toBe("a2");
   });
 
   test("two moves only when no single move reaches the seat", () => {
-    expect(seatRole(catalog, review(), "reviewer", "a2", known, 1)).toBeNull();
-    const seating = seatRole(catalog, review(), "reviewer", "a2", known);
+    expect(seatRole(catalog, review(), "slow", "a3", known, 1)).toBeNull();
+    const seating = seatRole(catalog, review(), "slow", "a3", known);
     expect(seating?.moves).toHaveLength(2);
-    expect(seating?.review.routes.find(route => route.role === "reviewer")?.lead.key).toBe("a2");
+    expect(seating?.review.routes.find(route => route.role === "slow")?.lead.key).toBe("a3");
   });
 
   test("already seated is zero moves; unreachable or account-refused seats are not found", () => {
     expect(seatRole(catalog, review(), "default", "o2", known)).toMatchObject({ moves: [], othersMoved: 0 });
-    // DeepSeek-led keeps reviews on GPT where DeepSeek only would move them too.
+    // The single-rung DeepSeek family is reachable with one lane move.
     expect(seatRole(catalog, review(), "default", "d1", known, 1)?.moves).toEqual([{ dial: "lane", word: "deepseek-led" }]);
     expect(seatRole(catalog, review(), "default", "nowhere", known)).toBeNull();
-    // With no Claude account, every lane that would have reviews lead on Claude is refused, so none seats them there.
-    expect(seatRole(catalog, review(), "reviewer", "a3", { ...known, served: new Set(["openai-codex", "deepseek"]) })).toBeNull();
+    // With no Claude account, every lane that would lead shared slow work there is refused.
+    expect(seatRole(catalog, review(), "slow", "a2", { ...known, served: new Set(["openai-codex", "deepseek"]) })).toBeNull();
   });
 });
 
@@ -127,7 +196,7 @@ describe("the smallest dial move that gives every role a route", () => {
   const claudeBlocked = pools({ blocked: { anthropic: now + 2 * HOUR } });
   const everyRole = review().routes.map(route => route.role);
 
-  test("Claude only with Claude blocked: GPT only keeps all 12 on Codex", () => {
+  test("Claude only with Claude blocked: GPT only keeps every native shared role on Codex", () => {
     const fix = rescue(catalog, review({ lane: claudeOnly }), claudeBlocked, known);
     expect(fix?.moves).toEqual([{ dial: "lane", word: "gpt-only" }]);
     expect(fix?.rescued.leads).toHaveLength(1);
@@ -137,20 +206,20 @@ describe("the smallest dial move that gives every role a route", () => {
     expect(fix?.waitedOn.map(pool => pool.id)).toEqual(["anthropic:claude"]);
   });
 
-  test("GPT-led with Claude blocked: nothing to fix while fallbacks carry the reviews; without them, GPT only rather than fallbacks", () => {
-    expect(rescue(catalog, review({ lane: { kind: "provider", family: "openai", blend: "led" } }), claudeBlocked, known))
+  test("Mixed with Claude blocked: fallbacks carry plan and slow; without them, GPT only seats their leads on an open pool", () => {
+    expect(rescue(catalog, review({ lane: { kind: "mixed" } }), claudeBlocked, known))
       .toMatchObject({ moves: [], rescued: { leads: [], fallsBack: [], removed: [] } });
-    const fix = rescue(catalog, review({ lane: { kind: "provider", family: "openai", blend: "led" }, fallback: false }), claudeBlocked, known);
+    const fix = rescue(catalog, review({ lane: { kind: "mixed" }, fallback: false }), claudeBlocked, known);
     // Fallbacks on would route them too, but only by OMP falling back; GPT only leads them on an open pool and moves nobody else.
     expect(fix).toMatchObject({ moves: [{ dial: "lane", word: "gpt-only" }], othersMoved: 0 });
-    expect(fix?.rescued.leads).toEqual([{ pool: expect.objectContaining({ id: "openai-codex:codex" }), roles: ["reviewer", "security-reviewer"] }]);
+    expect(fix?.rescued.leads).toEqual([{ pool: expect.objectContaining({ id: "openai-codex:codex" }), roles: ["plan", "slow"] }]);
   });
 
-  test("when only the advisor waits, turning it off removes the role rather than seating it anywhere", () => {
+  test("when only the advisor waits, a provider-only lane seats it without moving the other shared leads", () => {
     const deepseekLed = review({ lane: { kind: "provider", family: "deepseek", blend: "led" }, advisor: "glance" });
     const fix = rescue(catalog, deepseekLed, claudeBlocked, known);
-    expect(fix?.moves).toEqual([{ dial: "advisor", word: "off" }]);
-    expect(fix?.rescued).toEqual({ leads: [], fallsBack: [], removed: ["advisor"] });
+    expect(fix?.moves).toEqual([{ dial: "lane", word: "deepseek-only" }]);
+    expect(fix?.rescued).toEqual({ leads: [{ pool: expect.objectContaining({ id: "deepseek" }), roles: ["advisor"] }], fallsBack: [], removed: [] });
     expect(fix?.othersMoved).toBe(0);
   });
 

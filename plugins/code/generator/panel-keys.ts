@@ -26,7 +26,7 @@ export type PanelKey = {
   readonly inField: boolean;
   /** The target is inside a dialog or an open popover, which owns its keys. */
   readonly inDialog: boolean;
-  /** The target answers ↵ itself: a button, a link, a cue. */
+  /** The target answers ↵ itself: a button, a link, a cue, a chosen word that chooses again. */
   readonly onControl: boolean;
   /** Nothing in the stage has focus: the panel root, which has focus when the panel opens. */
   readonly onRoot: boolean;

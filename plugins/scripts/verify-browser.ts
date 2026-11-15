@@ -1,9 +1,10 @@
 #!/usr/bin/env bun
 import assert from "node:assert/strict";
+import { Database } from "bun:sqlite";
 import { createHash, randomBytes } from "node:crypto";
 import { chmodSync, existsSync, mkdirSync, mkdtempSync, readdirSync, readFileSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
-import { join, resolve } from "node:path";
+import { isAbsolute, join, resolve } from "node:path";
 import { pathToFileURL } from "node:url";
 import type { Browser as BrowserInstance } from "../../../manifold/scripts/cdp.ts";
 import type { TestAgent, TestServer } from "../../../manifold/packages/testkit/src/index.ts";
@@ -12,12 +13,15 @@ import type * as GateDistModule from "../../../manifold/scripts/gate-dist.ts";
 import type * as TestkitModule from "../../../manifold/packages/testkit/src/index.ts";
 import type { TokenGrant } from "../../../manifold/packages/protocol/src/index.ts";
 import type { ActionResult, Target } from "../code/contract.ts";
+import { CODE_PLUGIN_ID, ConfigurationSchema } from "../code/contract.ts";
+import { digestOf } from "../code/context.ts";
 import type { CatalogDocument, Selection } from "../domain/contracts.ts";
 import { compileCatalog } from "../domain/catalog.ts";
 import { catalogFromObservations, catalogFromMetadata, inventoryDraft } from "../domain/probe.ts";
 import { providerPolicy } from "../domain/providers.ts";
-import { defaultSelection, reviewCatalog } from "../domain/routing.ts";
+import { defaultSelection, reviewCatalog, selectionForLane } from "../domain/routing.ts";
 import { displayAliases } from "../code/generator/aliases.ts";
+import { TIERS } from "../code/generator/sheets-model.ts";
 import { readStoredDraft, storedDraftKey, type StoredDraft } from "../code/generator/draft-store.ts";
 import { recentTeamsKey } from "../code/generator/recent-teams.ts";
 import { keptAnswersKey } from "../code/generator/run-dials.ts";
@@ -42,6 +46,7 @@ MANIFOLD_DIR selects the pinned SDK checkout; default: the sibling manifold dire
 Requires installed SDK dependencies, setsid and Chromium (MANIFOLD_CHROMIUM may select its binary).
 MANIFOLD_GATE_DIST may supply an existing SDK web build; otherwise gate-dist builds a
 throwaway web bundle. Missing Chromium or any failed assertion is a failure, not a skip.
+CODE_VERIFY_SCREENSHOTS may name an absolute artifact directory for mounted shared-routing PNGs.
 Starts only a disposable loopback server and an isolated testkit machine transport/terminal
 host. No native job owner, native setup, terminals, OMP processes, inference or providers are invoked.
 Every Chromium runs supervised in its own process group: success, failure, SIGINT/SIGTERM/SIGHUP
@@ -97,6 +102,7 @@ const pluginRoot = resolve(import.meta.dir, "..");
 const manifold = resolve(process.env.MANIFOLD_DIR ?? join(pluginRoot, "../../manifold"));
 const bundleDirectory = resolve(process.argv[2] ?? join(pluginRoot, "dist"));
 const ompBundleDirectory = resolve(process.env.CODE_OMP_BUNDLES_DIR ?? join(pluginRoot, ".integration/omp/plugins/dist"));
+const screenshotDirectory = process.env.CODE_VERIFY_SCREENSHOTS;
 const ompFamily = ["atyrode.omp", "atyrode.omp.accounts", "atyrode.omp.gateway"];
 const family = ["atyrode.code", "atyrode.code.accounts", "atyrode.code.generator", "atyrode.code.usage"];
 /** The accounts panel's root, around its scroll region: its layer, a native review, stands in it. */
@@ -462,7 +468,7 @@ async function reviewStands(browser: BrowserInstance, root: string, description:
  * or a refused press. It is mounted while it asks and gone once it is answered.
  */
 const decision = element(`${layers} dialog.${G}decision`);
-type Question = "charge" | "differs" | "narrowed" | "refused";
+type Question = "charge" | "differs" | "narrowed" | "refused" | "premium";
 /** The open question asks `kind`. */
 function asks(kind: Question): string {
   return `(${decision}?.dataset.decision === '${kind}')`;
@@ -512,8 +518,9 @@ const setupSheet = `${generator} [data-sheet="setup"]`;
 /** Models' import, a dialog of the panel's layer by its title (models-sheet.tsx), never in the sheet. */
 const importDialog = `${layers} dialog[aria-labelledby="${G}import-title"]`;
 const routeRows = `${generator} [data-pane="routing"] .${G}route`;
-const starterProviders = ["anthropic", "deepseek", "openai-codex"];
-const profileRoles = ["default", "task", "plan", "slow", "reviewer", "security-reviewer", "scout", "sonic", "vision", "smol", "tiny", "commit"];
+/** Exactly what workflow.ts `readStarterCatalog` reads: OpenAI's API rows beside Codex's, each at its own address. */
+const starterProviders = ["anthropic", "deepseek", "openai", "openai-codex"];
+const profileRoles = ["default", "task", "plan", "slow", "advisor", "vision", "smol", "memory", "widget", "tiny", "commit"];
 /** The generator's rows, top to bottom: the dials, then fallbacks as an on/off row; the other profile switches live in the session options. */
 type RowId = "lane" | "tier" | "thinking" | "advisor" | "fallbacks";
 const ROWS: readonly RowId[] = ["lane", "tier", "thinking", "advisor", "fallbacks"];
@@ -579,14 +586,14 @@ async function still(browser: BrowserInstance): Promise<void> {
   await until(browser, "every animation has finished", `${running} === 0`);
 }
 
-/** The routing beside the generator: each routed role's lead, its model alias and the thinking it runs at. */
+/** The routing beside the generator: each shared role's configured lead, model alias and effort suffix, not a named agent's effective effort. */
 type Routed = { role: string; alias: string; thinking: string };
 async function routedRoles(browser: BrowserInstance): Promise<Routed[]> {
   return browser.evaluate<Routed[]>(`[...document.querySelectorAll(${JSON.stringify(`${routeRows}:not([data-off])`)})].map(route => {
     const value = route.querySelector('.${G}chain > .${G}tok > .${G}tok-layer:not([aria-hidden]) .${G}tok-value');
     return { role: route.dataset.role, alias: value?.querySelector('.${G}tok-alias')?.textContent ?? '',
       thinking: (value?.querySelector('.${G}tok-thinking')?.textContent ?? '').replace(/^:/, '') };
-  }).sort((left, right) => left.role < right.role ? -1 : left.role > right.role ? 1 : 0)`);
+  })`);
 }
 /** What the routing must show for a selection: every routed role on its lead's alias at the lead's thinking. */
 function expectedRoutes(document: CatalogDocument, selection: Selection): Routed[] {
@@ -594,15 +601,150 @@ function expectedRoutes(document: CatalogDocument, selection: Selection): Routed
   const aliases = displayAliases(compiled);
   return reviewCatalog(compiled, selection, Date.now()).routes.map(route => ({
     role: route.role, alias: aliases.get(route.lead.key) ?? route.lead.key, thinking: route.lead.thinking,
-  })).sort((left, right) => left.role < right.role ? -1 : left.role > right.role ? 1 : 0);
+  }));
 }
 async function assertRoutes(browser: BrowserInstance, advisor: boolean): Promise<void> {
   await until(browser, "the routing routes the profile", `document.querySelector(${JSON.stringify(`${routeRows}:not([data-off])`)}) !== null`);
   await still(browser);
   const routed = await routedRoles(browser);
-  assert.deepEqual(routed.map(entry => entry.role).sort(), [...profileRoles, ...(advisor ? ["advisor"] : [])].sort(),
-    "The full current role contract is routed, including delegated and utility roles");
-  assert(routed.every(entry => entry.alias && entry.thinking), "Every routed role names its model and supported effort");
+  assert.deepEqual(routed.map(entry => entry.role), profileRoles.filter(role => advisor || role !== "advisor"),
+    "Only native shared roles are routed, in native order");
+  assert.deepEqual(await browser.evaluate(`[...document.querySelectorAll(${JSON.stringify(routeRows)})].map(route => route.dataset.role)`), profileRoles,
+    "The advisor's row stays after slow even while it is off");
+  assert(routed.every(entry => entry.alias && entry.thinking), "Every routed role names its model and configured supported effort");
+}
+
+/** Real pointer and keyboard dial commits update shared-role consumers, not just the selected words. */
+async function sharedDialScenario(browser: BrowserInstance, document: CatalogDocument, initial: Selection, label: string): Promise<void> {
+  const compiled = compileCatalog(document), aliases = displayAliases(compiled);
+  const deliberativeEfforts = { minimal: "minimal", low: "medium", medium: "high", high: "xhigh", xhigh: "xhigh", max: "max" } as const;
+  let selection: Selection = { ...initial, lane: { kind: "provider", family: "anthropic", blend: "only" }, capability: 2, thinking: "medium", advisor: "glance" };
+  const screenshot = async (name: string) => {
+    if (screenshotDirectory === undefined) return;
+    assert(isAbsolute(screenshotDirectory), "CODE_VERIFY_SCREENSHOTS must name an absolute artifact directory");
+    mkdirSync(screenshotDirectory, { recursive: true });
+    const { result } = await browser.send("Page.captureScreenshot", { format: "png", fromSurface: true, captureBeyondViewport: false });
+    const data = result?.data;
+    assert(typeof data === "string", "Chromium returns the mounted routing screenshot");
+    writeFileSync(join(screenshotDirectory, `${label}-${name}.png`), Buffer.from(data, "base64"));
+  };
+  const assertPolicy = async (description: string) => {
+    await assertRoutes(browser, selection.advisor !== "off");
+    const shown = await routedRoles(browser);
+    assert.deepEqual(shown, expectedRoutes(document, selection), `${description}: the mounted routing matches the committed selection`);
+    const expectLead = (role: string, tier: number, thinking: Selection["thinking"]) => {
+      const key = compiled.rung("anthropic", tier);
+      assert.deepEqual(shown.find(route => route.role === role), { role, alias: aliases.get(key) ?? key, thinking: compiled.clampThinking(key, thinking) },
+        `${description}: ${role} uses the requested rung and effort`);
+    };
+    for (const role of ["default", "task"]) expectLead(role, selection.capability, selection.thinking);
+    for (const role of ["plan", "slow"]) expectLead(role, selection.capability, deliberativeEfforts[selection.thinking]);
+    for (const role of ["smol", "memory"]) expectLead(role, 1, "medium");
+    for (const role of ["widget", "tiny", "commit"]) expectLead(role, 1, "low");
+    assert.equal(shown.find(route => route.role === "vision")?.thinking, compiled.clampThinking(compiled.rung("anthropic", selection.capability), "low"),
+      `${description}: vision stays low even under main max`);
+    if (selection.advisor !== "off") {
+      const tier = selection.advisor === "glance" ? 1 : selection.advisor === "review" ? 2 : 3;
+      expectLead("advisor", tier, selection.advisor === "glance" ? "low" : selection.advisor === "review" ? "medium" : "high");
+    }
+  };
+  await choose(browser, "lane", "anthropic");
+  if (await browser.evaluate(`${onlyBox}.getAttribute('aria-checked')`) !== "true") await click(browser, onlyBox);
+  await choose(browser, "tier", "normal");
+  await choose(browser, "thinking", "medium");
+  await choose(browser, "advisor", "glance");
+  await assertPolicy("Routine capable medium");
+  const routingReadout = element(`${generator} .${G}route-readout`);
+  const preferenceNote = `${routingReadout}.querySelector('b') === null && ${routingReadout}.textContent.trim().length > 0`;
+  await pointAway(browser);
+  await until(browser, "the unpointed routing visibly explains shared-role preferences", preferenceNote);
+  const preferencesDescription = await browser.evaluate<string>(`(() => {
+    const pane = ${element(`${generator} [data-pane="routing"]`)};
+    return document.getElementById(pane.getAttribute('aria-describedby'))?.textContent ?? '';
+  })()`);
+  assert(preferencesDescription.trim().length > 0, "The routing pane exposes its effort-precedence explanation as an accessible description");
+  assert.equal(await browser.evaluate(`${routingReadout}.title`), preferencesDescription,
+    "The unpointed readout exposes the same full explanation through its tooltip");
+  const routineModel = compiled.model(compiled.rung("anthropic", 2));
+  await pointOf(browser, element(`${routeRows}[data-role="default"] .${G}chain > .${G}tok`));
+  await until(browser, "pointing at a shared route still reads its exact model address",
+    `${routingReadout}.textContent.includes(${JSON.stringify(`${routineModel.provider}/${routineModel.id}`)})`);
+  await pointAway(browser);
+  await until(browser, "leaving the route restores the effort-precedence explanation", preferenceNote);
+  await screenshot("everyday");
+  await choose(browser, "thinking", "low");
+  selection = { ...selection, thinking: "low" };
+  await assertPolicy("Low main effort gives deliberative roles medium without a tier promotion");
+  await screenshot("main-low");
+  await focusRow(browser, "thinking");
+  await key(browser, "Home", 36);
+  await until(browser, "Home retains explicit minimal main effort", `${chosenKey("thinking")} === 'minimal'`);
+  selection = { ...selection, thinking: "minimal" };
+  await assertPolicy("Explicit minimal effort stays minimal for deliberative roles");
+  await screenshot("main-minimal");
+  await choose(browser, "thinking", "medium");
+  selection = { ...selection, thinking: "medium" };
+  await choose(browser, "tier", "smart");
+  selection = { ...selection, capability: 3 };
+  await assertPolicy("An explicit smart choice");
+  await screenshot("smart");
+  await focusRow(browser, "tier");
+  await key(browser, "End", 35);
+  await until(browser, "End explicitly selects elite", `${chosenKey("tier")} === 'elite'`);
+  selection = { ...selection, capability: 4 };
+  await assertPolicy("An explicit keyboard elite choice");
+  await screenshot("elite");
+  await choose(browser, "thinking", "high");
+  selection = { ...selection, thinking: "high" };
+  await assertPolicy("High main effort gives deliberative roles xhigh within model limits");
+  await screenshot("main-high");
+  await focusRow(browser, "thinking");
+  await key(browser, "ArrowRight", 39);
+  await until(browser, "ArrowRight explicitly selects xhigh without maximum effort", `${chosenKey("thinking")} === 'xhigh'`);
+  selection = { ...selection, thinking: "xhigh" };
+  await assertPolicy("Deliberative xhigh does not silently become max");
+  await screenshot("main-xhigh");
+  await focusRow(browser, "thinking");
+  await key(browser, "End", 35);
+  await until(browser, "End explicitly selects maximum main effort", `${chosenKey("thinking")} === 'max'`);
+  selection = { ...selection, thinking: "max" };
+  await assertPolicy("Maximum main effort keeps utility budgets low");
+  const fallbackToggle = element(`${generator} [data-chains]`);
+  const chainsShown = await browser.evaluate<boolean>(`${fallbackToggle}.getAttribute('aria-checked') === 'true'`);
+  if (!chainsShown) await click(browser, fallbackToggle);
+  await until(browser, "the maximum-effort profile shows its fallback chains", `${fallbackToggle}.getAttribute('aria-checked') === 'true'`);
+  await still(browser);
+  assert(await browser.evaluate<boolean>(`${element(`${routeRows}[data-role="default"]`)}.querySelectorAll('.${G}chain-step').length > 0`),
+    "Configured default fallbacks render when chains are shown");
+  for (const role of ["memory", "widget"]) {
+    assert.equal(await browser.evaluate(`${element(`${routeRows}[data-role="${role}"]`)}.querySelectorAll('.${G}chain-step').length`), 0,
+      `The native ${role} role has no configured fallback chain, even under main max`);
+  }
+  if (!chainsShown) {
+    await click(browser, fallbackToggle);
+    await until(browser, "the fallback display returns to its initial state", `${fallbackToggle}.getAttribute('aria-checked') !== 'true'`);
+    await still(browser);
+  }
+  await screenshot("main-max");
+  try {
+    await panelWidth(browser, 390, 2400);
+    await assertPolicy("Narrow main max retains all shared routes");
+    await screenshot("narrow-main-max");
+  } finally {
+    await browser.send("Emulation.clearDeviceMetricsOverride", {});
+  }
+  for (const advisor of ["off", "glance", "review", "audit"] as const) {
+    await choose(browser, "advisor", advisor);
+    selection = { ...selection, advisor };
+    await assertPolicy(`Advisor ${advisor}`);
+  }
+  await choose(browser, "advisor", initial.advisor);
+  await choose(browser, "thinking", initial.thinking);
+  await choose(browser, "tier", ["fast", "normal", "smart", "elite"][initial.capability - 1]!);
+  await choose(browser, "lane", initial.lane.kind === "mixed" ? "mixed" : initial.lane.family);
+  if (initial.lane.kind === "provider" && await browser.evaluate(`${onlyBox}.getAttribute('aria-checked')`) !== String(initial.lane.blend === "only")) await click(browser, onlyBox);
+  await assertRoutes(browser, initial.advisor !== "off");
+  assert.deepEqual(await routedRoles(browser), expectedRoutes(document, initial), "The pointer and keyboard dial round trip restores the initial routes");
 }
 
 /** Chooses a word of a row by a real press, unless it is already chosen. */
@@ -638,12 +780,13 @@ async function focusLaunch(browser: BrowserInstance): Promise<void> {
   await click(browser, generatorTitle);
   await tabTo(browser, "the launch", launchButton);
 }
-async function chooseMachine(browser: BrowserInstance, machineId: string, name: string): Promise<void> {
+async function chooseMachine(browser: BrowserInstance, machineId: string, name: string, rows: "present" | "absent" = "present"): Promise<void> {
   // The picker reads "no machine" until the panel has picked one, once every online machine has answered; its word then
   // changes width, so a press aimed before that pick can miss it. The profile's rows can also arrive after the pick, moving
   // the launch row down under a press aimed at the picker, so both are waited for before it is pressed.
   await until(browser, "the launch names its machine", `!!${machinePicker}?.textContent && ${machinePicker}.getAttribute('aria-label') !== 'Machine: none'`);
-  await until(browser, "the generator's rows are drawn", `document.querySelectorAll('${generator} [data-row]').length > 0`);
+  await until(browser, rows === "present" ? "the generator's rows are drawn" : "the premium-only preview has no automatic profile rows",
+    `document.querySelectorAll('${generator} [data-row]').length ${rows === "present" ? ">" : "==="} 0`);
   if (await browser.evaluate<boolean>(`${machinePicker}.textContent === ${JSON.stringify(name)}`)) return;
   await click(browser, machinePicker);
   await until(browser, "the machine list opens", `${machineList} !== null`);
@@ -918,11 +1061,10 @@ async function asNewPerson(browser: BrowserInstance, server: TestServer, writer:
     "A new person keeps their own checks, has approved nothing and keeps no model check yet");
   await seenTutorial(server, person);
   await browser.evaluate(identity(person));
-  try {
-    await scenario(person);
-  } finally {
-    await browser.evaluate(identity(writer));
-  }
+  // A failing scenario aborts the run, whose teardown (`stopEverything`) closes the browser without the writer's identity,
+  // so the identity is restored only after success, and a failure is never masked by a restore that fails behind it.
+  await scenario(person);
+  await browser.evaluate(identity(writer));
 }
 
 async function openWorkspace(
@@ -1240,7 +1382,7 @@ async function usableStarter(browser: BrowserInstance, edited = false): Promise<
     const stops = row.querySelectorAll('[role="radio"][tabindex="0"]');
     return stops.length !== 1 || stops[0].getAttribute('aria-checked') !== 'true';
   }).map(row => row.dataset.row)`), [], "Each row is one keyboard Tab stop: its chosen value");
-  // The default profile keeps the old Code advisor default (glance), so the advisor role is routed.
+  // The bundled default enables a glance advisor; explicit choices can turn it off without moving its row.
   await assertRoutes(browser, true);
 }
 
@@ -1397,7 +1539,9 @@ const SAID_WORDS = `element.parentElement?.closest('.${G}readout, .${G}route-rea
 const BOXES = boxesOf(stage, SAID_WORDS);
 /** The whole panel: the stage and, while one is open, the layer over it, laid out in the panel's root. */
 const PANEL_BOXES = boxesOf(generator, SAID_WORDS);
-const SHEET_BOXES = boxesOf(`${generator} ${openSheetHost}`, `element.closest('.${G}sheet-state, .plugin-atyrode_code__sr') || element.parentElement?.closest('[data-readout]')`);
+/** The checked-age text leaf in Setup's profile facts follows the wall clock, like the sheet head's state. */
+const CHECKED_AGE_LEAF = `element.matches('.${G}setup-facts .${G}setup-q') && element.childElementCount === 0 && /^· checked (?:just now|[0-9]+[mhd] ago)$/.test((element.textContent ?? '').trim())`;
+const SHEET_BOXES = boxesOf(`${generator} ${openSheetHost}`, `element.closest('.${G}sheet-state, .plugin-atyrode_code__sr') || element.parentElement?.closest('[data-readout]') || (${CHECKED_AGE_LEAF})`);
 const SHIFTED = `(() => {
   const at = element => { let x = 0, y = 0; for (let node = element; node; node = node.offsetParent) { x += node.offsetLeft; y += node.offsetTop; } return [x, y]; };
   const [ox, oy] = at(globalThis.__codeStage);
@@ -2393,7 +2537,36 @@ async function starterWorkbenchScenario(browser: BrowserInstance, server: TestSe
   const metadata = ModelCatalogSnapshotSchema.parse(catalogRead.result);
   assert.equal(metadata.source, "bundled");
   assert.deepEqual([...new Set(metadata.models.map(model => model.provider))].sort(), [...starterProviders].sort(),
-    "The starter uses exact sanctioned providers, never an OpenAI alias for Codex");
+    "The starter reads exactly its sanctioned providers, OpenAI's API and Codex each at its own address, never one for the other");
+  // The pinned OMP's bundled facts, by family, at the address each rung comes from: Codex where it bundles the model, the
+  // OpenAI API where only it does. OMP 18.20.1 bundles GPT-6.1 Terra for the API alone; Codex discovers it at runtime.
+  const latest: Readonly<Record<string, readonly (readonly [provider: string, id: string, input: number, output: number, quotaBucket: string | null])[]>> = {
+    anthropic: [
+      ["anthropic", "claude-haiku-5-5", 0.1, 0.5, "claude"], ["anthropic", "claude-sonnet-5-5", 2, 10, "claude"],
+      ["anthropic", "claude-opus-5-5", 4, 20, "claude"], ["anthropic", "claude-fable-5-2", 8, 40, "claude"],
+    ],
+    openai: [
+      ["openai-codex", "gpt-6-luna", 0.1, 0.5, "codex"], ["openai", "gpt-6.1-terra", 1, 5, null],
+      ["openai-codex", "gpt-6.1-sol", 2, 10, "codex"], ["openai-codex", "gpt-6-astra", 10, 50, "codex"],
+    ],
+  };
+  assert(!metadata.models.some(model => model.provider === "openai-codex" && model.id === "gpt-6.1-terra"),
+    "The pinned OMP bundles no Codex GPT-6.1 Terra, and the starter fabricates none");
+  const bundledStarter = catalogFromMetadata(metadata, "any");
+  for (const [family, models] of Object.entries(latest)) {
+    for (const [provider, id, input, output] of models) {
+      const source = metadata.models.find(model => model.provider === provider && model.id === id);
+      assert(source, `The real pinned OMP metadata publishes ${provider}/${id}`);
+      assert.deepEqual([source.inputCostPerMillion, source.outputCostPerMillion], [input, output],
+        `${provider}/${id} retains authoritative API list pricing, never an OAuth bill`);
+    }
+    const rungs = bundledStarter.models.filter(model => providerPolicy(model.provider).family === family).sort((left, right) => left.tier - right.tier);
+    assert.deepEqual(rungs.map(model => [model.tier, model.provider, model.id, model.inputCostPerMillion, model.outputCostPerMillion, model.quotaBucket]),
+      models.map((fact, index) => [index + 1, ...fact]),
+      `The passive metadata-to-starter consumer retains all four latest ${family} series at their exact addresses, in their named rungs, at their source prices, the API row in no Codex quota`);
+    assert(rungs.every(model => model.tokensPerSecond === null && model.timeToFirstTokenMs === null),
+      "Passive bundled pricing and series selection never fabricate measured throughput or latency");
+  }
   const deployments = await ownerAction(server, "engine.jobs.listDeployments", { pluginId: "atyrode.omp", limit: 100 });
   const terminals = await ownerAction(server, "core.terminals.listAll", {});
   await arrangeWorkbench(server, writer);
@@ -2420,12 +2593,15 @@ async function starterWorkbenchScenario(browser: BrowserInstance, server: TestSe
       assert.equal(await browser.evaluate(`${liveRegion}?.textContent`), "", "The live region is mounted empty");
       // Models shows the policy derivation of the exact real OMP metadata response; untouched, the preview keeps no edit.
       const draftKey = storedDraftKey(writer.principal.id, workspace.id);
-      const starter = catalogFromMetadata(metadata, "any"), initialSelection = defaultSelection(compileCatalog(starter));
+      const starter = bundledStarter, initialSelection = defaultSelection(compileCatalog(starter));
       const initialDraft = await readProfile(browser, draftKey);
       assert.deepEqual(initialDraft.list, listOf(starter), "Models shows the starter the exact real OMP metadata response derives, each rung on its model");
       assert.equal(initialDraft.kept, null, "An untouched preview keeps no edit");
-      assert.deepEqual(await browser.evaluate(`[${chosenKey("thinking")}, ${chosenKey("advisor")}]`), [initialSelection.thinking, initialSelection.advisor],
-        "The rows show that list's default profile");
+      assert.deepEqual(await browser.evaluate(`[${chosenKey("lane")}, ${chosenKey("tier")}, ${chosenKey("thinking")}, ${chosenKey("advisor")}]`),
+        ["anthropic", "normal", "medium", initialSelection.advisor], "The untouched preview selects everyday Sonnet medium, not an automatic premium model");
+      assert.deepEqual(await routedRoles(browser), expectedRoutes(starter, initialSelection), "The mounted shared roles consume the preferred everyday default");
+      await sharedDialScenario(browser, starter, initialSelection, initialized ? "initialized" : "first-use");
+      assert.deepEqual(await readProfile(browser, draftKey), initialDraft, "Exercising all shared route dials restores the untouched preview without a kept edit");
       // The first workspace has one recent profile, which the panel reads as it mounts.
       const recent = { ...initialSelection, thinking: "high", advisor: "off" } satisfies Selection;
       if (!initialized) {
@@ -2486,6 +2662,10 @@ async function starterWorkbenchScenario(browser: BrowserInstance, server: TestSe
       assert(native.ok);
       assert((native.result as OmpResult<"describeDestination">).operations.every(operation => !operation.nativeReady));
     }
+    await emptyPoolStarterScenario(browser, server, writer, metadata);
+    await premiumStagedCatalogScenario(browser, server, writer, metadata);
+    await premiumReplacementScenario(browser, server, writer, metadata);
+    await premiumDialSaveScenario(browser, server, writer, metadata, destination);
     await starterConflictScenario(browser, server, writer);
     assert(trace.requests.some(request => request.name === "atyrode.omp.readModelCatalog"), "The browser itself consumes the real public bundled source");
     for (const request of trace.requests.filter(request => request.name === "atyrode.omp.readModelCatalog")) {
@@ -2496,6 +2676,434 @@ async function starterWorkbenchScenario(browser: BrowserInstance, server: TestSe
   assert.deepEqual(await ownerAction(server, "engine.jobs.listDeployments", { pluginId: "atyrode.omp", limit: 100 }), deployments);
   assert.deepEqual(await ownerAction(server, "core.terminals.listAll", {}), terminals,
     "Starter editing, saving and conflict recovery create neither native approvals nor terminals");
+}
+
+/** A fresh, known empty account pool keeps local catalog exploration and account repair reachable, never a runnable entitlement. */
+async function emptyPoolStarterScenario(browser: BrowserInstance, server: TestServer, writer: TokenGrant, metadata: OmpResult<"readModelCatalog">): Promise<void> {
+  // The fictional Codex slot the other fixtures use, observed alone once the empty-pool loops are done; no credential exists behind it.
+  const codex = { reference: { kind: "credential" as const, scope: fixtureScope, provider: "openai-codex", credentialId: 3 }, credentialId: 3,
+    type: "api_key" as const, identityKey: null, email: null, disabled: false, blocks: [] };
+  let codexOnly = false;
+  const observation = (): OmpResult<"accounts"> => codexOnly ? { ...fixtureAccounts([]), accounts: [codex] } : fixtureAccounts([]);
+  const fixture = await intercept(browser, server, name => name === "atyrode.omp.accounts.accounts" ? { ok: true, result: observation() }
+    : codexOnly && name === "atyrode.omp.accounts.usage" ? { ok: true, result: fixtureUsage(observation()) } : undefined);
+  const trace = await watchActions(browser, server);
+  const document = catalogFromMetadata(metadata, "any"), initial = defaultSelection(compileCatalog(document));
+  try {
+    for (const initialized of [false, true]) {
+      const workspace = await createContainer(server, initialized ? "Initialized empty account preview" : "First-use empty account preview", "canvas");
+      const target = { containerId: workspace.id };
+      if (initialized) assert((await callAction(server, writer.token, "atyrode.code.initializeConfiguration", { ...target, expectedRevision: 0 })).ok);
+      const before = await readConfiguration(server, writer, target), from = trace.requests.length;
+      await openGenerator(browser, server, workspace.id);
+      await usableStarter(browser);
+      await until(browser, "a known empty pool explains the refusal and offers account repair",
+        `${launchIs("launch", "refused")} && ${element(stage)}.textContent.includes('No account is included') && !!${fix("accounts")}`);
+      assert.equal(await browser.evaluate(`!!${fix("list-retry")}`), false, "An empty account pool is not a model-list failure");
+      assert.deepEqual(await routedRoles(browser), expectedRoutes(document, initial), "An empty pool keeps a render-only catalog profile visible");
+      await choose(browser, "tier", "smart");
+      await focusRow(browser, "thinking");
+      await key(browser, "End", 35);
+      await until(browser, "keyboard exploration can choose maximum main effort without accounts", `${chosenKey("thinking")} === 'max'`);
+      const selection: Selection = { ...initial, capability: 3, thinking: "max" };
+      await assertRoutes(browser, selection.advisor !== "off");
+      assert.deepEqual(await routedRoles(browser), expectedRoutes(document, selection), "Pointer and keyboard exploration update real shared routes without an included account");
+      await until(browser, "local exploration remains refused on the known empty pool",
+        `${launchIs("save & launch", "refused")} && ${element(stage)}.textContent.includes('No account is included')`);
+      await click(browser, launchButton);
+      await until(browser, "a launch press explains the missing account without starting a check", asks("refused"));
+      assert.equal((await browser.evaluate<Asked>(asked)).title, "No account is included");
+      await key(browser, "Escape", 27);
+      await until(browser, "Esc returns from the refusal to the catalog preview", unasked);
+      await click(browser, fix("accounts"));
+      await until(browser, "account repair stays reachable from the empty-pool preview", shownView("accounts"));
+      assert.deepEqual(await readConfiguration(server, writer, target), before, "Empty-pool exploration and refusal save no workspace policy");
+      assert.deepEqual(trace.requests.slice(from).filter(request => /^atyrode\.code\.(initializeConfiguration|adoptStarterProfile|stageCatalog|promoteCatalog|select|changeAccounts)$/.test(request.name)), []);
+      noNativeEffects(trace.requests.slice(from));
+    }
+    // A fresh workspace whose only account is Codex: its lane dial may explore Claude, which no included account serves,
+    // and Defaults then returns to the served default at its Codex address, never the catalog's own default.
+    codexOnly = true;
+    const compiled = compileCatalog(document), aliases = displayAliases(compiled);
+    const served = defaultSelection(compiled, provider => provider === "openai-codex");
+    const servedLead = reviewCatalog(compiled, served, Date.now()).routes.find(route => route.role === "default");
+    assert(servedLead, "The Codex-only profile includes a default route");
+    assert.equal(compiled.model(servedLead.lead.key).provider, "openai-codex", "A Codex-only pool's default leads at the Codex address, never the API's or Claude's");
+    const servedRoutes = expectedRoutes(document, served);
+    const claudeAliases = compiled.models.filter(model => model.provider === "anthropic").map(model => aliases.get(model.key) ?? model.key);
+    const fresh = await createContainer(server, "First-use Codex-only defaults", "canvas");
+    const before = await readConfiguration(server, writer, { containerId: fresh.id }), from = trace.requests.length;
+    assert.deepEqual(before, { configuration: null, legacyMachineId: null, revision: 0 });
+    await openGenerator(browser, server, fresh.id);
+    await waitFor(async () => JSON.stringify(await routedRoles(browser)) === JSON.stringify(servedRoutes), timeout, 50);
+    await choose(browser, "lane", "anthropic");
+    await waitFor(async () => claudeAliases.includes((await routedRoles(browser)).find(route => route.role === "default")?.alias ?? ""), timeout, 50);
+    await focusRow(browser, "lane");
+    await key(browser, "d", 68);
+    await until(browser, "Defaults leaves the explored Claude lane", `${chosenKey("lane")} !== 'anthropic'`);
+    await waitFor(async () => JSON.stringify(await routedRoles(browser)) === JSON.stringify(servedRoutes), timeout, 50);
+    assert.deepEqual(await routedRoles(browser), servedRoutes, "Defaults routes the Codex pool's served default again, not the explored or catalog default");
+    assert.deepEqual(await readConfiguration(server, writer, { containerId: fresh.id }), before, "Exploring and Defaults save no workspace policy");
+    assert.deepEqual(trace.requests.slice(from).filter(request => /^atyrode\.code\.(initializeConfiguration|adoptStarterProfile|stageCatalog|promoteCatalog|select|changeAccounts)$/.test(request.name)), []);
+    noNativeEffects(trace.requests.slice(from));
+    fixture.check();
+  } finally {
+    await fixture.stop();
+    trace.stop();
+  }
+}
+
+/** Sparse premium lists remain staged until a deliberate choice binds the same explicit profile to review and promotion. */
+async function premiumStagedCatalogScenario(browser: BrowserInstance, server: TestServer, writer: TokenGrant, metadata: OmpResult<"readModelCatalog">): Promise<void> {
+  const source = catalogFromMetadata(metadata, "any");
+  const trace = await watchActions(browser, server);
+  const reviews: ActionResult<"reviewCatalog">[] = [];
+  const fixture = await intercept(browser, server, async (name, input) => {
+    if (name !== "atyrode.code.reviewCatalog") return undefined;
+    const outcome = await callAction(server, writer.token, name, input);
+    if (!outcome.ok) return { ok: false, denial: outcome.denial };
+    reviews.push(outcome.result as ActionResult<"reviewCatalog">);
+    return { ok: true, result: outcome.result };
+  });
+  try {
+    for (const capability of [3, 4] as const) {
+      const tier = TIERS[capability - 1]!;
+      const document: CatalogDocument = { schemaVersion: 1, models: source.models.filter(model => model.provider === "anthropic" && model.tier === capability) };
+      assert.equal(document.models.length, 1, `The real metadata supplies one latest ${tier} model`);
+      const premiumModel = document.models[0]!;
+      const workspace = await createContainer(server, `Explicit ${tier} staged profile`, "canvas");
+      const target = { containerId: workspace.id };
+      const initialized = await callAction(server, writer.token, "atyrode.code.initializeConfiguration", { ...target, expectedRevision: 0 });
+      assert(initialized.ok);
+      const staged = await callAction(server, writer.token, "atyrode.code.stageCatalog", { ...target, expectedRevision: (initialized.result as Configuration).revision, document });
+      assert(staged.ok);
+      const before = await readConfiguration(server, writer, target), from = trace.requests.length;
+      const adoptions = () => trace.requests.slice(from).filter(request => /^atyrode\.code\.(reviewCatalog|promoteCatalog|select)$/.test(request.name));
+      await openGenerator(browser, server, workspace.id);
+      await until(browser, "a premium-only staged list keeps Models reachable", `${launchButton} !== null && ${launchButton}.dataset.state === 'ready'`);
+      assert.equal(await browser.evaluate(`document.querySelector(${JSON.stringify(routeRows)}) === null`), true,
+        "A premium-only catalog never fabricates an automatic premium default");
+      assert.equal(before.configuration?.selection, null);
+      await click(browser, launchButton);
+      await until(browser, "the premium-only list is reviewed in Models before adoption", `${sheetOpen("Models")} && ${goIs(modelsSheet, "use staged list")}`);
+      assert.deepEqual(await browser.evaluate(modelList), listOf(document), "Models exposes the actual declared premium rung");
+      await click(browser, element(`${modelsSheet} [data-go]`));
+      const question = await questionOpens(browser, "premium", "using a premium-only list asks for a deliberate explicit profile");
+      assert.equal(question.items.length, 1);
+      assert(question.items[0]!.includes(`${premiumModel.provider}/${premiumModel.id}`) && question.items[0]!.includes(tier) &&
+        question.items[0]!.includes("medium"), "The question names the real model, explicit premium tier and configured effort");
+      assert.deepEqual(adoptions(), [], "Neither review nor promotion runs before premium confirmation");
+      await questionGeometry(browser, `${tier} premium`);
+      await questionCoarseTargets(browser, `${tier} premium`);
+      assert.equal(await browser.evaluate(asks("premium")), true, "Geometry and coarse-pointer sweeps leave the real premium question open");
+      assert.deepEqual(adoptions(), [], "Resizing and coarse-pointer inspection never review or promote a premium profile");
+      if (screenshotDirectory !== undefined) {
+        assert(isAbsolute(screenshotDirectory), "CODE_VERIFY_SCREENSHOTS must name an absolute artifact directory");
+        mkdirSync(screenshotDirectory, { recursive: true });
+        const { result } = await browser.send("Page.captureScreenshot", { format: "png", fromSurface: true, captureBeyondViewport: false });
+        const data = result?.data;
+        assert(typeof data === "string");
+        writeFileSync(join(screenshotDirectory, `premium-${tier}-confirmation.png`), Buffer.from(data, "base64"));
+        try {
+          await panelWidth(browser, 390);
+          await still(browser);
+          const { result: narrow } = await browser.send("Page.captureScreenshot", { format: "png", fromSurface: true, captureBeyondViewport: false });
+          const narrowData = narrow?.data;
+          assert(typeof narrowData === "string");
+          writeFileSync(join(screenshotDirectory, `premium-${tier}-confirmation-narrow.png`), Buffer.from(narrowData, "base64"));
+        } finally {
+          await browser.send("Emulation.clearDeviceMetricsOverride", {});
+        }
+      }
+      await key(browser, "Escape", 27);
+      await until(browser, "cancelling leaves the premium list staged and usable in Models", `${unasked} && ${goIs(modelsSheet, "use staged list")}`);
+      assert.deepEqual(await readConfiguration(server, writer, target), before, "Cancelling a premium choice writes nothing");
+      assert.deepEqual(adoptions(), [], "Cancellation never reviews, promotes or saves a premium profile");
+      assert.equal(await browser.evaluate(`${element(`${modelsSheet} [data-cue="import"]`)}.getAttribute('aria-disabled')`), null,
+        "The import repair action remains reachable after cancellation");
+      await click(browser, element(`${modelsSheet} [data-go]`));
+      await questionOpens(browser, "premium", "a new press asks again rather than remembering a cancelled premium approval");
+      await firstChoiceByTab(browser, "premium");
+      assert.deepEqual(adoptions(), [], "An Enter intended for the question's title never approves premium adoption");
+      await answer(browser, "approve");
+      await until(browser, "explicit confirmation puts the premium list in use without checking it",
+        `${unasked} && ${element(modelsSheet)}.dataset.phase !== 'staged' && ${sheetState(modelsSheet)}.includes('not checked')`);
+      const review = reviews.at(-1);
+      assert(review);
+      const selection: Selection = { lane: { kind: "provider", family: "anthropic", blend: "only" }, capability, thinking: "medium", advisor: "glance",
+        spark: false, priority: false, prewalk: false, planYolo: false, fallback: true, budget: "any" };
+      assert.deepEqual(review.review.selection, selection, "Only the deliberately named premium tier is selected, with visible configured effort");
+      assert.deepEqual(adoptions(), [
+        { name: "atyrode.code.reviewCatalog", input: { ...target, expectedRevision: before.revision, source: "draft", selection } },
+        { name: "atyrode.code.promoteCatalog", input: { ...target, expectedRevision: before.revision, source: "draft", reviewDigest: review.reviewDigest, selection } },
+      ], "Review and promotion receive the same explicit selection; there is no later profile-changing select");
+      const used = await readConfiguration(server, writer, target);
+      assert.deepEqual([used.configuration?.active?.document, used.configuration?.active?.provenance, used.configuration?.selection, used.configuration?.draft],
+        [document, null, selection, null], "Promotion atomically adopts exactly the reviewed unverified premium list and explicit profile");
+      await closeSheet(browser);
+      await assertRoutes(browser, true);
+      assert.deepEqual(await routedRoles(browser), expectedRoutes(document, selection), "The mounted shared routes consume the deliberately adopted premium profile");
+      noNativeEffects(trace.requests.slice(from));
+    }
+    fixture.check();
+  } finally {
+    await fixture.stop();
+    trace.stop();
+  }
+}
+
+/** A changed premium address needs actual-tier approval; the same active address survives legacy capability and metadata/key edits. */
+async function premiumReplacementScenario(browser: BrowserInstance, server: TestServer, writer: TokenGrant, metadata: OmpResult<"readModelCatalog">): Promise<void> {
+  const source = catalogFromMetadata(metadata, "any");
+  const trace = await watchActions(browser, server);
+  const reviews: ActionResult<"reviewCatalog">[] = [];
+  const fixture = await intercept(browser, server, async (name, input) => {
+    if (name !== "atyrode.code.reviewCatalog") return undefined;
+    const outcome = await callAction(server, writer.token, name, input);
+    if (!outcome.ok) return { ok: false, denial: outcome.denial };
+    reviews.push(outcome.result as ActionResult<"reviewCatalog">);
+    return { ok: true, result: outcome.result };
+  });
+  try {
+    for (const unchanged of [false, true]) {
+      const selected: Selection = { lane: { kind: "provider", family: "anthropic", blend: "only" }, capability: 2, thinking: "high", advisor: "off",
+        spark: false, priority: false, prewalk: true, planYolo: true, fallback: false, budget: "any" };
+      const original: CatalogDocument = { schemaVersion: 1, models: source.models.filter(model => model.provider === "anthropic" && model.tier === (unchanged ? 4 : 2)) };
+      const fable = source.models.find(model => model.provider === "anthropic" && model.tier === 4);
+      assert(fable && original.models.length === 1);
+      // Local keys and declared context metadata do not change the selected provider/model address.
+      const replacement: CatalogDocument = { schemaVersion: 1, models: [{ ...fable, key: `${fable.key}-replacement`,
+        contextWindow: fable.contextWindow === null ? 128_000 : Math.max(1, fable.contextWindow - 1) }] };
+      const workspace = await createContainer(server, unchanged ? "Unchanged legacy premium address" : "Explicit replacement premium address", "canvas");
+      const target = { containerId: workspace.id };
+      const initialized = await callAction(server, writer.token, "atyrode.code.initializeConfiguration", { ...target, expectedRevision: 0 });
+      assert(initialized.ok);
+      const first = await callAction(server, writer.token, "atyrode.code.stageCatalog", { ...target, expectedRevision: (initialized.result as Configuration).revision, document: original });
+      assert(first.ok);
+      const initialSelection = unchanged ? { ...selected, capability: 4 as const } : selected;
+      const firstInput = { ...target, expectedRevision: (first.result as Configuration).revision, source: "draft" as const, selection: initialSelection };
+      const reviewed = await callAction(server, writer.token, "atyrode.code.reviewCatalog", firstInput);
+      assert(reviewed.ok);
+      const promoted = await callAction(server, writer.token, "atyrode.code.promoteCatalog", { ...firstInput, reviewDigest: (reviewed.result as ActionResult<"reviewCatalog">).reviewDigest });
+      assert(promoted.ok);
+      let active = promoted.result as Configuration;
+      if (unchanged) {
+        const legacy = await callAction(server, writer.token, "atyrode.code.select", { ...target, expectedRevision: active.revision, selection: selected });
+        assert(legacy.ok, "The same active Fable address can retain an explicit legacy capability-2 selection");
+        active = legacy.result as Configuration;
+      }
+      const staged = await callAction(server, writer.token, "atyrode.code.stageCatalog", { ...target, expectedRevision: active.revision, document: replacement });
+      assert(staged.ok);
+      const before = await readConfiguration(server, writer, target), from = trace.requests.length;
+      const adoptions = () => trace.requests.slice(from).filter(request => /^atyrode\.code\.(reviewCatalog|promoteCatalog|select)$/.test(request.name));
+      await openGenerator(browser, server, workspace.id);
+      await assertRoutes(browser, false);
+      await openSheet(browser, "models");
+      await until(browser, "the replacement catalog waits in Models with the saved profile intact", goIs(modelsSheet, "use staged list"));
+      await click(browser, element(`${modelsSheet} [data-go]`));
+      if (!unchanged) {
+        const question = await questionOpens(browser, "premium", "a newly substituted Fable lead requires explicit actual-tier approval");
+        assert(question.items.some(item => item.includes(`${fable.provider}/${fable.id}`) && item.includes(TIERS[3]) && item.includes(selected.thinking)),
+          "The replacement question names actual Fable, elite and the preserved configured effort");
+        assert.deepEqual(adoptions(), [], "A compatible capability-2 preview cannot send a new Fable lead to review or promotion");
+        if (screenshotDirectory !== undefined) {
+          assert(isAbsolute(screenshotDirectory), "CODE_VERIFY_SCREENSHOTS must name an absolute artifact directory");
+          mkdirSync(screenshotDirectory, { recursive: true });
+          const { result } = await browser.send("Page.captureScreenshot", { format: "png", fromSurface: true, captureBeyondViewport: false });
+          const data = result?.data;
+          assert(typeof data === "string");
+          writeFileSync(join(screenshotDirectory, "premium-replacement-confirmation.png"), Buffer.from(data, "base64"));
+        }
+        await key(browser, "Escape", 27);
+        await until(browser, "cancelling a premium substitution keeps the replacement staged", `${unasked} && ${goIs(modelsSheet, "use staged list")}`);
+        assert.deepEqual(await readConfiguration(server, writer, target), before, "Cancelling preserves the active Sonnet list, saved capability and all preferences");
+        assert.deepEqual(adoptions(), [], "Cancelling a new premium lead performs neither review nor promotion");
+        await click(browser, element(`${modelsSheet} [data-go]`));
+        await questionOpens(browser, "premium", "a cancelled substitution needs a new deliberate approval");
+        await answer(browser, "approve");
+      }
+      await until(browser, unchanged ? "the unchanged legacy address promotes without a premium question" : "the confirmed premium replacement is put in use",
+        `${unasked} && ${element(modelsSheet)}.dataset.phase !== 'staged' && ${sheetState(modelsSheet)}.includes('not checked')`);
+      const review = reviews.at(-1);
+      assert(review);
+      const selection: Selection = unchanged ? selected : { ...selected, capability: 4 };
+      assert.deepEqual(review.review.selection, selection, "Actual-tier confirmation changes only capability; an unchanged legacy address keeps every saved preference");
+      assert.deepEqual(adoptions(), [
+        { name: "atyrode.code.reviewCatalog", input: { ...target, expectedRevision: before.revision, source: "draft", selection } },
+        { name: "atyrode.code.promoteCatalog", input: { ...target, expectedRevision: before.revision, source: "draft", reviewDigest: review.reviewDigest, selection } },
+      ], "Both adoption RPCs bind the same deliberate or unchanged legacy profile, with no subsequent select");
+      const used = await readConfiguration(server, writer, target);
+      assert.deepEqual([used.configuration?.active?.document, used.configuration?.selection, used.configuration?.draft], [replacement, selection, null],
+        "Replacement atomically adopts the exact new catalog and the permitted profile");
+      await closeSheet(browser);
+      await assertRoutes(browser, false);
+      assert.deepEqual(await routedRoles(browser), expectedRoutes(replacement, selection), "The mounted routes consume the approved address without changing effort or other preferences");
+      noNativeEffects(trace.requests.slice(from));
+    }
+    fixture.check();
+  } finally {
+    await fixture.stop();
+    trace.stop();
+  }
+}
+
+/** Premium dial saves use the real select CAS on a recorded, synthetic check; no probe or native launch runs. */
+async function premiumDialSaveScenario(browser: BrowserInstance, server: TestServer, writer: TokenGrant,
+  metadata: OmpResult<"readModelCatalog">, destination: Target): Promise<void> {
+  // The check is recorded for a Claude and Codex pool, so its GPT rungs are Codex's own bundled rows: the starter's OpenAI API
+  // rows, GPT-6.1 Terra among them, are an address this pool does not serve and never stand in for a Codex rung.
+  const source = catalogFromMetadata({ ...metadata, models: metadata.models.filter(model => model.provider !== "openai") }, "any");
+  assert.deepEqual(source.models.filter(model => providerPolicy(model.provider).family === "openai").map(model => [model.tier, model.provider]),
+    [[1, "openai-codex"], [2, "openai-codex"], [3, "openai-codex"], [4, "openai-codex"]],
+    "Without the OpenAI API's rows Codex's bundled rows ladder GPT whole, at Codex addresses only");
+  const codex = { reference: { kind: "credential" as const, scope: fixtureScope, provider: "openai-codex", credentialId: 3 }, credentialId: 3,
+    type: "api_key" as const, identityKey: null, email: null, disabled: false, blocks: [] };
+  const observation = (): OmpResult<"accounts"> => {
+    const claude = fixtureAccounts([1]);
+    return { ...claude, accounts: [...claude.accounts, codex] };
+  };
+  const trace = await watchActions(browser, server);
+  let refuseNextSave = false;
+  const fixture = await intercept(browser, server, name => {
+    if (name === "atyrode.omp.accounts.accounts") return { ok: true, result: observation() };
+    if (name === "atyrode.omp.accounts.usage") return { ok: true, result: fixtureUsage(observation()) };
+    if (name === "atyrode.code.select" && refuseNextSave) { refuseNextSave = false; return refused("code_invalid_selection"); }
+    return undefined;
+  });
+  try {
+    for (const [capability, via] of [[3, "pointer"], [4, "keyboard"], [3, "models"]] as const) {
+      const tier = TIERS[capability - 1]!, budget = via === "models" ? "free" : "any";
+      // The Models case is a manual zero-price fixture, so a free-budget save must keep its budget.
+      const document: CatalogDocument = { schemaVersion: 1, models: source.models
+        .filter(model => model.provider === "openai-codex" || model.provider === "anthropic" && model.tier === capability)
+        .map(model => budget === "free" ? { ...model, inputCostPerMillion: 0, outputCostPerMillion: 0 } : model) };
+      const premiumModel = document.models.find(model => model.provider === "anthropic")!;
+      const selected: Selection = { lane: { kind: "provider", family: "openai", blend: "only" }, capability: 2,
+        thinking: "high", advisor: "off", spark: false, priority: false, prewalk: true, planYolo: true, fallback: false, budget };
+      const workspace = await createContainer(server, `${via} ${tier} dial save`, "canvas");
+      const target = { containerId: workspace.id };
+      const initialized = await callAction(server, writer.token, "atyrode.code.initializeConfiguration", { ...target, expectedRevision: 0 });
+      assert(initialized.ok);
+      const revision = (initialized.result as Configuration).revision, accounts = observation();
+      const probe = await callAction(server, writer.token, "atyrode.code.composeProbe", { ...target, expectedRevision: revision, accounts });
+      assert(probe.ok);
+      const staged = await callAction(server, writer.token, "atyrode.code.stageCatalog", { ...target, expectedRevision: revision, document,
+        verification: { ompVersion: OMP_VERSION, inventoryArtifactSha256: pinnedOmpArtifact(), catalogRevision: metadata.revision,
+          inventoryObservedAt: Date.now() - 3_000, benchmarkCompletedAt: Date.now() - 2_000, accounts,
+          poolIdentityDigest: (probe.result as ActionResult<"composeProbe">).poolIdentityDigest, budget } });
+      assert(staged.ok);
+      const input = { ...target, expectedRevision: (staged.result as Configuration).revision, source: "draft" as const, selection: selected };
+      const review = await callAction(server, writer.token, "atyrode.code.reviewCatalog", input);
+      assert(review.ok);
+      const promoted = await callAction(server, writer.token, "atyrode.code.promoteCatalog",
+        { ...input, reviewDigest: (review.result as ActionResult<"reviewCatalog">).reviewDigest });
+      assert(promoted.ok);
+      if (via === "models") {
+        const next = await callAction(server, writer.token, "atyrode.code.stageCatalog",
+          { ...target, expectedRevision: (promoted.result as Configuration).revision, document });
+        assert(next.ok);
+      }
+      const before = await readConfiguration(server, writer, target), from = trace.requests.length;
+      const writes = () => trace.requests.slice(from).filter(request => /^atyrode\.code\.(initializeConfiguration|stageCatalog|reviewCatalog|promoteCatalog|select|changeAccounts)$/.test(request.name));
+      if (via === "models") await rememberTeam(browser, writer.principal.id, workspace.id,
+        { ...selected, lane: { kind: "provider", family: "deepseek", blend: "only" } });
+      await openGenerator(browser, server, workspace.id);
+      await chooseMachine(browser, destination.machineId, machineName);
+      await until(browser, "a recorded check reaches the active profile's launch without probing", launchIs("launch", "refused"));
+      if (via === "keyboard") {
+        await focusRow(browser, "lane");
+        await key(browser, "End", 35);
+        await until(browser, "the keyboard chooses the sparse premium provider", `${chosenKey("lane")} === 'anthropic'`);
+      } else await choose(browser, "lane", "anthropic");
+      const proposed: Selection = { ...selected, lane: { kind: "provider", family: "anthropic", blend: "only" } };
+      const draftKey = storedDraftKey(writer.principal.id, workspace.id), draft = await readProfile(browser, draftKey);
+      assert.deepEqual(keptEdit(draft).selection, proposed, "A lane edit previews the sparse model without reinterpreting its selected tier or preferences");
+      const save = async () => {
+        if (via === "models") {
+          if (!await browser.evaluate<boolean>(`${element(stage)}?.hidden === true && ${visibleSheet}?.querySelector('[data-sheet], .plugin-atyrode_code__sheet')?.getAttribute('aria-label') === 'Models'`)) await openSheet(browser, "models");
+          await click(browser, goFix(modelsSheet, "save"));
+        } else {
+          await until(browser, "the edited profile offers Save & launch", launchIs("save & launch", "ready"));
+          if (via === "keyboard") await key(browser, "Enter", 13, { modifiers: CTRL });
+          else await click(browser, launchButton);
+        }
+      };
+      await save();
+      const question = await questionOpens(browser, "premium", `${via} save asks for the new model's actual tier`);
+      const explicit: Selection = { ...proposed, capability };
+      const effort = reviewCatalog(compileCatalog(document), explicit, Date.now()).routes.find(route => route.role === "default")!.lead.thinking;
+      assert(question.items.some(item => item.includes(`${premiumModel.provider}/${premiumModel.id}`) && item.includes(tier) && item.includes(effort)),
+        "The premium save question names the actual model, tier and configured effort");
+      assert.deepEqual(question.choices.map(([effect]) => effect), ["approve", "dismiss"]);
+      assert.deepEqual(writes(), [], "An unconfirmed save performs no workspace writes");
+      await questionGeometry(browser, `${via} premium save`);
+      await questionCoarseTargets(browser, `${via} premium save`);
+      if (via === "pointer") await answer(browser, "dismiss");
+      else await key(browser, "Escape", 27);
+      await until(browser, "cancelling closes only the premium save question", unasked);
+      assert.deepEqual(await readConfiguration(server, writer, target), before, "Cancellation leaves the workspace untouched");
+      assert.deepEqual(await readProfile(browser, draftKey), draft, "Cancellation leaves the exact current draft and its selected tier untouched");
+      assert.deepEqual(writes(), [], "Cancellation writes nothing");
+      if (via === "models") {
+        await closeSheet(browser);
+        await showView(browser, "sessions");
+        await key(browser, "1", 49);
+        await showView(browser, "main");
+        await until(browser, "an unrelated unavailable recent profile reports its own failure",
+          `${failureLine} && ${lineText}.includes('That profile cannot be formed')`);
+        await openSheet(browser, "models");
+        assert.equal(await browser.evaluate(`${goParts(modelsSheet)}.some(([text]) => text === 'not saved')`), false,
+          "A cancelled premium save cannot claim a later unrelated failure as its own failed save");
+        assert.equal(await browser.evaluate(`${goParts(modelsSheet)}.some(([text]) => text === 'unsaved profile edit')`), true);
+        assert.deepEqual(await readProfile(browser, draftKey), draft, "The unrelated failure leaves the cancelled premium edit intact");
+        assert.deepEqual(writes(), [], "Neither cancelling the save nor failing a recall attempts a save");
+      }
+      await save();
+      await questionOpens(browser, "premium", "a cancelled save needs a new explicit premium answer");
+      if (via === "models") refuseNextSave = true;
+      if (via === "keyboard") {
+        await firstChoiceByTab(browser, "premium");
+        assert.deepEqual(writes(), [], "Enter on the question title cannot authorize a premium save");
+        await Bun.sleep(DELIBERATE_MS);
+        await key(browser, "Enter", 13);
+      } else await answer(browser, "approve");
+      if (via === "models") {
+        await until(browser, "an actually confirmed save failure remains attributed to the Models save press",
+          `${unasked} && ${goParts(modelsSheet)}.some(([text]) => text === 'not saved')`);
+        assert.deepEqual(await readConfiguration(server, writer, target), before, "A refused confirmed save keeps its exact draft and shared record");
+        await save();
+        await questionOpens(browser, "premium", "retrying a refused confirmed save still needs its actual-tier choice");
+        await answer(browser, "approve");
+      }
+      await waitFor(async () => (await readConfiguration(server, writer, target)).revision === before.revision + 1, timeout, 50);
+      await until(browser, "the confirmed save selects its actual tier and drops the draft", `${unasked} && ${chosenKey("tier")} === ${JSON.stringify(tier)} && sessionStorage.getItem(${JSON.stringify(draftKey)}) === null`);
+      const saved = await readConfiguration(server, writer, target);
+      assert.deepEqual([saved.configuration?.accounts, saved.configuration?.active, saved.configuration?.draft, saved.configuration?.selection],
+        [before.configuration?.accounts, before.configuration?.active, before.configuration?.draft, explicit],
+        "Confirmation retains accounts, budget, catalogs and verification while saving the explicit actual-tier profile");
+      const expectedSave = { name: "atyrode.code.select", input: { ...target, expectedRevision: before.revision, selection: explicit } };
+      assert.deepEqual(writes(), via === "models" ? [expectedSave, expectedSave] : [expectedSave],
+        "Only confirmed actual-tier selections attempt CAS saves; a refused confirmed attempt is never mislabeled cancellation");
+      if (via === "models") await closeSheet(browser);
+      assert.deepEqual(await routedRoles(browser), expectedRoutes(document, explicit), "Mounted shared routes consume the confirmed actual-tier profile");
+      // The same active selected address may then retain capability 2 without asking again.
+      await choose(browser, "tier", "normal");
+      const legacyFrom = trace.requests.length;
+      await save();
+      await waitFor(async () => (await readConfiguration(server, writer, target)).revision === saved.revision + 1, timeout, 50);
+      await until(browser, "the unchanged active address saves its legacy tier without another premium question", unasked);
+      assert.deepEqual((await readConfiguration(server, writer, target)).configuration?.selection, proposed);
+      assert.deepEqual(trace.requests.slice(legacyFrom).filter(request => request.name === "atyrode.code.select"),
+        [{ name: "atyrode.code.select", input: { ...target, expectedRevision: saved.revision, selection: proposed } }],
+        "The unchanged active selected identity keeps every legacy preference");
+      if (via === "models") await closeSheet(browser);
+      noNativeEffects(trace.requests.slice(from));
+    }
+    fixture.check();
+  } finally {
+    await fixture.stop();
+    trace.stop();
+  }
 }
 
 async function starterConflictScenario(browser: BrowserInstance, server: TestServer, writer: TokenGrant): Promise<void> {
@@ -3368,10 +3976,16 @@ async function modelsSheetScenario(browser: BrowserInstance, server: TestServer,
     await waitFor(() => benchmarks.size === 1, timeout, 50);
     assert.deepEqual(await browser.evaluate(`({ parts: ${goParts(modelsSheet)},
       providers: [...document.querySelectorAll('${modelsSheet} [data-side="measuring"] .${G}models-pw')].map(el => el.getAttribute('aria-label')).sort(),
-      probing: [...document.querySelectorAll('${modelsSheet} [data-cell][data-key]')].filter(cell => (cell.dataset.probing !== undefined) !== ['anthropic', 'openai'].includes(cell.dataset.family)).map(cell => cell.dataset.cell) })`), {
+      probing: [...document.querySelectorAll('${modelsSheet} [data-cell][data-key][data-probing]')].map(cell => cell.dataset.key).sort() })`), {
       parts: [["measuring models", null], [`0 of ${charge.benchmark.candidates.length}`, "strong"]],
-      providers: [`Claude: 0 of ${requests("anthropic")} measured`, `Codex: 0 of ${requests("openai-codex")} measured`], probing: [],
-    }, "Checking says what it has measured, and the rungs of every provider still owed are probing, no other");
+      providers: [`Claude: 0 of ${requests("anthropic")} measured`, `Codex: 0 of ${requests("openai-codex")} measured`],
+      probing: starter.models.filter(model => charge.benchmark.candidates.some(candidate => candidate.provider === model.provider)).map(model => model.key).sort(),
+    }, "Checking says what it has measured, and only models of the exact charged providers are probing, not another provider in the same family");
+    const apiTerra = starter.models.find(model => model.provider === "openai" && model.tier === 2);
+    assert(apiTerra && !charge.benchmark.candidates.some(candidate => candidate.provider === apiTerra.provider),
+      "The published API Terra is displayed but its provider is absent from the exact Codex/Claude charge");
+    assert.equal(await browser.evaluate(`${element(`${modelsSheet} [data-key="${apiTerra.key}"]`)}.hasAttribute('data-probing')`), false,
+      "An unselected API Terra does not probe when the same family's Codex provider is charged");
     for (const run of benchmarks.values()) run.settled = true;
 
     // Checked: the measured list is put in use, the head says when, and beside it is what the check left out, each with its
@@ -3387,6 +4001,13 @@ async function modelsSheetScenario(browser: BrowserInstance, server: TestServer,
     const checked = derivedFrom(firstInventory);
     const afterFirst = await readConfiguration(server, writer, target);
     assert.deepEqual(afterFirst.configuration?.active?.document, checked.document, "The list in use is exactly the derivation of what was measured");
+    // The starter previewed OpenAI's API Terra beside the Codex rungs. A Claude and Codex pool has no OpenAI API account, so the
+    // check neither probed that address nor saved it in use: a bundled preview is never a served model.
+    assert(starter.models.some(model => model.provider === "openai" && model.id === "gpt-6.1-terra"), "The starter previews the API's GPT-6.1 Terra");
+    assert.deepEqual([started.flatMap(request => Object.keys(request.accountPool)).filter(provider => provider === "openai"),
+      charge.benchmark.candidates.filter(candidate => candidate.provider === "openai"),
+      afterFirst.configuration?.active?.document.models.filter(model => model.provider === "openai")], [[], [], []],
+      "A Codex-only GPT pool never probes or saves the OpenAI API's address the starter previewed");
     assert.equal(afterFirst.configuration?.active?.provenance?.benchmarkCompletedAt, checked.benchmark.completedAt, "The check records when it was measured");
     assert.equal(afterFirst.configuration?.draft, null);
     assert.deepEqual(await browser.evaluate(`({ state: ${sheetState(modelsSheet)}, fixes: ${goFixes(modelsSheet)}, list: ${modelList},
@@ -3547,8 +4168,8 @@ async function modelsSheetScenario(browser: BrowserInstance, server: TestServer,
 
     // An unsaved edit of the team in use holds putting a staged list in use, which would replace the list it was made on:
     // the next action says so, and what each fix does, with save and discard edit beside it; a press writes nothing. Saving
-    // the edit on the list it was made on lifts the hold. The edit is one the staged list's own default team does not
-    // repeat, so the reset that follows is seen.
+    // the edit on the list it was made on lifts the hold. Its compatible saved selection then carries
+    // over to the staged list instead of being silently replaced by a default.
     const slower: CatalogDocument = { ...again.document, models: again.document.models.map((model, index) => index === 1 ? { ...model, tokensPerSecond: 77 } : model) };
     const stagedDefault = defaultSelection(compileCatalog(slower));
     const draftKey = storedDraftKey(writer.principal.id, workspace.id);
@@ -3564,7 +4185,7 @@ async function modelsSheetScenario(browser: BrowserInstance, server: TestServer,
     from = trace.requests.length;
     await click(browser, goButton);
     await until(browser, "a held press says what using the staged list and each fix do", `${sheetSays(modelsSheet)} === ${JSON.stringify(
-      "use staged list · Your unsaved edit is on the list in use, and using the staged list resets the profile to the staged list's default. Save keeps the edit on the list in use; discard edit drops it.")}`);
+      "use staged list · Your unsaved edit is on the list in use, and using the staged list replaces the list this edit was made on. Save keeps the edit on the list in use; discard edit drops it.")}`);
     assert.deepEqual(writes(from), [], "A held press writes nothing");
     await click(browser, goFix(modelsSheet, "save"));
     await until(browser, "saved, the edit lets the staged list be used", `${goIs(modelsSheet, "use staged list")} && JSON.stringify(${goFixes(modelsSheet)}) === '["discard"]'`);
@@ -3574,7 +4195,7 @@ async function modelsSheetScenario(browser: BrowserInstance, server: TestServer,
       "Save writes exactly the edit at the revision shown");
 
     // Use staged list reviews the staged list at the revision shown and promotes exactly that review; the list in use is then
-    // the staged one with its own default team, not checked, and checking it is the next action. While those writes are in
+    // the staged one with its compatible saved team, not checked, and checking it is the next action. While those writes are in
     // flight the main view takes no edit, so their receipt never lands on one: Esc goes back to Code, a row press there is
     // refused, and nothing is kept.
     from = trace.requests.length;
@@ -3590,21 +4211,21 @@ async function modelsSheetScenario(browser: BrowserInstance, server: TestServer,
       "No edit lands, or is kept, while Models' writes are in flight");
     await openSheet(browser, "models");
     heldReview.release();
-    await until(browser, "use staged list puts it in use with its own default team, not checked, and says so", `${phaseIs("unverified")} && ${goIs(modelsSheet, "check models")} &&
+    await until(browser, "use staged list keeps the compatible saved profile, not checked, and says so", `${phaseIs("unverified")} && ${goIs(modelsSheet, "check models")} &&
       ${sheetState(modelsSheet)} === ${JSON.stringify(`${listOf(slower).length} models · not checked`)} &&
-      ${sheetSays(modelsSheet)} === ${JSON.stringify("in use · the staged list replaced the one in use; the profile is the new list's default now; check it next")}`);
+      ${sheetSays(modelsSheet)} === ${JSON.stringify("in use · the staged list replaced the one in use; check it next")}`);
     const review = reviews.at(-1);
     assert(review, "The real server reviewed the staged list");
     assert.equal(review.catalogDigest, before.configuration?.draft?.digest, "The review is of exactly the staged list");
     assert.deepEqual(writes(from), [
-      { name: "atyrode.code.reviewCatalog", input: { containerId: target.containerId, expectedRevision: before.revision, source: "draft" } },
-      { name: "atyrode.code.promoteCatalog", input: { containerId: target.containerId, expectedRevision: before.revision, source: "draft", reviewDigest: review.reviewDigest } },
+      { name: "atyrode.code.reviewCatalog", input: { containerId: target.containerId, expectedRevision: before.revision, source: "draft", selection: before.configuration?.selection } },
+      { name: "atyrode.code.promoteCatalog", input: { containerId: target.containerId, expectedRevision: before.revision, source: "draft", reviewDigest: review.reviewDigest, selection: before.configuration?.selection } },
     ], "Use staged list reviews the staged list at the revision shown, then promotes exactly that review");
     const used = await readConfiguration(server, writer, target);
     assert.deepEqual([used.configuration?.active?.document, used.configuration?.active?.provenance, used.configuration?.draft], [slower, null, null],
       "The staged list is in use, not checked, and nothing is staged");
-    assert.deepEqual(used.configuration?.selection, review.review.selection, "The staged list goes in use with the team its review chose, its own default");
-    assert.notEqual(used.configuration?.selection?.advisor, advisor, "The saved edit does not carry over to the staged list");
+    assert.deepEqual(used.configuration?.selection, review.review.selection, "The staged list adopts exactly the explicit profile its review bound");
+    assert.deepEqual(used.configuration?.selection, before.configuration?.selection, "A compatible saved explicit choice carries over to the staged list");
     await closeSheet(browser);
     fixture.check();
   } finally {
@@ -3618,6 +4239,735 @@ async function modelsSheetScenario(browser: BrowserInstance, server: TestServer,
 }
 
 // ---------------------------------------------------------------- a person's checks across workspaces
+
+/** Advertised premium intent is chosen before spending; an unexpected measured replacement stays staged for exact adoption. */
+async function preSpendPremiumScenario(browser: BrowserInstance, server: TestServer, person: TokenGrant, destination: Target): Promise<void> {
+  const catalogRead = await callAction(server, person.token, "atyrode.omp.readModelCatalog", { providers: ["openai-codex"] });
+  assert(catalogRead.ok);
+  const metadata = ModelCatalogSnapshotSchema.parse(catalogRead.result), source = catalogFromMetadata(metadata, "any");
+  const normal = source.models.find(model => model.provider === "openai-codex" && model.tier === 2);
+  const premium = source.models.find(model => model.provider === "openai-codex" && model.tier === 3);
+  assert(normal && premium, "The pinned catalog supplies actual normal and smart named models");
+  const normalMetadata = metadata.models.find(model => model.provider === normal.provider && model.id === normal.id)!;
+  const premiumMetadata = metadata.models.find(model => model.provider === premium.provider && model.id === premium.id)!;
+  const elite = source.models.find(model => model.provider === "openai-codex" && model.tier === 4);
+  assert(elite, "The nullable case has an actual authored elite rung, not an invented lower-tier default");
+  const eliteMetadata = metadata.models.find(model => model.provider === elite.provider && model.id === elite.id)!;
+  const selected: Selection = { lane: { kind: "provider", family: "openai", blend: "only" }, capability: 2,
+    thinking: "high", advisor: "off", spark: false, priority: false, prewalk: true, planYolo: true, fallback: false, budget: "any" };
+  const explicit: Selection = { ...selected, capability: 3 };
+  const account = (credentialId: number) => ({ reference: { kind: "credential" as const, scope: fixtureScope, provider: "openai-codex", credentialId },
+    credentialId, type: "api_key" as const, identityKey: null, email: null, disabled: false, blocks: [] });
+  let observed: OmpResult<"accounts"> = { ...fixtureAccounts([]), accounts: [account(30)] };
+  let target: Target = destination, variant = "", held: string | null = null;
+  const pins = { installationRevision: "synthetic-ui-only", artifactSha256: "c".repeat(64), resourceBindingDigest: "c".repeat(64) };
+  const inventories = new Map<string, InventoryReceipt>();
+  const benchmarks = new Map<string, { request: OmpInput<"startBenchmark">; receipt: BenchmarkReceipt | null; startedAt: number }>();
+  await arrangeWorkbench(server, person);
+  const trace = await watchActions(browser, server);
+  const fixture = await intercept(browser, server, async (name, input) => {
+    switch (name) {
+      case "atyrode.omp.describeDestination": {
+        if (input.containerId !== target.containerId || input.machineId !== target.machineId) return undefined;
+        const result: OmpResult<"describeDestination"> = { ...target, pluginId: "atyrode.omp", state: "ready", reason: null, deployment: null, services: [],
+          operations: [INVENTORY_OPERATION_ID, BENCHMARK_OPERATION_ID].map(operationId =>
+            ({ operationId, pins, nativeReady: true, callerRefusal: null, state: "ready", reason: null })) };
+        return { ok: true, result };
+      }
+      case "atyrode.omp.accounts.accounts": return { ok: true, result: observed };
+      case "atyrode.omp.accounts.usage": return { ok: true, result: fixtureUsage(observed) };
+      case "atyrode.omp.readModelCatalog":
+        return variant === "nullable" ? { ok: true, result: { ...metadata, models: [eliteMetadata] } } : undefined;
+      case "atyrode.omp.startInventory": {
+        const jobId = `premium-inventory-${inventories.size + 1}`;
+        inventories.set(jobId, { schemaVersion: 1, kind: "inventory", ompVersion: OMP_VERSION, observedAt: Date.now() - 1_000,
+          models: variant === "nullable" ? [eliteMetadata] : ["known", "covered", "background"].includes(variant) ? [premiumMetadata] : [normalMetadata, premiumMetadata] });
+        return { ok: true, result: probeJob(target, jobId, INVENTORY_OPERATION_ID, person.principal.id) };
+      }
+      case "atyrode.omp.readInventory": {
+        const inventory = inventories.get(String(input.jobId));
+        assert(inventory);
+        return { ok: true, result: { job: probeJob(target, String(input.jobId), INVENTORY_OPERATION_ID, person.principal.id), inventory } };
+      }
+      case "atyrode.omp.startBenchmark": {
+        const request = ompActionSchemas.startBenchmark.input.parse(input);
+        assert.deepEqual(request.candidates, inventoryDraft(inventories.get(request.inventoryJobId)!, "any").benchmark);
+        if (variant === "failed") return refused("synthetic_benchmark_refused");
+        const jobId = `premium-benchmark-${benchmarks.size + 1}`;
+        benchmarks.set(jobId, { request, receipt: null, startedAt: Date.now() });
+        if (variant === "cancelled") held = jobId;
+        return { ok: true, result: probeJob(target, jobId, BENCHMARK_OPERATION_ID, person.principal.id, "started") };
+      }
+      case "engine.jobs.status": {
+        const { node } = input as { node: { jobId: string; operationId: string } };
+        assert(inventories.has(node.jobId) || benchmarks.has(node.jobId));
+        return { ok: true, result: probeJob(target, node.jobId, node.operationId, person.principal.id, node.jobId === held ? "started" : "exited") };
+      }
+      case "atyrode.omp.readBenchmark": {
+        const run = benchmarks.get(String(input.jobId));
+        assert(run && held !== input.jobId);
+        run.receipt ??= { schemaVersion: 1, kind: "benchmark", ompVersion: OMP_VERSION, inventoryObservedAt: run.request.candidates.inventoryObservedAt,
+          startedAt: run.startedAt, completedAt: Date.now(), results: run.request.candidates.candidates.map(candidate =>
+            candidate.id === normal.id ? { ...candidate, status: "client_blocked" as const, tokensPerSecond: null, timeToFirstTokenMs: null }
+              : { ...candidate, status: "reachable" as const, tokensPerSecond: 42, timeToFirstTokenMs: 250 }) };
+        return { ok: true, result: { job: probeJob(target, String(input.jobId), BENCHMARK_OPERATION_ID, person.principal.id), benchmark: run.receipt } };
+      }
+      case "engine.jobs.cancel": {
+        const node = input.node;
+        assert(node && typeof node === "object" && "jobId" in node);
+        assert.equal(node.jobId, held);
+        held = null;
+        return { ok: true, result: { accepted: true } };
+      }
+      default: return undefined;
+    }
+  });
+  const effects = (from: number) => trace.requests.slice(from).filter(request =>
+    /^atyrode\.(?:code\.(?:approveChecks|stageCatalog|reviewCatalog|promoteCatalog|adoptCheck|select|changeAccounts)|omp\.(?:startInventory|startBenchmark))$/.test(request.name));
+  try {
+    for (const [index, kind] of ["known", "covered", "unexpected", "failed", "cancelled", "background"].entries()) {
+      variant = kind;
+      observed = { ...fixtureAccounts([]), accounts: [account(30 + index * 2)] };
+      const workspace = await createContainer(server, `${kind} premium model check`, "canvas");
+      target = { containerId: workspace.id, machineId: destination.machineId };
+      const initialized = await callAction(server, person.token, "atyrode.code.initializeConfiguration", { containerId: workspace.id, expectedRevision: 0 });
+      assert(initialized.ok);
+      const base = initialized.result as Configuration;
+      const pool = await callAction(server, person.token, "atyrode.code.composeProbe",
+        { containerId: workspace.id, expectedRevision: base.revision, accounts: observed });
+      assert(pool.ok);
+      const staged = await callAction(server, person.token, "atyrode.code.stageCatalog", { containerId: workspace.id, expectedRevision: base.revision,
+        document: { schemaVersion: 1, models: [normal] }, ...kind === "background" ? {
+          verification: { ompVersion: OMP_VERSION, inventoryArtifactSha256: pins.artifactSha256, catalogRevision: metadata.revision,
+            inventoryObservedAt: Date.now() - 3_000, benchmarkCompletedAt: Date.now() - 2_000, accounts: observed,
+            poolIdentityDigest: (pool.result as ActionResult<"composeProbe">).poolIdentityDigest, budget: "any" },
+        } : {} });
+      assert(staged.ok);
+      const input = { containerId: workspace.id, expectedRevision: (staged.result as Configuration).revision, source: "draft" as const, selection: selected };
+      const review = await callAction(server, person.token, "atyrode.code.reviewCatalog", input);
+      assert(review.ok);
+      const promoted = await callAction(server, person.token, "atyrode.code.promoteCatalog",
+        { ...input, reviewDigest: (review.result as ActionResult<"reviewCatalog">).reviewDigest });
+      assert(promoted.ok);
+      const checks = await readChecks(server, person);
+      const approval = await callAction(server, person.token, "atyrode.code.approveChecks",
+        { expectedRevision: checks.revision, requests: kind === "covered" || kind === "background" ? 100 : 0 });
+      assert(approval.ok);
+      const before = await readConfiguration(server, person, target), from = trace.requests.length, spent = benchmarks.size, listed = inventories.size;
+      if (kind === "background") observed = { ...observed, accounts: [...observed.accounts, account(31 + index * 2)] };
+      await openGenerator(browser, server, workspace.id);
+      await chooseMachine(browser, destination.machineId, machineName);
+      // The person checks a profile of their own: the saved one at medium thinking, an edit no write has saved.
+      if (kind === "unexpected") await choose(browser, "thinking", "medium");
+      await openSheet(browser, "models");
+      if (kind === "background") {
+        await waitFor(() => inventories.size === listed + 1, timeout, 50);
+        await until(browser, "a background check stops without asking about advertised premium intent",
+          `${unasked} && ${goIs(modelsSheet, "check models")} && ${element(modelsSheet)}.dataset.phase === 'unverified'`);
+        assert.equal(benchmarks.size, spent, "Even standing-covered background intent stops before any benchmark");
+        // Declaring no choice, the background check first has Code review the saved profile, read-only and with no override.
+        assert.deepEqual(effects(from).map(request => request.name), ["atyrode.code.reviewCatalog", "atyrode.omp.startInventory"]);
+        assert.deepEqual(effects(from)[0]!.input, { containerId: workspace.id, expectedRevision: before.revision, source: "active" });
+        assert.deepEqual(await readConfiguration(server, person, target), before, "Unasked intent changes no active profile or staged facts");
+        continue;
+      }
+      await until(browser, "Models offers the deliberate check", goIs(modelsSheet, "check models"));
+      await click(browser, element(`${modelsSheet} [data-go]`));
+      if (kind === "known" || kind === "covered") {
+        const question = await questionOpens(browser, "premium", "advertised premium intent asks before any paid benchmark");
+        assert(question.items.some(item => item.includes(`${premium.provider}/${premium.id}`) && item.includes(TIERS[2]!) && item.includes("high")));
+        assert(question.text.some(text => text.includes("unmeasured") && text.includes("not yet been performed")));
+        assert.equal(benchmarks.size, spent, "A covered spending approval never silently selects an advertised premium tier");
+        assert.deepEqual(effects(from).map(request => request.name), ["atyrode.omp.startInventory"]);
+        await questionGeometry(browser, `${kind} advertised premium`);
+        await questionCoarseTargets(browser, `${kind} advertised premium`);
+        await key(browser, "Escape", 27);
+        await until(browser, "cancelling advertised intent returns to the unchecked list", `${unasked} && ${goIs(modelsSheet, "check models")}`);
+        assert.deepEqual(await readConfiguration(server, person, target), before, "Cancelling known intent writes nothing");
+        assert.equal(benchmarks.size, spent, "Cancelling known intent spends no benchmark request");
+        await click(browser, element(`${modelsSheet} [data-go]`));
+        await questionOpens(browser, "premium", "a fresh check needs a fresh actual-tier choice");
+        await answer(browser, "approve");
+        await questionOpens(browser, "charge", "choosing an actual tier asks ordinary charge approval separately");
+        assert.equal(benchmarks.size, spent, "Choosing the actual tier does not approve model spending");
+        assert.equal(effects(from).filter(request => request.name === "atyrode.code.approveChecks").length, 0);
+        assert.deepEqual(await readConfiguration(server, person, target), before, "Tier intent is not a workspace write");
+        await answer(browser, "approve");
+        await until(browser, "the independently approved check puts the chosen profile in use", `${unasked} && ${element(modelsSheet)}.dataset.phase === 'verified'`);
+        const after = await readConfiguration(server, person, target);
+        assert.deepEqual(after.configuration?.selection, explicit, "Actual-tier confirmation preserves every other preference and budget");
+        assert(after.configuration?.active?.provenance);
+        assert.equal(benchmarks.size, spent + 1);
+        continue;
+      }
+      await questionOpens(browser, "charge", "ordinary advertised intent asks only for the benchmark charge");
+      await answer(browser, "approve");
+      if (kind === "cancelled") {
+        await waitFor(() => held !== null, timeout, 50);
+        await click(browser, goFix(modelsSheet, "cancel"));
+        await until(browser, "a cancelled benchmark returns without a verified claim",
+          `${unasked} && ${goIs(modelsSheet, "check models")} && ${goParts(modelsSheet)}.some(([text]) => text === 'check cancelled')`);
+      } else if (kind === "failed") {
+        await until(browser, "a failed benchmark returns without a verified claim",
+          `${unasked} && ${goIs(modelsSheet, "check models")} && ${goParts(modelsSheet)}.some(([text]) => text === 'check stopped')`);
+      } else {
+        await until(browser, "an unexpected measured premium replacement is retained as an actionable staged list",
+          `${unasked} && ${goIs(modelsSheet, "use staged list")}`);
+        const retained = await readConfiguration(server, person, target), document = retained.configuration?.draft;
+        assert(document?.provenance && retained.configuration, "Only the completed benchmark supplies retained verification");
+        assert.deepEqual([retained.configuration.active, retained.configuration.selection, retained.configuration.accounts],
+          [before.configuration?.active, selected, before.configuration?.accounts], "Retaining measured facts never promotes premium or changes account choices");
+        const run = [...benchmarks.values()].at(-1)!;
+        assert(run.receipt);
+        assert.deepEqual(document.document, catalogFromObservations(inventories.get(run.request.inventoryJobId)!, run.receipt, { budget: "any" }).document);
+        assert((await readChecks(server, person)).checks.some(check => check.digest === document.digest &&
+          check.poolIdentityDigest === document.provenance!.poolIdentityDigest), "The exact verified check is kept, not discarded for another paid run");
+        const measured = benchmarks.size;
+        await click(browser, element(`${modelsSheet} [data-go]`));
+        const retainedQuestion = await questionOpens(browser, "premium", "using retained evidence asks its actual measured tier");
+        assert(retainedQuestion.items[0]!.includes(TIERS[2]!) && retainedQuestion.items[0]!.includes("configured medium"),
+          "The staged list a check kept is used with the profile it checked, its own medium thinking kept, at the actual tier");
+        const cancellation = trace.requests.length;
+        await key(browser, "Escape", 27);
+        await until(browser, "cancelling leaves the same measured list staged", `${unasked} && ${goIs(modelsSheet, "use staged list")}`);
+        assert.deepEqual(trace.requests.slice(cancellation).filter(request =>
+          /^(?:atyrode\.code\.(?:readConfiguration|readChecks|stageCatalog|reviewCatalog|promoteCatalog|select)|atyrode\.omp\.(?:startInventory|startBenchmark))$/.test(request.name)), [],
+        "Cancelling the retained premium question makes no additional model RPC or write");
+        assert.deepEqual(await readConfiguration(server, person, target), retained);
+        await openGenerator(browser, server, workspace.id);
+        await chooseMachine(browser, destination.machineId, machineName);
+        await until(browser, "the retained record keeps adoption actionable after reopening", launchIs("review in models", "ready"));
+        await click(browser, launchButton);
+        await until(browser, "the launch opens the real retained staged list rather than checking again", goIs(modelsSheet, "use staged list"));
+        assert.equal(benchmarks.size, measured, "Reopening retained evidence starts no second benchmark");
+        await click(browser, element(`${modelsSheet} [data-go]`));
+        await questionOpens(browser, "premium", "a fresh press can adopt the already measured evidence");
+        await answer(browser, "approve");
+        await until(browser, "actual-tier confirmation adopts retained evidence without a second benchmark",
+          `${unasked} && ${element(modelsSheet)}.dataset.phase === 'verified'`);
+        const adopted = await readConfiguration(server, person, target);
+        assert.deepEqual([adopted.configuration?.active?.digest, adopted.configuration?.active?.provenance, adopted.configuration?.selection],
+          [document.digest, document.provenance, explicit], "Adoption retains the exact document digest, original scoped provenance and preferences");
+        assert.equal(benchmarks.size, measured, "A retained verified premium replacement never enters a discard-and-repay loop");
+        const adoption = effects(cancellation);
+        assert.deepEqual(adoption.map(request => request.name), ["atyrode.code.reviewCatalog", "atyrode.code.promoteCatalog"]);
+        assert(adoption.every(request => JSON.stringify(request.input.selection) === JSON.stringify(explicit)));
+        continue;
+      }
+      const stopped = await readConfiguration(server, person, target);
+      assert.deepEqual(stopped, before, "A failed or cancelled run retains no newly verified document or selection");
+      assert.equal(effects(from).filter(request => /^atyrode\.code\.(?:stageCatalog|promoteCatalog)$/.test(request.name)).length, 0);
+      assert(!(await readChecks(server, person)).checks.some(check =>
+        check.poolIdentityDigest === (pool.result as ActionResult<"composeProbe">).poolIdentityDigest), "Failed and cancelled checks keep no verified claim");
+    }
+    // A valid advertised list with no everyday default is not permission to invent a lower-tier
+    // selection, or to spend under the approval. Existing Models repair stays one press away.
+    variant = "nullable";
+    observed = { ...fixtureAccounts([]), accounts: [account(99)] };
+    const nullable = await createContainer(server, "No automatic premium profile", "canvas");
+    target = { containerId: nullable.id, machineId: destination.machineId };
+    const initialized = await callAction(server, person.token, "atyrode.code.initializeConfiguration", { containerId: nullable.id, expectedRevision: 0 });
+    assert(initialized.ok);
+    const checks = await readChecks(server, person);
+    assert((await callAction(server, person.token, "atyrode.code.approveChecks", { expectedRevision: checks.revision, requests: 100 })).ok);
+    const before = await readConfiguration(server, person, target), from = trace.requests.length, spent = benchmarks.size;
+    await openGenerator(browser, server, nullable.id);
+    await chooseMachine(browser, destination.machineId, machineName, "absent");
+    await openSheet(browser, "models");
+    await until(browser, "Models remains reachable without an automatic premium profile", goIs(modelsSheet, "check models"));
+    const advertised = listOf(catalogFromMetadata({ ...metadata, models: [eliteMetadata] }, "any"));
+    await until(browser, "the nullable preview has loaded exactly its advertised elite rung",
+      `JSON.stringify(${modelList}) === ${JSON.stringify(JSON.stringify(advertised))}`);
+    assert.deepEqual(await browser.evaluate(modelList), advertised,
+      "The nullable preview displays exactly its advertised elite rung, never a made-up lower profile");
+    assert.equal(await browser.evaluate(`document.querySelectorAll('${generator} [data-row]').length`), 0,
+      "A fully loaded elite-only list has no automatic dial profile");
+    await click(browser, element(`${modelsSheet} [data-go]`));
+    await until(browser, "a nullable profile with only an advertised premium rung stops unspent",
+      `${unasked} && ${goIs(modelsSheet, "check models")} && ${goParts(modelsSheet)}.some(([text]) => text === 'check stopped')`);
+    assert.equal(benchmarks.size, spent, "Standing approval cannot make up a nullable premium profile and spend it");
+    assert.deepEqual(effects(from).map(request => request.name), ["atyrode.omp.startInventory"]);
+    assert.deepEqual(await readConfiguration(server, person, target), before);
+    await closeSheet(browser);
+    const repair = element(`${generator} [data-fix="actual-tier"]`);
+    await until(browser, "the unspent stop offers explicit Models repair",
+      `${repair} !== null`);
+    await click(browser, repair);
+    await until(browser, "the repair opens Models with its import action usable",
+      `${sheetOpen("Models")} && ${element(`${modelsSheet} [data-cue="import"]`)}?.getAttribute('aria-disabled') === null`);
+    assert.equal(benchmarks.size, spent, "Opening the explicit repair starts no benchmark");
+    assert.deepEqual(effects(from).map(request => request.name), ["atyrode.omp.startInventory"], "Opening the repair performs no further inventory or mutating action");
+    assert.deepEqual(await readConfiguration(server, person, target), before, "Opening the repair preserves the nullable configuration");
+    fixture.check();
+  } finally {
+    await fixture.stop();
+    trace.stop();
+  }
+}
+
+/**
+ * A completed check a price ladder kept before Anthropic's names laddered it: the pinned bundle's latest Opus, stored on
+ * the fast rung (tier 1) a lone model then took, checked as the workflow records a check under a fictional Claude account
+ * and the synthetic installation the other check scenarios use. Everything Code decides is the real server's.
+ *
+ * - The list in use keeps its stored bytes, digest and provenance, and Models draws Opus on the smart rung it is.
+ * - Another workspace of the pool, set up, tries to adopt the kept check on its own as it opens, with no saved profile:
+ *   there is no automatic profile in a lone Opus, so nothing is adopted, and nothing checks again. The old fast and
+ *   normal ranks are refused too: neither is a choice of the smart model.
+ * - Opus's actual tier, chosen explicitly, adopts the very kept check, and both workspaces compose Opus from it.
+ *
+ * No inventory or benchmark is ever requested: the kept check is the only evidence, and nothing pays for it again.
+ */
+async function legacyPremiumCheckScenario(browser: BrowserInstance, server: TestServer, person: TokenGrant, destination: Target): Promise<void> {
+  const catalogRead = await callAction(server, person.token, "atyrode.omp.readModelCatalog", { providers: ["anthropic"] });
+  assert(catalogRead.ok, "The pinned OMP bundle supplies its passive model metadata");
+  const metadata = ModelCatalogSnapshotSchema.parse(catalogRead.result);
+  const opus = catalogFromMetadata(metadata, "any").models.find(model => model.provider === "anthropic" && model.tier === 3);
+  assert(opus, "The pinned bundle supplies a latest Opus");
+  const legacy: CatalogDocument = { schemaVersion: 1, models: [{ ...opus, tier: 1 }] };
+  const smart: Selection = { lane: { kind: "provider", family: "anthropic", blend: "only" }, capability: 3, thinking: "medium", advisor: "off",
+    spark: false, priority: false, prewalk: false, planYolo: false, fallback: true, budget: "any" };
+  const pins = { installationRevision: "synthetic-ui-only", artifactSha256: "c".repeat(64), resourceBindingDigest: "c".repeat(64) };
+  const observed = fixtureAccounts([1]);
+  const held = await createContainer(server, "Legacy Opus check in use", "canvas");
+  const opened = await createContainer(server, "Legacy Opus check adopted", "canvas");
+  const workspaces = new Set([held.id, opened.id]);
+  await arrangeWorkbench(server, person);
+  const trace = await watchActions(browser, server);
+  const fixture = await intercept(browser, server, async (name, input) => {
+    switch (name) {
+      case "atyrode.omp.describeDestination": {
+        if (!workspaces.has(String(input.containerId)) || input.machineId !== destination.machineId) return undefined;
+        const result: OmpResult<"describeDestination"> = { containerId: String(input.containerId), machineId: destination.machineId, pluginId: "atyrode.omp",
+          state: "ready", reason: null, deployment: null, services: [], operations: [INVENTORY_OPERATION_ID, BENCHMARK_OPERATION_ID, LAUNCH_OPERATION_ID]
+            .map(operationId => ({ operationId, pins, nativeReady: true, callerRefusal: null, state: "ready", reason: null })) };
+        return { ok: true, result };
+      }
+      case "atyrode.omp.accounts.accounts": return { ok: true, result: observed };
+      case "atyrode.omp.accounts.usage": return { ok: true, result: fixtureUsage(observed) };
+      // Never answered as a check: a request here would be a repeated spend, which `noNativeEffects` names.
+      case "atyrode.omp.startInventory": case "atyrode.omp.startBenchmark": return refused("synthetic_check_unexpected");
+      default: return undefined;
+    }
+  });
+  const composes = async (containerId: string, expectedRevision: number) => {
+    const composed = await callAction(server, person.token, "atyrode.code.composeSession", { containerId, expectedRevision, accounts: observed, prompt: "" });
+    assert(composed.ok, composed.ok ? "" : composed.denial.message);
+    assert.equal((composed.result as ActionResult<"composeSession">).review.routes.find(route => route.role === "default")?.lead.key, opus.key,
+      "The kept list composes Opus as the explicit smart lead");
+  };
+  try {
+    const initialized = await callAction(server, person.token, "atyrode.code.initializeConfiguration", { containerId: held.id, expectedRevision: 0 });
+    assert(initialized.ok);
+    const base = initialized.result as Configuration;
+    const pool = await callAction(server, person.token, "atyrode.code.composeProbe", { containerId: held.id, expectedRevision: base.revision, accounts: observed });
+    assert(pool.ok);
+    const poolIdentityDigest = (pool.result as ActionResult<"composeProbe">).poolIdentityDigest;
+    const staged = await callAction(server, person.token, "atyrode.code.stageCatalog", { containerId: held.id, expectedRevision: base.revision, document: legacy,
+      verification: { ompVersion: OMP_VERSION, inventoryArtifactSha256: pins.artifactSha256, catalogRevision: metadata.revision,
+        inventoryObservedAt: Date.now() - 3_000, benchmarkCompletedAt: Date.now() - 2_000, accounts: observed, poolIdentityDigest, budget: "any" } });
+    assert(staged.ok, staged.ok ? "" : staged.denial.message);
+    const kept = (staged.result as Configuration).draft;
+    assert(kept?.provenance, "The check is kept with its provenance");
+    const input = { containerId: held.id, expectedRevision: (staged.result as Configuration).revision, source: "draft" as const, selection: smart };
+    const review = await callAction(server, person.token, "atyrode.code.reviewCatalog", input);
+    assert(review.ok, review.ok ? "" : review.denial.message);
+    const promoted = await callAction(server, person.token, "atyrode.code.promoteCatalog", { ...input, reviewDigest: (review.result as ActionResult<"reviewCatalog">).reviewDigest });
+    assert(promoted.ok, promoted.ok ? "" : promoted.denial.message);
+    const inUse = await readConfiguration(server, person, { containerId: held.id });
+    assert.deepEqual([inUse.configuration?.active, inUse.configuration?.selection], [kept, smart], "The stored list is in use at Opus's actual tier, as kept");
+    const checks = (await readChecks(server, person)).checks;
+    assert.deepEqual(checks.map(check => [check.digest, check.poolIdentityDigest]), [[kept.digest, poolIdentityDigest]]);
+
+    // Models draws the stored fast-rung Opus on the smart rung it is, and the stored list stays as kept.
+    await openGenerator(browser, server, held.id);
+    await openSheet(browser, "models");
+    const drawn = [`anthropic:3 ${opus.key}`];
+    await until(browser, "Models draws the legacy Opus on its smart rung", `JSON.stringify(${modelList}) === ${JSON.stringify(JSON.stringify(drawn))}`);
+    await closeSheet(browser);
+    assert.deepEqual(await readConfiguration(server, person, { containerId: held.id }), inUse, "Reading the list in use rewrites nothing");
+    await composes(held.id, inUse.revision);
+
+    // The other workspace, set up with no saved profile, tries the kept check on its own as it opens: no profile forms.
+    const setUp = await callAction(server, person.token, "atyrode.code.initializeConfiguration", { containerId: opened.id, expectedRevision: 0 });
+    assert(setUp.ok);
+    const before = await readConfiguration(server, person, { containerId: opened.id });
+    const from = trace.requests.length;
+    await openGenerator(browser, server, opened.id);
+    await until(browser, "the launch names the machine the panel judged, where OMP answers", `${machinePicker}?.textContent === ${JSON.stringify(machineName)}`);
+    await waitFor(() => trace.requests.slice(from).some(request => request.name === "atyrode.code.adoptCheck"), timeout, 50);
+    await Bun.sleep(1_000);
+    assert.deepEqual(trace.requests.slice(from).filter(request => request.name === "atyrode.code.adoptCheck").map(request => request.input.selection), [null],
+      "One adoption, with no saved profile, and none again");
+    assert.deepEqual(await readConfiguration(server, person, { containerId: opened.id }), before, "No automatic profile adopts the lone Opus");
+    // The old fast and normal ranks are not choices of it either.
+    const adopt = { containerId: opened.id, expectedRevision: before.revision, accounts: observed, poolIdentityDigest, budget: "any" as const };
+    for (const capability of [1, 2] as const) {
+      const refusal = await callAction(server, person.token, "atyrode.code.adoptCheck", { ...adopt, selection: { ...smart, capability } });
+      assert(!refusal.ok && refusal.denial.message === "code_invalid_selection", `The stored rank ${capability} is not a choice of the smart Opus`);
+    }
+    assert.deepEqual(await readConfiguration(server, person, { containerId: opened.id }), before);
+    // Opus's actual tier adopts the very kept check, and Models draws it on its smart rung there too.
+    const adopted = await callAction(server, person.token, "atyrode.code.adoptCheck", { ...adopt, selection: smart });
+    assert(adopted.ok, adopted.ok ? "" : adopted.denial.message);
+    const own = adopted.result as Configuration;
+    assert.deepEqual([own.active, own.selection], [kept, smart], "The kept check is adopted as it was kept, at the explicit actual tier");
+    await openGenerator(browser, server, opened.id);
+    await openSheet(browser, "models");
+    await until(browser, "Models draws the adopted legacy Opus on its smart rung", `JSON.stringify(${modelList}) === ${JSON.stringify(JSON.stringify(drawn))}`);
+    await closeSheet(browser);
+    await composes(opened.id, own.revision);
+    assert.deepEqual((await readChecks(server, person)).checks, checks, "The kept check stays as it was kept");
+    noNativeEffects(trace.requests);
+    fixture.check();
+  } finally {
+    await fixture.stop();
+    trace.stop();
+  }
+}
+
+/**
+ * A saved profile as Code stored it before it kept which model a saved tier was chosen for: this run's own workspace record,
+ * in this run's own disposable server's plugin storage, rewritten as a historical select of `selection` left it — the next
+ * revision, the very lists, digests, provenance and accounts, and no private record of the chosen model (`resolvedSelection`).
+ * The public record's strict schema is what is written, so nothing else rides along. Only that one row of this owned
+ * server is touched, and only while no page has the workspace open; the read Code then serves is the proof's subject.
+ */
+function seedLegacySelection(server: TestServer, containerId: string, selection: Selection): Configuration {
+  const db = new Database(join(server.dataDir, "manifold.db"));
+  try {
+    db.exec("PRAGMA busy_timeout = 5000;");
+    const key = `configuration/${digestOf({ containerId })}`;
+    const row = db.query<{ value: string }, [string, string]>("SELECT value FROM plugin_kv WHERE plugin_id = ? AND key = ?").get(CODE_PLUGIN_ID, key);
+    assert(row, "The workspace's own record is in the test server's plugin storage");
+    const { resolvedSelection: _chosen, ...stored } = JSON.parse(row.value) as Record<string, unknown>;
+    const record = ConfigurationSchema.parse(stored);
+    const legacy = ConfigurationSchema.parse({ ...record, revision: record.revision + 1, selection, updatedAt: Date.now() });
+    const written = db.query<unknown, [string, string, string, string]>("UPDATE plugin_kv SET value = ? WHERE plugin_id = ? AND key = ? AND value = ?")
+      .run(JSON.stringify(legacy), CODE_PLUGIN_ID, key, row.value);
+    assert.equal(written.changes, 1, "The legacy record replaces exactly the record read");
+    return legacy;
+  } finally {
+    db.close();
+  }
+}
+
+/**
+ * A normal tier saved when a completed check stored the pinned bundle's latest Opus at 3 and its latest Sonnet at 4, as a
+ * price ladder kept them: the normal rung (2) then filled from Opus. Read at the tiers their names give, Sonnet is normal
+ * now, so that saved tier names another model than the one it was saved for, and Code admits it only as an explicit
+ * choice. The check is recorded as the workflow records one, under fictional Claude accounts and the synthetic
+ * installation the other check scenarios use, with discovery and benchmark ready and no launch permission; the legacy
+ * profile is seeded in this run's own server (`seedLegacySelection`). Everything Code decides is the real server's.
+ *
+ * - Code's typed read keeps the legacy record whole; its listing names no selected model, and a composition is refused.
+ * - Opened, the panel asks Code's own read-only review of the saved profile, at its exact revision with no override, and
+ *   shows the Sonnet the normal tier reads now. A press on that same normal word is a choice the launch saves; Revert
+ *   leaves it, writing nothing, and Enter on that word then Save & launch saves exactly that profile, once. Code admits it
+ *   at the new revision, so the same word is an ordinary chosen word again; the listing and a composition name Sonnet,
+ *   and the list in use keeps its bytes, digest and provenance.
+ * - A workspace whose list passed a check of other accounts holds the same legacy profile: the panel's own check of the
+ *   newer kept check declares no choice, so Code's review of the saved profile stops it, said in Models, with nothing
+ *   adopted or written; the person's own check in Models adopts it with the profile they see, and composes Sonnet.
+ * - A workspace with only that list staged and no saved profile draws the normal Sonnet in its rows; use staged list in
+ *   Models reviews and promotes the list with exactly that profile, as the person's choice, and composes Sonnet.
+ *
+ * No inventory or benchmark is ever requested: the kept check is the only evidence, and nothing pays for it again.
+ */
+async function legacyTierRepairScenario(browser: BrowserInstance, server: TestServer, person: TokenGrant, destination: Target): Promise<void> {
+  const catalogRead = await callAction(server, person.token, "atyrode.omp.readModelCatalog", { providers: ["anthropic"] });
+  assert(catalogRead.ok, "The pinned OMP bundle supplies its passive model metadata");
+  const metadata = ModelCatalogSnapshotSchema.parse(catalogRead.result);
+  const named = catalogFromMetadata(metadata, "any").models.filter(model => model.provider === "anthropic");
+  const sonnet = named.find(model => model.tier === 2), opus = named.find(model => model.tier === 3);
+  assert(sonnet && opus, "The pinned bundle supplies a latest Sonnet and a latest Opus");
+  const legacy: CatalogDocument = { schemaVersion: 1, models: [{ ...opus, tier: 3 }, { ...sonnet, tier: 4 }] };
+  const normal: Selection = { lane: { kind: "provider", family: "anthropic", blend: "only" }, capability: 2, thinking: "medium", advisor: "off",
+    spark: false, priority: false, prewalk: false, planYolo: false, fallback: true, budget: "any" };
+  const smart: Selection = { ...normal, capability: 3 };
+  const normalWord = TIERS[1]!;
+  const pins = { installationRevision: "synthetic-ui-only", artifactSha256: "c".repeat(64), resourceBindingDigest: "c".repeat(64) };
+  const observed = fixtureAccounts([1]), earlier = fixtureAccounts([1, 7]);
+  const held = await createContainer(server, "Legacy normal tier chosen again", "canvas");
+  const moved = await createContainer(server, "Legacy normal tier adopted", "canvas");
+  const workspaces = new Set([held.id, moved.id]);
+  await arrangeWorkbench(server, person);
+  const trace = await watchActions(browser, server);
+  const fixture = await intercept(browser, server, async (name, input) => {
+    switch (name) {
+      case "atyrode.omp.describeDestination": {
+        if (!workspaces.has(String(input.containerId)) || input.machineId !== destination.machineId) return undefined;
+        const result: OmpResult<"describeDestination"> = { containerId: String(input.containerId), machineId: destination.machineId, pluginId: "atyrode.omp",
+          state: "ready", reason: null, deployment: null, services: [], operations: [INVENTORY_OPERATION_ID, BENCHMARK_OPERATION_ID]
+            .map(operationId => ({ operationId, pins, nativeReady: true, callerRefusal: null, state: "ready", reason: null })) };
+        return { ok: true, result };
+      }
+      case "atyrode.omp.accounts.accounts": return { ok: true, result: observed };
+      case "atyrode.omp.accounts.usage": return { ok: true, result: fixtureUsage(observed) };
+      // Never answered as a check: a request here would be a repeated spend, which `noNativeEffects` names.
+      case "atyrode.omp.startInventory": case "atyrode.omp.startBenchmark": return refused("synthetic_check_unexpected");
+      default: return undefined;
+    }
+  });
+  // The list in use as a completed check of `accounts` left it, put in use at Opus's own smart tier, then the legacy normal profile.
+  const legacyInUse = async (containerId: string, accounts: OmpResult<"accounts">, benchmarkCompletedAt: number) => {
+    const initialized = await callAction(server, person.token, "atyrode.code.initializeConfiguration", { containerId, expectedRevision: 0 });
+    assert(initialized.ok);
+    const base = initialized.result as Configuration;
+    const pool = await callAction(server, person.token, "atyrode.code.composeProbe", { containerId, expectedRevision: base.revision, accounts });
+    assert(pool.ok);
+    const staged = await callAction(server, person.token, "atyrode.code.stageCatalog", { containerId, expectedRevision: base.revision, document: legacy,
+      verification: { ompVersion: OMP_VERSION, inventoryArtifactSha256: pins.artifactSha256, catalogRevision: metadata.revision,
+        inventoryObservedAt: benchmarkCompletedAt - 1_000, benchmarkCompletedAt, accounts,
+        poolIdentityDigest: (pool.result as ActionResult<"composeProbe">).poolIdentityDigest, budget: "any" } });
+    assert(staged.ok, staged.ok ? "" : staged.denial.message);
+    const input = { containerId, expectedRevision: (staged.result as Configuration).revision, source: "draft" as const, selection: smart };
+    const review = await callAction(server, person.token, "atyrode.code.reviewCatalog", input);
+    assert(review.ok, review.ok ? "" : review.denial.message);
+    const promoted = await callAction(server, person.token, "atyrode.code.promoteCatalog", { ...input, reviewDigest: (review.result as ActionResult<"reviewCatalog">).reviewDigest });
+    assert(promoted.ok, promoted.ok ? "" : promoted.denial.message);
+    return seedLegacySelection(server, containerId, normal);
+  };
+  const typedRead = async (containerId: string) => ConfigurationSchema.parse((await readConfiguration(server, person, { containerId })).configuration);
+  const compose = (containerId: string, expectedRevision: number) =>
+    callAction(server, person.token, "atyrode.code.composeSession", { containerId, expectedRevision, accounts: observed, prompt: "" });
+  const composesSonnet = async (containerId: string, expectedRevision: number) => {
+    const composed = await compose(containerId, expectedRevision);
+    assert(composed.ok, composed.ok ? "" : composed.denial.message);
+    assert.equal((composed.result as ActionResult<"composeSession">).review.routes.find(route => route.role === "default")?.lead.key, sonnet.key,
+      "The chosen normal profile composes the Sonnet it reads now");
+  };
+  const listed = async (containerId: string) => {
+    const list = await callAction(server, person.token, "atyrode.code.listProfiles", {});
+    assert(list.ok, list.ok ? "" : list.denial.message);
+    const profile = (list.result as ActionResult<"listProfiles">).profiles.find(entry => entry.containerId === containerId);
+    assert(profile, "The workspace is listed");
+    return profile.selected;
+  };
+  const workspaceWrite = /^atyrode\.code\.(initializeConfiguration|stageCatalog|promoteCatalog|discardCatalog|adoptCheck|select|changeAccounts)$/;
+  const writes = (from: number) => trace.requests.slice(from).filter(request => workspaceWrite.test(request.name));
+  const screenshot = async (name: string) => {
+    if (screenshotDirectory === undefined) return;
+    assert(isAbsolute(screenshotDirectory), "CODE_VERIFY_SCREENSHOTS must name an absolute artifact directory");
+    mkdirSync(screenshotDirectory, { recursive: true });
+    const { result } = await browser.send("Page.captureScreenshot", { format: "png", fromSurface: true, captureBeyondViewport: false });
+    const data = result?.data;
+    assert(typeof data === "string", "Chromium returns the mounted legacy tier screenshot");
+    writeFileSync(join(screenshotDirectory, `legacy-tier-${name}.png`), Buffer.from(data, "base64"));
+  };
+  try {
+    // The workspace adopting later passed its check first, of other accounts; the one choosing again holds the newer kept check.
+    const movedSeed = await legacyInUse(moved.id, earlier, Date.now() - 6_000);
+    const heldSeed = await legacyInUse(held.id, observed, Date.now() - 2_000);
+    const checks = (await readChecks(server, person)).checks;
+
+    // Code's typed read keeps the legacy record whole; nothing names its normal tier as the Sonnet until it is chosen.
+    assert.deepEqual(await typedRead(held.id), heldSeed, "Code's typed read serves the legacy record as stored");
+    assert.equal(await listed(held.id), null, "The listing names no selected model for the legacy normal tier, and keeps the workspace");
+    const refusedCompose = await compose(held.id, heldSeed.revision);
+    assert(!refusedCompose.ok && refusedCompose.denial.message === "code_invalid_selection", "A composition is refused before anything is posted");
+    assert.deepEqual(await typedRead(held.id), heldSeed, "Reading, listing and a refused composition write nothing");
+
+    // This person's identity takes effect only on the fresh page this navigation loads. Until then the page the previous
+    // scenario left mounted (another person's, on its own workspace) stays live, and its saved-profile query, scoped to
+    // its own [workspace, revision, list], may ask again; the fresh page restarts every query. So the reviews this page
+    // asks are the ones of this workspace, whatever their order among the old page's.
+    const from = trace.requests.length;
+    const reviews = () => trace.requests.slice(from).filter(request => request.name === "atyrode.code.reviewCatalog" && request.input.containerId === held.id);
+    await openGenerator(browser, server, held.id);
+    await chooseMachine(browser, destination.machineId, machineName);
+    await until(browser, "the saved normal tier shows the Sonnet it reads now, waiting to be chosen again",
+      `${chosenKey("tier")} === ${JSON.stringify(normalWord)} && ${row("tier")}?.dataset.reselect !== undefined && ${launchIs("launch", "refused")}`);
+    // Nothing has been written since the seed, so every review this page asked is of the seeded revision.
+    const current = reviews();
+    assert(current.length > 0, "The panel asks Code's own review of the saved profile");
+    for (const request of current) {
+      assert.deepEqual(request, { name: "atyrode.code.reviewCatalog", input: { containerId: held.id, expectedRevision: heldSeed.revision, source: "active" } },
+        "The panel asks Code's own read-only review of the saved profile, at its exact revision and with no override");
+    }
+
+    // The same normal word, pressed, is a choice the launch saves; it changes no setting, so nothing is kept for a reload.
+    const draftKey = storedDraftKey(person.principal.id, held.id);
+    await click(browser, word("tier", normalWord));
+    await until(browser, "choosing the same normal word again offers Save & launch",
+      `${launchIs("save & launch", "ready")} && ${chosenKey("tier")} === ${JSON.stringify(normalWord)} && ${row("tier")}?.dataset.reselect === undefined`);
+    assert.equal(await browser.evaluate(`sessionStorage.getItem(${JSON.stringify(draftKey)})`), null, "The choice changes no setting, so nothing is kept for a reload");
+    await screenshot("same-normal-chosen");
+    // Revert leaves the choice unmade and writes nothing; the word waits to be chosen again.
+    await click(browser, element(`${generator} [data-revert]`));
+    await until(browser, "Revert leaves the choice unmade", `${launchIs("launch", "refused")} && ${row("tier")}?.dataset.reselect !== undefined`);
+    assert.deepEqual(writes(from), [], "Choosing and reverting write nothing");
+    assert.deepEqual(await typedRead(held.id), heldSeed);
+
+    // The keyboard chooses it as a press does, on the row's own chosen word once real keys bring focus to it: Space first,
+    // then Revert leaves it unmade again, writing nothing.
+    const chosenWordFocused = `document.activeElement === ${word("tier", normalWord)}`;
+    await focusRow(browser, "tier");
+    await until(browser, "keyboard focus on the tier row's chosen normal word", chosenWordFocused);
+    await key(browser, " ", 32);
+    await until(browser, "chosen again by Space, the same normal word offers Save & launch",
+      `${launchIs("save & launch", "ready")} && ${row("tier")}?.dataset.reselect === undefined`);
+    await click(browser, element(`${generator} [data-revert]`));
+    await until(browser, "Revert leaves the keyboard's choice unmade", `${launchIs("launch", "refused")} && ${row("tier")}?.dataset.reselect !== undefined`);
+    assert.deepEqual(writes(from), [], "Choosing by Space and reverting write nothing");
+    assert.deepEqual(await typedRead(held.id), heldSeed);
+    // Then Enter on that same focused word chooses it for the save.
+    await focusRow(browser, "tier");
+    await until(browser, "keyboard focus on the tier row's chosen normal word again", chosenWordFocused);
+    await key(browser, "Enter", 13);
+    await until(browser, "chosen again by the keyboard, the same normal word offers Save & launch", launchIs("save & launch", "ready"));
+    await click(browser, launchButton);
+    await waitFor(async () => (await readConfiguration(server, person, { containerId: held.id })).revision === heldSeed.revision + 1, timeout, 50);
+    assert.deepEqual(writes(from), [{ name: "atyrode.code.select", input: { containerId: held.id, expectedRevision: heldSeed.revision, selection: normal } }],
+      "One save of exactly the profile shown, with nothing but the profile in it");
+    const chosen = await typedRead(held.id);
+    assert.deepEqual([chosen.active, chosen.draft, chosen.accounts, chosen.selection], [heldSeed.active, heldSeed.draft, heldSeed.accounts, normal],
+      "The list in use keeps its bytes, digest and provenance, and the profile is the one chosen");
+    // At the new revision Code admits it: the same word is an ordinary chosen word again, and pressing it changes nothing.
+    await waitFor(() => reviews().some(request => request.input.expectedRevision === chosen.revision), timeout, 50);
+    await Bun.sleep(1_000);
+    await until(browser, "the chosen profile is saved, its same word an ordinary chosen word",
+      `${launchIs("launch", "refused")} && ${row("tier")}?.dataset.reselect === undefined`);
+    await screenshot("saved-admitted");
+    await click(browser, word("tier", normalWord));
+    await Bun.sleep(500);
+    assert(await browser.evaluate<boolean>(launchIs("launch", "refused")), "A press on the admitted profile's own word is no edit");
+    assert.equal(writes(from).length, 1, "Nothing saves again");
+    assert(reviews().every(request => request.input.source === "active" && !("selection" in request.input)), "Every review the panel asked is of the saved profile itself");
+    const listedHeld = await listed(held.id);
+    assert.deepEqual([listedHeld?.model, listedHeld?.capability], [`anthropic/${sonnet.id}`, 2], "The listing names the Sonnet the chosen normal tier reads");
+    await composesSonnet(held.id, chosen.revision);
+
+    // A workspace whose list passed a check of other accounts, holding the same legacy profile: the panel's own check of
+    // it declares no choice, so Code's review of the saved profile stops it before it adopts or writes anything; the
+    // person's own check adopts the newer kept check with the profile they see.
+    assert.deepEqual(await typedRead(moved.id), movedSeed);
+    const fromMoved = trace.requests.length;
+    const adoptions = () => trace.requests.slice(fromMoved).filter(request => request.name === "atyrode.code.adoptCheck").map(request => request.input.selection);
+    await openGenerator(browser, server, moved.id);
+    await chooseMachine(browser, destination.machineId, machineName);
+    await openSheet(browser, "models");
+    await until(browser, "the panel's own check stopped, said in Models, and the person's own check waits",
+      `${goIs(modelsSheet, "check models")} && ${goParts(modelsSheet)}.some(([text, tone]) => text === 'check stopped' && tone === 'attention')`);
+    assert.deepEqual(adoptions(), [], "The panel's own check adopts nothing, declaring no choice of its own");
+    assert(trace.requests.slice(fromMoved).some(request => request.name === "atyrode.code.reviewCatalog" &&
+      request.input.containerId === moved.id && request.input.source === "active" && !("selection" in request.input)),
+    "Code's own review of the saved profile, with no override, is what stopped it");
+    assert.deepEqual(await typedRead(moved.id), movedSeed, "Nothing gives the legacy normal tier the Sonnet on its own");
+    await click(browser, element(`${modelsSheet} [data-go]`));
+    await waitFor(async () => (await readConfiguration(server, person, { containerId: moved.id })).revision === movedSeed.revision + 1, timeout, 50);
+    assert.deepEqual(adoptions(), [normal], "The person's own check adopts with the profile they see");
+    const adopted = await typedRead(moved.id);
+    assert.deepEqual([adopted.active, adopted.selection], [heldSeed.active, normal], "The newer kept check is in use as it was kept, with the profile shown");
+    await closeSheet(browser);
+    await composesSonnet(moved.id, adopted.revision);
+    assert.equal((await listed(moved.id))?.model, `anthropic/${sonnet.id}`);
+    assert.deepEqual((await readChecks(server, person)).checks, checks, "The kept checks stay as they were kept");
+
+    // A workspace with only that list staged, an older check of the same accounts, and no saved profile: Models' use staged
+    // list puts it in use with the profile the rows draw on it, the normal Sonnet, as the person's choice of it.
+    const firstUse = await createContainer(server, "Legacy list staged with no profile", "canvas");
+    workspaces.add(firstUse.id);
+    const initialized = await callAction(server, person.token, "atyrode.code.initializeConfiguration", { containerId: firstUse.id, expectedRevision: 0 });
+    assert(initialized.ok);
+    const base = initialized.result as Configuration;
+    const pool = await callAction(server, person.token, "atyrode.code.composeProbe", { containerId: firstUse.id, expectedRevision: base.revision, accounts: observed });
+    assert(pool.ok);
+    const stagedAt = Date.now() - 20_000;
+    const staged = await callAction(server, person.token, "atyrode.code.stageCatalog", { containerId: firstUse.id, expectedRevision: base.revision, document: legacy,
+      verification: { ompVersion: OMP_VERSION, inventoryArtifactSha256: pins.artifactSha256, catalogRevision: metadata.revision,
+        inventoryObservedAt: stagedAt - 1_000, benchmarkCompletedAt: stagedAt, accounts: observed,
+        poolIdentityDigest: (pool.result as ActionResult<"composeProbe">).poolIdentityDigest, budget: "any" } });
+    assert(staged.ok, staged.ok ? "" : staged.denial.message);
+    const stagedRecord = await typedRead(firstUse.id);
+    assert.deepEqual([stagedRecord.active, stagedRecord.selection], [null, null], "Only the list is staged, with no profile saved");
+    const fromStaged = trace.requests.length;
+    await openGenerator(browser, server, firstUse.id);
+    await chooseMachine(browser, destination.machineId, machineName);
+    await until(browser, "the staged list draws its normal Sonnet in the rows", `${chosenKey("tier")} === ${JSON.stringify(normalWord)}`);
+    await openSheet(browser, "models");
+    await until(browser, "the staged list waits in Models", goIs(modelsSheet, "use staged list"));
+    await screenshot("staged-normal");
+    await click(browser, element(`${modelsSheet} [data-go]`));
+    await waitFor(async () => (await readConfiguration(server, person, { containerId: firstUse.id })).revision === stagedRecord.revision + 1, timeout, 50);
+    const used = await typedRead(firstUse.id);
+    assert(used.selection && used.selection.capability === 2 && used.selection.lane.kind === "provider" && used.selection.lane.family === "anthropic",
+      "The profile the rows drew, the normal Claude profile, is the one put in use");
+    assert.deepEqual(used.active, stagedRecord.draft, "The staged list is in use exactly as staged, with its check");
+    const promotions = trace.requests.slice(fromStaged).filter(request => /^atyrode\.code\.(reviewCatalog|promoteCatalog)$/.test(request.name) && request.input.source === "draft");
+    assert.deepEqual(promotions.map(request => [request.name, request.input.selection]),
+      [["atyrode.code.reviewCatalog", used.selection], ["atyrode.code.promoteCatalog", used.selection]], "Review and promotion carry the very profile shown, as chosen");
+    await closeSheet(browser);
+    await composesSonnet(firstUse.id, used.revision);
+    assert.equal((await listed(firstUse.id))?.model, `anthropic/${sonnet.id}`);
+
+    // A saved Claude profile at smart and high thinking on a Claude list in use, and a GPT-only list staged beside it: the
+    // staged list cannot form that profile, so using it asks about the nearest profile it can form, every setting it moves
+    // named. Not now writes nothing; approving puts the list in use with exactly that profile, every other preference kept.
+    const gptRead = await callAction(server, person.token, "atyrode.omp.readModelCatalog", { providers: ["openai-codex"] });
+    assert(gptRead.ok, "The pinned OMP bundle supplies its passive GPT metadata");
+    const gptOnly: CatalogDocument = { schemaVersion: 1,
+      models: catalogFromMetadata(ModelCatalogSnapshotSchema.parse(gptRead.result), "any").models.filter(model => model.provider === "openai-codex") };
+    const claudeList: CatalogDocument = { schemaVersion: 1, models: [sonnet, opus] };
+    const claudeSmart: Selection = { ...smart, thinking: "high", prewalk: true };
+    const crossed = await createContainer(server, "Claude profile, GPT list staged", "canvas");
+    workspaces.add(crossed.id);
+    const crossedBase = await callAction(server, person.token, "atyrode.code.initializeConfiguration", { containerId: crossed.id, expectedRevision: 0 });
+    assert(crossedBase.ok);
+    const claudeStaged = await callAction(server, person.token, "atyrode.code.stageCatalog",
+      { containerId: crossed.id, expectedRevision: (crossedBase.result as Configuration).revision, document: claudeList });
+    assert(claudeStaged.ok);
+    const claudeInput = { containerId: crossed.id, expectedRevision: (claudeStaged.result as Configuration).revision, source: "draft" as const, selection: claudeSmart };
+    const claudeReview = await callAction(server, person.token, "atyrode.code.reviewCatalog", claudeInput);
+    assert(claudeReview.ok, claudeReview.ok ? "" : claudeReview.denial.message);
+    const claudeInUse = await callAction(server, person.token, "atyrode.code.promoteCatalog",
+      { ...claudeInput, reviewDigest: (claudeReview.result as ActionResult<"reviewCatalog">).reviewDigest });
+    assert(claudeInUse.ok, claudeInUse.ok ? "" : claudeInUse.denial.message);
+    const gptStaged = await callAction(server, person.token, "atyrode.code.stageCatalog",
+      { containerId: crossed.id, expectedRevision: (claudeInUse.result as Configuration).revision, document: gptOnly });
+    assert(gptStaged.ok, gptStaged.ok ? "" : gptStaged.denial.message);
+    const crossedBefore = await typedRead(crossed.id);
+    assert.deepEqual(crossedBefore.selection, claudeSmart);
+    const fromCrossed = trace.requests.length;
+    // A review of a saved profile itself (in use, no override) only reads; any other review is a candidate for the staged
+    // list's promotion, and counts with every workspace write, in the order asked.
+    const crossedWrites = () => trace.requests.slice(fromCrossed).filter(request => workspaceWrite.test(request.name) ||
+      (request.name === "atyrode.code.reviewCatalog" && !(request.input.source === "active" && !("selection" in request.input))));
+    await openGenerator(browser, server, crossed.id);
+    await chooseMachine(browser, destination.machineId, machineName);
+    await openSheet(browser, "models");
+    await until(browser, "the GPT list waits staged in Models", goIs(modelsSheet, "use staged list"));
+    await click(browser, element(`${modelsSheet} [data-go]`));
+    const proposed = await questionOpens(browser, "premium", "using a list that cannot form the saved profile asks about the nearest one it can");
+    assert(proposed.items[0]!.includes("openai-codex/") && proposed.items[0]!.includes("configured "), "The question names the GPT model, its tier and configured effort");
+    assert(proposed.items.slice(1).some(item => item.startsWith("lane ")), "The question names the lane it moves");
+    assert.deepEqual(crossedWrites(), [], "Asking asks no candidate review, promotion or write");
+    await answer(browser, "dismiss");
+    await until(browser, "Not now leaves the GPT list staged", `${unasked} && ${goIs(modelsSheet, "use staged list")}`);
+    assert.deepEqual(crossedWrites(), [], "Not now writes nothing");
+    assert.deepEqual(await typedRead(crossed.id), crossedBefore, "Not now leaves the workspace as it was");
+    await click(browser, element(`${modelsSheet} [data-go]`));
+    await questionOpens(browser, "premium", "a fresh press asks again");
+    await answer(browser, "approve");
+    await waitFor(async () => (await readConfiguration(server, person, { containerId: crossed.id })).revision === crossedBefore.revision + 1, timeout, 50);
+    const crossedUsed = await typedRead(crossed.id);
+    assert.deepEqual(crossedUsed.active?.document, gptOnly, "The GPT list is in use");
+    assert(crossedUsed.selection && crossedUsed.selection.lane.kind === "provider" && crossedUsed.selection.lane.family === "openai",
+      "The approved profile leads GPT");
+    assert.deepEqual([crossedUsed.selection.thinking, crossedUsed.selection.advisor, crossedUsed.selection.prewalk, crossedUsed.selection.planYolo,
+      crossedUsed.selection.fallback, crossedUsed.selection.budget], [claudeSmart.thinking, claudeSmart.advisor, claudeSmart.prewalk, claudeSmart.planYolo,
+      claudeSmart.fallback, claudeSmart.budget], "Every setting the GPT list hosts is kept as saved");
+    assert.deepEqual(crossedWrites().map(request => [request.name, request.input.selection]),
+      [["atyrode.code.reviewCatalog", crossedUsed.selection], ["atyrode.code.promoteCatalog", crossedUsed.selection]],
+      "Review and promotion carry exactly the approved profile");
+    await closeSheet(browser);
+    noNativeEffects(trace.requests);
+    fixture.check();
+  } finally {
+    await fixture.stop();
+    trace.stop();
+  }
+}
 
 /**
  * Model checks belong to the person who ran them (checks.ts): what one workspace checked or approved reaches the others.
@@ -3752,11 +5102,13 @@ async function keptChecksScenario(browser: BrowserInstance, server: TestServer, 
     "atyrode.code.adoptCheck", "atyrode.code.promoteCatalog", "atyrode.omp.reviewSession", "atyrode.omp.prepareSession"];
   /** Those doors requested since `from`, in order. Nothing reviews a launch without a press, so none follows a refused one. */
   const requested = (from: number) => trace.requests.slice(from).map(request => request.name).filter(name => doors.includes(name));
-  /** The rows lead Claude only, which a Claude-only list hosts as it is: an edit of the bundled starter, which leads Mixed. */
+  /** Deliberately edit the medium Claude-only starter to high thinking on the same Sonnet tier, which the checked list hosts. */
   const leadClaudeOnly = async () => {
     await choose(browser, "lane", "anthropic");
     if (await browser.evaluate<boolean>(`${onlyBox}.getAttribute('aria-checked') !== 'true'`)) await click(browser, onlyBox);
-    await until(browser, "the rows lead Claude only", `${rowValue("lane")} === 'Claude only'`);
+    await choose(browser, "thinking", "high");
+    await until(browser, "the rows lead Claude only at explicitly chosen high thinking",
+      `${rowValue("lane")} === 'Claude only' && ${rowValue("thinking")} === 'high'`);
   };
   /**
    * Opens a workspace never set up and edits its rows with `edit`. Before the edit nothing initializes or checks it on its
@@ -3799,8 +5151,18 @@ async function keptChecksScenario(browser: BrowserInstance, server: TestServer, 
       "One press checks the models, asking once, then reviews the saved profile and launches it");
     assert.deepEqual(trace.requests.slice(from).find(request => request.name === "atyrode.code.approveChecks")?.input, { expectedRevision: 0, requests: charge },
       "The first Approve records the person's approval of exactly its charge");
-    const checked = (await readConfiguration(server, person, { containerId: first.id })).configuration?.active;
+    const checkedRecord = (await readConfiguration(server, person, { containerId: first.id })).configuration;
+    const checked = checkedRecord?.active;
     assert(checked?.provenance, "The check put a checked list in use");
+    assert.equal(checkedRecord?.selection?.thinking, "high", "The check saves the deliberately edited thinking, not the medium default");
+    const sonnet = checked.document.models.find(model => model.provider === "anthropic" && model.tier === 2);
+    assert(sonnet, "The completed check contains the authored Sonnet tier");
+    assert.equal(checkedRecord?.selection?.capability, 2, "Choosing high thinking retains the explicit Sonnet tier");
+    const launched = ompActionSchemas.reviewSession.input.parse(trace.requests.slice(from).find(request => request.name === "atyrode.omp.reviewSession")?.input);
+    const launchModels = launched.overlay.modelRoles;
+    assert(launchModels, "The actual launch review names each role's model");
+    assert.equal(launchModels.default, `${sonnet.provider}/${sonnet.id}:high`,
+      "The actual launch review receives Sonnet at high thinking, without a premium tier bump");
     const checkedPool = checked.provenance.poolIdentityDigest;
     const kept = await readChecks(server, person);
     assert.equal(kept.approvedRequests, charge, "The approval is the person's, kept for their later checks");
@@ -3971,10 +5333,12 @@ async function keptChecksScenario(browser: BrowserInstance, server: TestServer, 
 
 /**
  * Every window of the fixture's usage is a row (#248): a tiered one, a limit of its own beside the account's shared
- * windows, is labelled with its tier, in the usage and the accounts. A used-up `fable` window makes Claude neither tight
- * nor maxed, as only the shared windows judge a provider's pool, while the same window reported as shared does. Where
- * the usage grid turns to two columns no label squeezes a reset. The observation and the reading are synthetic, a Codex
- * slot beside the Claude one; nothing is saved.
+ * windows, is labelled with its tier, in the usage and the accounts. Only the shared windows judge a provider's pool: at
+ * each width the strain the panel shows while the `fable` window is available, checked against what the pinned starter
+ * leads on at the authored tier and what the observed pool serves, is exactly the strain it shows once only that window
+ * is used up, while the same used-up window reported as shared strikes Claude's leads. Where the usage grid turns to two
+ * columns no label squeezes a reset. The observation and the reading are synthetic, a Codex slot beside the Claude one;
+ * nothing is saved.
  */
 async function tieredUsageScenario(browser: BrowserInstance, server: TestServer, writer: TokenGrant): Promise<void> {
   const workspace = await createContainer(server, "Tiered usage windows", "canvas");
@@ -3982,6 +5346,14 @@ async function tieredUsageScenario(browser: BrowserInstance, server: TestServer,
   const created = await callAction(server, writer.token, "atyrode.code.initializeConfiguration", { ...target, expectedRevision: 0 });
   assert(created.ok);
   const base = await readConfiguration(server, writer, target);
+  // The panel's static ground, read apart from it: an initialized record with no catalog or profile shows the pinned
+  // starter under the served restriction, and its choices exclude no account.
+  assert(base.configuration && base.configuration.active === null && base.configuration.draft === null && base.configuration.selection === null,
+    "The initialized record holds no catalog or profile, so the panel shows the pinned starter");
+  assert.deepEqual(base.configuration.accounts, { activePreset: null, manualDisabled: [], presets: [] }, "The initialized choices exclude no account");
+  const catalogRead = await callAction(server, writer.token, "atyrode.omp.readModelCatalog", { providers: starterProviders });
+  assert(catalogRead.ok, "The pinned OMP bundle supplies the starter's passive metadata");
+  const document = catalogFromMetadata(ModelCatalogSnapshotSchema.parse(catalogRead.result), "any"), compiled = compileCatalog(document);
   await arrangeWorkbench(server, writer);
   const codex = { reference: { kind: "credential" as const, scope: fixtureScope, provider: "openai-codex", credentialId: 3 }, credentialId: 3,
     type: "api_key" as const, identityKey: null, email: null, disabled: false, blocks: [] };
@@ -3989,15 +5361,33 @@ async function tieredUsageScenario(browser: BrowserInstance, server: TestServer,
     const claude = fixtureAccounts([1]);
     return { ...claude, accounts: [...claude.accounts, codex] };
   };
-  // The control: reported as shared, the `fable` window's numbers judge Claude's pool, so the checks below can see a strain.
-  let shared = false;
+  // Static eligibility, from the pinned metadata and the observed pool alone, never a usage reading: the addresses the
+  // pool serves, the families someone has signed in for, and the profile the starter forms on them, Claude's at Claude's
+  // own address. A lead the row shows (Mixed over GPT and Claude, and each listed family someone has signed in for) is
+  // refused, whatever the usage, where a family it leads on has its model at the authored tier at an address no
+  // included account serves.
+  const served = new Set(observation().accounts.filter(account => !account.disabled).map(account => account.reference.provider));
+  const connected = new Set(observation().accounts.map(account => providerPolicy(account.reference.provider).family));
+  const selection = defaultSelection(compiled, provider => served.has(provider));
+  const claudeRoute = reviewCatalog(compiled, selection, Date.now()).routes.find(route => route.role === "default");
+  assert(selection.lane.kind === "provider" && selection.lane.family === "anthropic" && claudeRoute && compiled.model(claudeRoute.lead.key).provider === "anthropic",
+    "On this pool the starter leads on Claude, at Claude's own address");
+  const offered = compiled.families.filter(family => connected.has(family)).map((family): [string, string[]] => [family, [family]]);
+  if (["openai", "anthropic"].every(family => connected.has(family) && compiled.families.includes(family))) offered.unshift(["mixed", ["openai", "anthropic"]]);
+  const refusedLeads = offered.filter(([, families]) => !families.every(family => served.has(compiled.model(compiled.rung(family, selection.capability)).provider)))
+    .map(([lead]) => lead).sort();
+  // The `fable` window, available or used up, its fraction and status set together; reported as shared for the control.
+  // Every other window is the fixture's own.
+  let fable: "available" | "exhausted" = "available", shared = false;
   const fixture = await intercept(browser, server, name => {
     if (name === "atyrode.omp.accounts.accounts") return { ok: true, result: observation() };
     if (name !== "atyrode.omp.accounts.usage") return undefined;
     const reading = fixtureUsage(observation());
-    if (!shared) return { ok: true, result: reading };
+    const set = (window: UsageWindow): UsageWindow => window.tier !== "fable" ? window : {
+      ...window, ...fable === "available" ? { usedFraction: 0.3, quotaStatus: "ok" as const } : { usedFraction: 1, quotaStatus: "exhausted" as const },
+      tier: shared ? null : window.tier };
     return { ok: true, result: { ...reading, snapshot: { ...reading.snapshot!, accounts: reading.snapshot!.accounts.map(account => ({
-      ...account, windows: account.windows.map(window => window.tier === "fable" ? { ...window, tier: null } : window) })) } } };
+      ...account, windows: account.windows.map(set) })) } } };
   });
   const usagePane = `${generator} [data-pane="usage"]`, accountsPane = `${generator} [data-pane="accounts"]`;
   /** Each account's windows as drawn, by provider and account: the label, the tier it names and the window's word. */
@@ -4009,10 +5399,22 @@ async function tieredUsageScenario(browser: BrowserInstance, server: TestServer,
     "Claude API key 1": [["5h", null, ""], ["7d fable", "fable", "maxed"]],
     "Codex API key 3": [["5h", null, ""], ["7d base-model-inference", "base-model-inference", ""]],
   };
+  const availableRows = { ...rows, "Claude API key 1": [["5h", null, ""], ["7d fable", "fable", ""]] };
+  /** Every window the usage draws, in order: its label, tier, level, percent and word. */
+  type WindowFact = [string, string | null, string, string, string];
+  const windowFacts = `[...document.querySelectorAll('${usagePane} .${G}usage-win')].map(row => [row.querySelector('.${G}usage-wl').textContent,
+    row.dataset.tier ?? null, row.dataset.level, row.querySelector('.${G}usage-pct').textContent, row.querySelector('.${G}usage-word')?.textContent ?? ''])`;
+  /** The usage draws the one `fable` row at `level` with `word`. */
+  const fableRow = (level: string, word: string) => `(() => {
+    const tiered = [...document.querySelectorAll('${usagePane} .${G}usage-win[data-tier="fable"]')];
+    return tiered.length === 1 && tiered[0].dataset.level === '${level}' && (tiered[0].querySelector('.${G}usage-word')?.textContent ?? '') === '${word}';
+  })()`;
   /** What would say Claude's pool is strained: a struck lead in the routing or the profile, a refused lane, Claude called tight or maxed. */
+  type Strain = { struck: string[]; refused: string[]; said: boolean };
   const strain = `({ struck: [...document.querySelectorAll('${generator} [data-down]')].map(el => el.textContent),
     refused: [...document.querySelectorAll('${generator} [data-row="lane"] .${G}word[data-off]')].map(el => el.dataset.key),
     said: /Claude (tight|maxed|has no account with room)/.test(${element(stage)}.textContent) })`;
+  const leadKeys = `[...document.querySelectorAll('${generator} [data-row="lane"] .${G}word')].map(el => el.dataset.key)`;
   /** Every reset a pane draws, and those not shown whole on one line inside their column, their window's row, the pane and any box that clips them. */
   const resets = (pane: string) => `(() => {
     const shown = [...document.querySelectorAll('${pane} .${G}usage-rst')].filter(el => el.checkVisibility({ opacityProperty: true, visibilityProperty: true }) && el.getClientRects().length);
@@ -4028,29 +5430,59 @@ async function tieredUsageScenario(browser: BrowserInstance, server: TestServer,
   try {
     await openGenerator(browser, server, workspace.id);
     await until(browser, "the usage draws both accounts' windows", `document.querySelectorAll('${usagePane} .${G}usage-win').length === 4`);
-    assert.deepEqual(await browser.evaluate(windowRows(usagePane)), rows, "Every reported window is its own row in the usage, a tiered one labelled with its tier");
+    await until(browser, "the usage reads the fable window available", fableRow("ok", ""));
+    assert.deepEqual(await browser.evaluate(windowRows(usagePane)), availableRows, "Every reported window is its own row in the usage, a tiered one labelled with its tier");
     await showView(browser, "accounts");
     await until(browser, "the accounts draw both accounts' windows", `document.querySelectorAll('${accountsPane} .${G}usage-win').length === 4`);
-    assert.deepEqual(await browser.evaluate(windowRows(accountsPane)), rows, "Every reported window is its own row in the accounts, a tiered one labelled with its tier");
+    assert.deepEqual(await browser.evaluate(windowRows(accountsPane)), availableRows, "Every reported window is its own row in the accounts, a tiered one labelled with its tier");
     await showView(browser, "main");
     await assertRoutes(browser, true);
+    assert.equal(await browser.evaluate(chosenKey("lane")), "anthropic", "The starter's profile leads on Claude");
+    assert.equal(await browser.evaluate(chosenKey("tier")), TIERS[selection.capability - 1], "The starter's profile is at its authored tier");
+    assert.deepEqual(await routedRoles(browser), expectedRoutes(document, selection), "The routing routes the starter's Claude profile on this pool");
     // Wide, the routing's leads; narrow and too short for routing under the generator, the grouped profile's leads.
     try {
       for (const [width, leads] of [[1280, `[data-pane="routing"] .${G}tok-value`], [390, `.${G}profile-lead`]] as const) {
         await panelWidth(browser, width);
+        if (fable !== "available") {
+          fable = "available";
+          await key(browser, "r", 82);
+        }
+        await until(browser, `at ${width}px the usage reads the fable window available`, fableRow("ok", ""));
         await still(browser);
-        assert.deepEqual(await browser.evaluate(strain), { struck: [], refused: [], said: false },
-          `At ${width}px a used-up fable window strikes no lead, refuses no lane and calls Claude neither tight nor maxed`);
+        const baseline = await browser.evaluate<Strain>(strain), windows = await browser.evaluate<WindowFact[]>(windowFacts);
+        assert.deepEqual(baseline.struck, [], `At ${width}px with the fable window available no lead is struck`);
+        assert.equal(baseline.said, false, `At ${width}px with the fable window available Claude is called neither tight nor maxed`);
+        assert.equal(await browser.evaluate(chosenKey("lane")), "anthropic", `At ${width}px the profile still leads on Claude`);
+        assert.deepEqual([...new Set(await browser.evaluate<string[]>(leadKeys))].sort(), offered.map(([lead]) => lead).sort(),
+          `At ${width}px the lead row offers Mixed and each listed family someone has signed in for`);
+        assert.deepEqual([...new Set(baseline.refused)].sort(), refusedLeads,
+          `At ${width}px the refused leads are exactly those leading on a model at the authored tier that no included account serves`);
+        fable = "exhausted";
+        await key(browser, "r", 82);
+        await until(browser, `at ${width}px the usage reads the fable window used up`, fableRow("error", "maxed"));
+        await still(browser);
+        assert.deepEqual(await browser.evaluate(windowRows(usagePane)), rows, `At ${width}px the used-up fable window is drawn maxed under its tier`);
+        assert.deepEqual((await browser.evaluate<WindowFact[]>(windowFacts)).filter(([, tier]) => tier !== "fable"), windows.filter(([, tier]) => tier !== "fable"),
+          `At ${width}px the shared 5h windows and Codex's window are drawn as before`);
+        assert.deepEqual(await browser.evaluate(strain), baseline,
+          `At ${width}px a used-up fable window strikes no further lead, refuses no further lane and calls Claude neither tight nor maxed`);
         shared = true;
         await key(browser, "r", 82);
         await until(browser, `at ${width}px the same window reported as shared strikes Claude's leads`, `document.querySelector('${generator} ${leads}[data-down]') !== null`);
         shared = false;
         await key(browser, "r", 82);
-        await until(browser, "reported as tiered again it strikes none", `document.querySelector('${generator} [data-down]') === null`);
+        await until(browser, "reported as tiered again the strain is the baseline's",
+          `${fableRow("error", "maxed")} && JSON.stringify(${strain}) === ${JSON.stringify(JSON.stringify(baseline))}`);
+        await still(browser);
+        assert.deepEqual(await browser.evaluate(strain), baseline, `At ${width}px reported as tiered again the used-up fable window leaves the baseline's strain`);
       }
     } finally {
       await browser.send("Emulation.clearDeviceMetricsOverride", {});
     }
+    await showView(browser, "accounts");
+    await until(browser, "the accounts draw both accounts' windows", `document.querySelectorAll('${accountsPane} .${G}usage-win').length === 4`);
+    assert.deepEqual(await browser.evaluate(windowRows(accountsPane)), rows, "The used-up fable window is its own row in the accounts, maxed under its tier");
     const problems: string[] = [];
     try {
       for (const width of [780, 790, 800, 810]) {
@@ -4082,23 +5514,43 @@ async function tieredUsageScenario(browser: BrowserInstance, server: TestServer,
  * struck, cannot be picked and says why when pointed at, pressed and aloud. GPT-led would cross to Claude while GPT only
  * runs, so GPT stays pickable, says beforehand that it lands on GPT only and does; there the `only` box is checked and
  * struck, and pointing at it, focusing it or Space on it says why and leaves it checked. The observation and the reading
- * are synthetic, a Claude slot beside a Codex one; the exclusion is the one save, made before the panel opens, and the
- * panel saves nothing.
+ * are synthetic, a Claude slot beside a Codex one. Before the panel opens, the real starter metadata is staged unmeasured
+ * and promoted with an explicit Mixed profile while the pool still holds both, then one account save excludes Claude's
+ * account and keeps that profile; the panel saves nothing.
  */
 async function leadStruckScenario(browser: BrowserInstance, server: TestServer, writer: TokenGrant): Promise<void> {
   const workspace = await createContainer(server, "Struck leads", "canvas");
   const target = { containerId: workspace.id };
-  const created = await callAction(server, writer.token, "atyrode.code.initializeConfiguration", { ...target, expectedRevision: 0 });
-  assert(created.ok);
   const claude = fixtureAccounts([1]);
-  const excluded = await callAction(server, writer.token, "atyrode.code.changeAccounts", { ...target, expectedRevision: (created.result as Configuration).revision,
-    change: { kind: "set-account", enabled: false, reference: claude.accounts[0]!.reference } });
-  assert(excluded.ok, "The saved choices exclude Claude's one account");
-  const base = await readConfiguration(server, writer, target);
-  await arrangeWorkbench(server, writer);
   const codex = { reference: { kind: "credential" as const, scope: fixtureScope, provider: "openai-codex", credentialId: 3 }, credentialId: 3,
     type: "api_key" as const, identityKey: null, email: null, disabled: false, blocks: [] };
   const observation = (): OmpResult<"accounts"> => ({ ...claude, observedAt: Date.now() - 1_000, accounts: [...claude.accounts, codex] });
+  const declared = new Set(observation().accounts.map(account => account.reference.provider));
+  const created = await callAction(server, writer.token, "atyrode.code.initializeConfiguration", { ...target, expectedRevision: 0 });
+  assert(created.ok);
+  const catalogRead = await callAction(server, writer.token, "atyrode.omp.readModelCatalog", { providers: starterProviders });
+  assert(catalogRead.ok, "The pinned OMP bundle supplies the starter's passive metadata");
+  const starter = catalogFromMetadata(ModelCatalogSnapshotSchema.parse(catalogRead.result), "any");
+  // Where each role's lead lives as the published starter routes it, its addresses only: no account or quota is judged.
+  const catalog = compileCatalog(starter), reviewedAt = Date.now();
+  const leadProviders = (selection: Selection) => [...new Set(reviewCatalog(catalog, selection, reviewedAt).routes.map(route => catalog.model(route.lead.key).provider))].sort();
+  const mixed = selectionForLane({ kind: "mixed" }, 3);
+  assert(leadProviders(mixed).every(provider => declared.has(provider)), "Every role Mixed leads is on a provider of the declared Claude and Codex pool");
+  assert.deepEqual(leadProviders(selectionForLane({ kind: "provider", family: "openai", blend: "only" }, 3)), ["openai-codex"],
+    "GPT only, where GPT-led falls once Claude is excluded, leads every role on the declared Codex account's provider");
+  const staged = await callAction(server, writer.token, "atyrode.code.stageCatalog", { ...target, expectedRevision: (created.result as Configuration).revision, document: starter });
+  assert(staged.ok, staged.ok ? "" : staged.denial.message);
+  const reviewInput = { ...target, expectedRevision: (staged.result as Configuration).revision, source: "draft" as const, selection: mixed };
+  const reviewed = await callAction(server, writer.token, "atyrode.code.reviewCatalog", reviewInput);
+  assert(reviewed.ok, reviewed.ok ? "" : reviewed.denial.message);
+  const promoted = await callAction(server, writer.token, "atyrode.code.promoteCatalog", { ...reviewInput, reviewDigest: (reviewed.result as ActionResult<"reviewCatalog">).reviewDigest });
+  assert(promoted.ok, promoted.ok ? "" : promoted.denial.message);
+  const excluded = await callAction(server, writer.token, "atyrode.code.changeAccounts", { ...target, expectedRevision: (promoted.result as Configuration).revision,
+    change: { kind: "set-account", enabled: false, reference: claude.accounts[0]!.reference } });
+  assert(excluded.ok, "The saved choices exclude Claude's one account");
+  const base = await readConfiguration(server, writer, target);
+  assert.deepEqual(base.configuration?.selection, mixed, "Excluding Claude's account keeps the deliberately saved Mixed profile");
+  await arrangeWorkbench(server, writer);
   const fixture = await intercept(browser, server, name => name === "atyrode.omp.accounts.accounts" ? { ok: true, result: observation() }
     : name === "atyrode.omp.accounts.usage" ? { ok: true, result: fixtureUsage(observation()) } : undefined);
   /** The readout warns with `why`. */
@@ -4108,7 +5560,7 @@ async function leadStruckScenario(browser: BrowserInstance, server: TestServer, 
     const claudeLead = word("lane", "anthropic"), gptLead = word("lane", "openai");
     await until(browser, "Claude's lead is struck and names why",
       `${claudeLead}?.dataset.off !== undefined && ${claudeLead}.getAttribute('aria-disabled') === 'true' && !!${claudeLead}.getAttribute('aria-description')`);
-    assert.equal(await browser.evaluate(chosenKey("lane")), "mixed", "The initialized profile leads Mixed");
+    assert.equal(await browser.evaluate(chosenKey("lane")), "mixed", "The deliberately saved profile leads Mixed");
     const why = await browser.evaluate<string>(`${claudeLead}.getAttribute('aria-description')`);
     await pointOf(browser, claudeLead);
     await until(browser, "pointing at the struck lead says why", `${warns(why)} && ${readout}.querySelector('b')?.textContent === 'Claude'`);
@@ -5070,9 +6522,10 @@ async function sharedWorkbenchScenario(browser: BrowserInstance, viewerBrowser: 
   const bundled = await callAction(server, writer.token, "atyrode.omp.readModelCatalog", { providers: starterProviders });
   assert(bundled.ok);
   const metadata = ModelCatalogSnapshotSchema.parse(bundled.result);
-  // A launch refuses a routed model OMP does not publish, so the four curated tiers are published anthropic models.
-  const published = metadata.models.filter(model => model.provider === "anthropic").sort((left, right) => left.inputCostPerMillion - right.inputCostPerMillion).slice(0, 4);
-  assert.equal(published.length, 4, "The pinned OMP publishes four anthropic models for the fixture's tiers");
+  // A launch refuses a routed model OMP does not publish, so the four curated tiers are published anthropic models, one
+  // of each name Anthropic gives its tiers, each on its own tier, as the compiled catalog reads them.
+  const published = catalogFromMetadata(metadata, "any").models.filter(model => model.provider === "anthropic").sort((left, right) => left.tier - right.tier);
+  assert.deepEqual(published.map(model => model.tier), [1, 2, 3, 4], "The pinned OMP publishes one anthropic model of each named tier for the fixture's tiers");
   const document = { schemaVersion: 1, models: published.map((model, index) => ({
     key: `browser-model-${index + 1}`, provider: "anthropic", id: model.id, api: model.api, tier: index + 1,
     quotaBucket: null, inputCostPerMillion: index + 1, outputCostPerMillion: (index + 1) * 3, tokensPerSecond: 30,
@@ -5117,8 +6570,8 @@ async function sharedWorkbenchScenario(browser: BrowserInstance, viewerBrowser: 
     // A viewer's refused press asks why, read-only offering no fix: Close alone, its way out. A key answers with Close once it
     // has held focus a moment and the question has settled, and the question closes onto the row it was asked from.
     const readOnly = await questionOpens(viewerBrowser, "refused", "the viewer's refused Mod+↵ asks its question");
-    assert.deepEqual(readOnly, { title: "Read-only workspace", text: ["You can try settings here, but saving and launching need edit access to this workspace."], items: [],
-      choices: [["dismiss", "Close"]] }, "A viewer's refused press asks why, with Close alone");
+    assert.deepEqual({ items: readOnly.items, choices: readOnly.choices.map(([offer]) => offer) }, { items: [], choices: ["dismiss"] },
+      "A viewer's refused press asks why, offering no fix: Close alone");
     await firstChoiceByTab(viewerBrowser, "refused");
     await Bun.sleep(DELIBERATE_MS);
     await key(viewerBrowser, "Enter", 13);
@@ -5167,7 +6620,25 @@ async function sharedWorkbenchScenario(browser: BrowserInstance, viewerBrowser: 
   await browser.send("Network.enable", {});
   // The passive account observation the browser sees; one check below reads a Claude account as disabled.
   let observed = fixtureAccounts();
-  const fixture = await intercept(browser, server, name => name === "atyrode.omp.accounts.accounts" ? { ok: true, result: observed } : undefined);
+  // The check's pool, observed apart from the accounts (model-verification.ts: `observeVerification`), is answered by the
+  // real server for the writer while `poolSeen` notes each revision it answers at, and held once at `holdPoolAt` for the
+  // one window below that needs it unchanged.
+  const poolHold = holdable();
+  let holdPoolAt: number | null = null;
+  let poolSeen: number[] | null = null;
+  const fixture = await intercept(browser, server, async (name, input) => {
+    if (name === "atyrode.omp.accounts.accounts") return { ok: true, result: observed };
+    if (name !== "atyrode.code.composeProbe" || input.containerId !== first.containerId) return undefined;
+    if (holdPoolAt !== null && input.expectedRevision === holdPoolAt) {
+      holdPoolAt = null;
+      await poolHold.wait();
+    } else if (poolSeen !== null) {
+      const seen = poolSeen, outcome = await callAction(server, writer.token, name, input);
+      if (outcome.ok) seen.push((outcome.result as ActionResult<"composeProbe">).revision);
+      return outcome;
+    }
+    return undefined;
+  });
   try {
     await browser.send("Emulation.setEmulatedMedia", { features: [{ name: "prefers-reduced-motion", value: "reduce" }] });
     await openGenerator(browser, server, first.containerId);
@@ -5225,6 +6696,7 @@ async function sharedWorkbenchScenario(browser: BrowserInstance, viewerBrowser: 
 
     // The edit rests on the saved profile, not on the record's revision: the writer's own account edits (a preset made and
     // removed, which leaves the pool as it was) move the record on, and the edit stays ready to save, never a conflict.
+    poolSeen = [];
     let revision = (await readConfiguration(server, writer, first)).revision;
     const spare = { id: "browser-spare-pool", name: "Spare pool", disabled: [] };
     for (const change of [{ kind: "create-preset", preset: spare }, { kind: "delete-preset", id: spare.id }]) {
@@ -5232,29 +6704,35 @@ async function sharedWorkbenchScenario(browser: BrowserInstance, viewerBrowser: 
       assert(changed.ok, "The writer edits the workspace's account presets beside the unsaved profile");
       revision = (changed.result as Configuration).revision;
     }
+    // The check's pool is observed apart from the accounts (`observeVerification`: OMP's accounts, then Code's composeProbe
+    // at the record's revision), and Refresh now never reads it again. Its answer at this revision is the observation the
+    // check below stands on.
     await panelReads(browser, revision);
     await until(browser, "own account edits leave the edit ready to save, without a conflict",
       `${launchIs("save & launch", "ready")} && !!${revertButton} && !${fix("conflict")} && ${profileValues} === ${JSON.stringify(edits)}`);
+    await waitFor(() => poolSeen?.includes(revision) === true, timeout, 50);
+    poolSeen = null;
 
     // A lead no included account serves refuses the save, as the session door would refuse its launch. The panel reads the
-    // Claude account as disabled (a GPT one stays) while the check it stands on is not observed again: the save is refused
-    // with the family named. A press asks its question, said nowhere else: the line's reason, why, and the line's own fixes,
-    // the way to the Claude accounts among them, then Close. From the question Mod+↵ writes nothing, and Esc closes it onto
-    // the launch.
+    // Claude account as disabled (a GPT one stays) while the check it stands on is not observed again: its next pool
+    // observation at this revision is held until the way to the accounts has been followed. The save is refused with the family named. A
+    // press asks its question, said nowhere else, offering the line's own fixes, the way to the accounts among them, then
+    // Close. From the question Mod+↵ writes nothing, and Esc closes it onto the launch.
     const gpt = { reference: { kind: "credential" as const, scope: fixtureScope, provider: "openai-codex", credentialId: 3 }, credentialId: 3,
       type: "api_key" as const, identityKey: null, email: null, disabled: false, blocks: [] };
+    holdPoolAt = revision;
     observed = { ...fixtureAccounts(), accounts: [...fixtureAccounts().accounts.map(account => account.credentialId === 1 ? { ...account, disabled: true } : account), gpt] };
     await focusLaunch(browser);
     await key(browser, "r", 82);
     await until(browser, "a lead no account serves refuses the save and names its family, with the way to its accounts",
       `${launchIs("save & launch", "refused")} && ${lineText}.includes('Claude') && !!${fix("accounts")}`);
-    const lineOffers = await browser.evaluate<[string, string][]>(lineFixes);
+    const lineOffers = (await browser.evaluate<[string, string][]>(lineFixes)).map(([offer]) => offer);
     const spoken = await watchSaid(browser);
     await key(browser, "Enter", 13);
     const refusedQuestion = await questionOpens(browser, "refused", "the refused press asks its question");
-    assert.deepEqual(refusedQuestion, { title: "No Claude account included", text: ["This profile leads with Claude, so it needs a Claude account."], items: [],
-      choices: [...lineOffers, ["dismiss", "Close"]] }, "The refused press asks the line's reason and why, offering the line's own fixes, then Close");
-    assert(lineOffers.some(([offer]) => offer === "accounts"), "The question offers the way to the Claude accounts");
+    assert.deepEqual({ items: refusedQuestion.items, choices: refusedQuestion.choices.map(([offer]) => offer) }, { items: [], choices: [...lineOffers, "dismiss"] },
+      "The refused press asks with the line's own fixes, then Close");
+    assert(lineOffers.includes("accounts") && !lineOffers.includes("verify-permissions"), "The question offers the way to the accounts, not a model check");
     await key(browser, "Enter", 13, { modifiers: CTRL });
     await Bun.sleep(300);
     assert.equal(await browser.evaluate(asks("refused")), true, "Mod+↵ in the question takes no step");
@@ -5262,6 +6740,22 @@ async function sharedWorkbenchScenario(browser: BrowserInstance, viewerBrowser: 
     await key(browser, "Escape", 27);
     await until(browser, "Esc closes the question onto the launch", `${unasked} && document.activeElement === ${launchButton}`);
     assert.deepEqual(await spoken(), { notices: [], announced: [] }, "A refused press is neither said aloud nor posted: its question says it");
+    // The line's way to the accounts goes there, onto the observation the refusal stands on: Claude's slot still included
+    // (its credential disabled), the excluded one left out, the new Codex account included. Going there writes nothing.
+    const manage = `${generator} [data-pane="manage"]`;
+    await click(browser, fix("accounts"));
+    await until(browser, "the line's accounts fix opens the accounts", shownView("accounts"));
+    await click(browser, element(`${generator} [data-manage]`));
+    await until(browser, "the management shows the refused pool's accounts by provider, each included or not",
+      `JSON.stringify([...document.querySelectorAll('${manage} .plugin-atyrode_code__account-group')].map(group => [group.querySelector('h3').textContent,
+        [...group.querySelectorAll('.plugin-atyrode_code__account-row')].map(row => row.dataset.included)])) === ${JSON.stringify(JSON.stringify([["anthropic", ["true", "false"]], ["openai-codex", ["true"]]]))}`);
+    await click(browser, element(`${manage} .${G}title`));
+    await key(browser, "a", 65);
+    await until(browser, "a goes from the management to the generator, the save still refused", `${shownView("main")} && ${launchIs("save & launch", "refused")} && !!${fix("accounts")}`);
+    assert.equal((await readConfiguration(server, writer, first)).revision, revision, "Following the way to the accounts writes nothing");
+    holdPoolAt = null;
+    poolHold.release();
+    await focusLaunch(browser);
     observed = fixtureAccounts();
     await key(browser, "r", 82);
     await until(browser, "with the Claude account back the save is ready again", `${launchIs("save & launch", "ready")} && ${profileValues} === ${JSON.stringify(edits)}`);
@@ -5271,7 +6765,6 @@ async function sharedWorkbenchScenario(browser: BrowserInstance, viewerBrowser: 
     await until(browser, "Models shows the saved list, checked", `${element(modelsSheet)}?.dataset.phase === 'verified' && ${goIs(modelsSheet, "back to code")}`);
     assert.deepEqual(await browser.evaluate(modelList), listOf(document), "Models shows the saved checked list, each rung on its model");
     await closeSheet(browser);
-    const manage = `${generator} [data-pane="manage"]`;
     await showView(browser, "accounts");
     await click(browser, element(`${generator} [data-manage]`));
     await until(browser, "Manage accounts opens the accounts' management in place", shownView("manage"));
@@ -5395,6 +6888,7 @@ async function sharedWorkbenchScenario(browser: BrowserInstance, viewerBrowser: 
     await until(browser, "the rows follow the record back", `${chosenKey("advisor")} === ${JSON.stringify(ours.advisor)}`);
     fixture.check();
   } finally {
+    poolHold.release();
     offReads();
     await fixture.stop();
     // Reduced motion was this scenario's own; the scenarios after it prove the panel under default motion.
@@ -5701,7 +7195,7 @@ async function importedCatalogScenario(browser: BrowserInstance, server: TestSer
       assert.deepEqual(staged.configuration?.draft?.document, document);
       assert.equal(staged.configuration?.draft?.provenance, null, "An imported list is not checked");
       assert.deepEqual(await browser.evaluate(modelList), listOf(document), "Models shows the staged list, each rung on its model");
-      const using = trace.requests.length;
+      const using = trace.requests.length, shownBefore = await browser.evaluate<string>(profileValues);
       await click(browser, element(`${modelsSheet} [data-go]`));
       await until(browser, "use staged list puts it in use, not checked, and says so",
         `${element(modelsSheet)}.dataset.phase !== 'staged' && ${sheetState(modelsSheet)} === '4 models · not checked' &&
@@ -5709,11 +7203,13 @@ async function importedCatalogScenario(browser: BrowserInstance, server: TestSer
       const review = reviews.at(-1);
       assert(review, "The real server reviewed the staged list");
       assert.equal(review.catalogDigest, staged.configuration?.draft?.digest, "The review is of exactly the staged list");
+      const promoted = await readConfiguration(server, writer, target), chosen = promoted.configuration?.selection;
+      assert(chosen, "The staged list is put in use with a profile");
       assert.deepEqual(writes(using), [
-        { name: "atyrode.code.reviewCatalog", input: { ...target, expectedRevision: 2, source: "draft" } },
-        { name: "atyrode.code.promoteCatalog", input: { ...target, expectedRevision: 2, source: "draft", reviewDigest: review.reviewDigest } },
-      ], "Use staged list reviews the staged list at the revision shown, then promotes exactly that review");
-      const promoted = await readConfiguration(server, writer, target);
+        { name: "atyrode.code.reviewCatalog", input: { ...target, expectedRevision: 2, source: "draft", selection: chosen } },
+        { name: "atyrode.code.promoteCatalog", input: { ...target, expectedRevision: 2, source: "draft", reviewDigest: review.reviewDigest, selection: chosen } },
+      ], "Use staged list reviews the staged list at the revision shown, with the profile the rows show, then promotes exactly that review");
+      assert.equal(await browser.evaluate<string>(profileValues), shownBefore, "The profile put in use is the very one the rows showed");
       assert.equal(promoted.revision, 3);
       assert.deepEqual(promoted.configuration?.active?.document, document, "Promotion puts exactly the reviewed list in use");
       assert.equal(promoted.configuration?.active?.provenance, null, "A list put in use without a check is not checked");
@@ -6069,6 +7565,12 @@ async function setupSheetScenario(browser: BrowserInstance, server: TestServer, 
       await until(browser, `${name} moves to the ${row} row${says ? ", which says what it means" : ""}`, `document.activeElement.closest('li[data-row]')?.dataset.row === '${row}' &&
         ${row === "machine" ? `document.activeElement.matches('select')` : `document.activeElement.matches('[data-roving][tabindex="0"]')`}${says ? ` && ${sheetSays(setupSheet)} === ${JSON.stringify(says)}` : ""}`);
     }
+    assert(saved.configuration?.active?.provenance, "Setup's profile is the verified fixture, with its provenance");
+    const modelsAge = `[...document.querySelectorAll('${setupSheet} .${G}setup-facts dt')].find(el => el.textContent === 'models')?.nextElementSibling?.querySelector('.${G}setup-q')`;
+    await until(browser, "the models fact shows its checked age", `(element => element instanceof HTMLElement && (${CHECKED_AGE_LEAF}))(${modelsAge})`);
+    await pointOf(browser, modelsAge);
+    const age = await browser.evaluate<{ shown: boolean; width: number; height: number; recognized: boolean } | null>(`(() => { const element = ${modelsAge}; return element instanceof HTMLElement ? { shown: element.checkVisibility({ opacityProperty: true, visibilityProperty: true }), width: element.getBoundingClientRect().width, height: element.getBoundingClientRect().height, recognized: ${CHECKED_AGE_LEAF} } : null; })()`);
+    assert(age?.shown && age.width > 0 && age.height > 0 && age.recognized, "The models fact's checked age is visible and still recognized");
     await sheetZeroShift(browser, setupSheet, "Setup checklist");
     await sheetGeometry(browser, setupSheet, "Setup checklist");
     await sheetCoarseTargets(browser, setupSheet, "Setup checklist");
@@ -6839,8 +8341,8 @@ async function agentLaunchScenario(browser: BrowserInstance, server: TestServer,
   const bundled = await callAction(server, sponsor.token, "atyrode.omp.readModelCatalog", { providers: starterProviders });
   assert(bundled.ok);
   const metadata = ModelCatalogSnapshotSchema.parse(bundled.result);
-  const published = metadata.models.filter(model => model.provider === "anthropic").sort((left, right) => left.inputCostPerMillion - right.inputCostPerMillion).slice(0, 4);
-  assert.equal(published.length, 4, "The pinned OMP publishes four anthropic models for the sponsor's tiers");
+  const published = catalogFromMetadata(metadata, "any").models.filter(model => model.provider === "anthropic").sort((left, right) => left.tier - right.tier);
+  assert.deepEqual(published.map(model => model.tier), [1, 2, 3, 4], "The pinned OMP publishes one anthropic model of each named tier for the sponsor's tiers");
   // Short keys, as a person names their models, so the Run tokens read like the generator's own.
   const keys = ["luna", "sol", "terra", "fable"];
   const document = { schemaVersion: 1, models: published.map((model, index) => ({
@@ -7692,6 +9194,12 @@ async function run(): Promise<void> {
     await asNewPerson(writerBrowser, server, writer, "Code models checker", person => modelsSheetScenario(writerBrowser, server, person, target));
     phase = "a person's checks across workspaces: the approval their first Approve records, a check within it that asks nothing, a narrowed stop's question, a kept check adopted on a press and on its own, Launch kept ready while changed accounts are checked again, a stopped renewal never retried and ask first cancelling a renewal that spends";
     await asNewPerson(writerBrowser, server, writer, "Code check keeper", person => keptChecksScenario(writerBrowser, server, person, target));
+    phase = "premium intent before spending, independent charge approval, retained measured evidence and unspent background intent";
+    await asNewPerson(writerBrowser, server, writer, "Code premium checker", person => preSpendPremiumScenario(writerBrowser, server, person, target));
+    phase = "a completed check a price ladder kept with a lone Opus at fast: drawn on its smart rung, never adopted or composed at the old rank, adopted at its actual tier without another check";
+    await asNewPerson(writerBrowser, server, writer, "Code legacy check keeper", person => legacyPremiumCheckScenario(writerBrowser, server, person, target));
+    phase = "a legacy normal tier that reads another model now: Code's own review asks for the choice, the same word chosen again and saved, and only a person's own check adopts it";
+    await asNewPerson(writerBrowser, server, writer, "Code legacy tier chooser", person => legacyTierRepairScenario(writerBrowser, server, person, target));
     phase = "tiered usage windows are their own rows and judge no pool";
     await tieredUsageScenario(writerBrowser, server, writer);
     phase = "struck leads and the only box say why";

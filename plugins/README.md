@@ -14,6 +14,17 @@ sole progress record; source descriptions here do not imply deployment.
 Code packs four bundles. The three visible parts require the root, and the root
 declares the OMP root, accounts and gateway plugins as required dependencies.
 
+The native shared-role generation is one clean pair with exact authored labels:
+typed Code caller 0.2.0, root plugin 0.5.0 and generator 0.4.0 with OMP family 0.4.0
+at the pinned OMP commit and its matching core/owner capabilities. The labels are not
+manifest minimums or range checks. The gate's exact source pins and the hub's runtime
+dependency-ID, strict-schema and capability admission do the enforcing; recorded
+`ompVersion` is provenance only. A separately pinned dependent caller stays on its old
+caller/root pair until its owner upgrades and repacks it. New-root activation must
+wait until every dependent caller installed there is paired; see the
+[owned rollout boundary](../docs/status.md#native-shared-role-cutover). No
+compatibility shim or installed-caller roster is implied.
+
 | Directory | Plugin / surface |
 | --- | --- |
 | `atyrode.code/` | `atyrode.code`: shared catalog, routing, account-choice and suggestion policy |
@@ -163,7 +174,8 @@ account choices; it does not fetch a provider or mutate broker state.
 
 ## Pinned dependencies and gate
 
-Use Bun 1.4.2 and two immutable revisions:
+Use Bun 1.4.4, `python3` and `zstd` on `PATH`, network access for OMP's pinned
+grammar sources, and two immutable revisions:
 
 ```text
 <parent>/
@@ -174,8 +186,12 @@ Use Bun 1.4.2 and two immutable revisions:
 `plugins/package.json` pins `@atyrode/manifold-omp` to one published Git commit.
 `scripts/prepare-integration.ts` checks that commit out into ignored
 `.integration/`, requires its `MANIFOLD_REV` to match Code's, prepares its
-declared build dependencies, and invokes OMP's own staging-free packer. It
-installs no daemon, credentials, service policy or machine resource.
+declared build dependencies, runs OMP's own `scripts/prepare-grammar-assets.py`,
+and invokes OMP's own staging-free packer. That producer downloads OMP's pinned
+registry, publisher files and all 39 compressed grammars, checks each size and
+SHA-256, decompresses them with `zstd` and rebuilds the reviewed grammar
+archive; any missing tool, failed download or pin mismatch fails preparation.
+It installs no daemon, credentials, service policy or machine resource.
 `tsconfig.json` resolves the OMP caller API from that exact prepared snapshot.
 Keep Code's `MANIFOLD_REV`, OMP's `MANIFOLD_REV` and both reusable-workflow refs
 synchronized.
@@ -190,7 +206,7 @@ what it replaced. From `plugins/`:
 bun add "github:atyrode/manifold-omp#<commit>"
 ```
 
-Then repeat the same commit in the publishable root `package.json`. Verify by
+Then repeat the same `bun add` operation in the publishable root package. Verify by
 reading the resolved entry rather than trusting that the install succeeded:
 `grep manifold-omp plugins/bun.lock` shows the requested commit in full and the resolved one
 ABBREVIATED, so a resolution still naming the old build is visible as a different short hash
@@ -241,18 +257,26 @@ drafts, four-level routing, permission denial and stale-review behavior. Its
 native resources remain deliberately unconfigured, so it claims no provider
 request, consent success or account-backed session.
 
+Set `CODE_VERIFY_SCREENSHOTS` to an absolute, disposable artifact directory when
+running the gate to retain mounted generator PNGs for everyday, strong, elite,
+main-max and narrow main-max choices. These are visual-inspection evidence, not
+golden tests or native/provider success.
+
 `verify:native` then reuses the exact prepared OMP source's disposable native
 launcher and synthetic unpaid model gateway. It installs Code's real bundles,
 configures the profile through public Code doors and exercises Code-to-OMP
 run/read/cancel, selected/refused tool effects, policy acknowledgement, durable
 correlation, uncertain cancellation without replay and omitted-selection behavior.
-This separate native proof requires Linux x64, Bun 1.4.2, delegated systemd,
+This separate native proof requires Linux x64, Bun 1.4.4, delegated systemd,
 `unshare`, `OMP_VERIFY_SYSTEM`, `OMP_VERIFY_BWRAP` and
 `MANIFOLD_TEST_STATIC_BUSYBOX`; `OMP_VERIFY_SYSTEMD_MODE=user` selects a local
 user manager. The system declaration lists reviewed individual runtime files,
 not ambient directories. Every full-gate CI and release workflow installs Linux containment
 fixtures and runs the exact pinned OMP preparation before verification.
 Missing prerequisites fail the gate rather than skip this proof.
+Both verifiers are source proof against the locally prepared OMP commit. They are not
+OMP release proof, which separately installs OMP's real published family from its
+canonical publisher over HTTPS with no local source mapping.
 
 Broker shutdown/reconnect, secret redaction, concrete-slot fallback and gateway
 boundaries remain with their OMP owner. No real provider, persistent instance,
@@ -296,10 +320,11 @@ children. Machine installations, service policies and consent remain separate
 explicit native actions. Source verification performs no tag or delivery.
 
 `bun run dev -- --hub <development-hub-url> --deliver <delivery-target>` builds
-and watches Code's four bundles. Install the exact pinned OMP release first;
-dependency order does not grant authority or auto-install an absent external
-plugin. The native loop orders Code parent before parts and reinstalls only
-changed bytes. Use only an explicitly authorized development target. Reload the
+and watches Code's four bundles. Install a qualified OMP release matching the pinned
+commit first; a locally prepared source pin is not one. Dependency order does not
+grant authority or auto-install an absent external plugin. The native loop orders
+Code parent before parts and reinstalls only changed bytes. Use only an explicitly
+authorized development target. Reload the
 browser after a successful cycle; plugin Update checks published bundles, not
 working source. Restart the command after changing the development driver or
 build scripts; ordinary Code source edits are picked up by the running loop.

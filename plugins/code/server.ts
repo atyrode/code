@@ -7,12 +7,12 @@ import { reduceAccountChoices, selectedAccountPool } from "../domain/accounts.ts
 import { compileCatalog } from "../domain/catalog.ts";
 import { DomainError } from "../domain/contracts.ts";
 import { catalogFromObservations, inventoryDraft } from "../domain/probe.ts";
-import { reviewCatalog } from "../domain/routing.ts";
+import { newPremiumLead, reviewCatalog } from "../domain/routing.ts";
 import { buildSuggestionRequest, parseSuggestionResponse, SuggestionError } from "../domain/suggestions.ts";
 import { RefusalSchema, rootActionSchemas, type ActionInput, type ActionResult, type RootAction } from "./contract.ts";
 import { CodeRefusal, digestOf, type CodeContext } from "./context.ts";
-import { catalogReview, commitConfiguration, configurationMigration, expectRevision, initializeConfiguration, poolIdentity,
-  readConfiguration, requireConfiguration, verificationProvenance } from "./state.ts";
+import { catalogReview, commitConfiguration, configurationMigration, expectRevision, explicitWitness, initializeConfiguration, poolIdentity,
+  previousChoice, readConfiguration, requireConfiguration, verificationProvenance } from "./state.ts";
 import { cancelSession, composeSession, followSession, listProfiles, readSession, runSession } from "./session.ts";
 import { configureServices, currentSuggestionService, readServiceConfiguration, reviewServices } from "./service-setup.ts";
 import { adoptCheck, approveChecks, readChecks, recordCheck } from "./checks.ts";
@@ -69,15 +69,15 @@ const productHandlers: ProductHandlers = {
   },
   async reviewCatalog(ctx, args) {
     const previous = await readConfiguration(ctx, args); expectRevision(previous, args.expectedRevision);
-    return catalogReview(ctx, requireConfiguration(previous), args.source);
+    return catalogReview(ctx, previous, args.source, args.selection).review;
   },
   async promoteCatalog(ctx, args) {
     const previous = await readConfiguration(ctx, args, true); expectRevision(previous, args.expectedRevision);
     const record = requireConfiguration(previous);
-    const reviewed = catalogReview(ctx, record, args.source);
+    const { review: reviewed, resolved } = catalogReview(ctx, previous, args.source, args.selection);
     if (reviewed.reviewDigest !== args.reviewDigest) throw new CodeRefusal("preview_changed");
     return commitConfiguration(ctx, previous, { ...record, active: record[args.source],
-      draft: args.source === "draft" ? null : record.draft, selection: reviewed.review.selection });
+      draft: args.source === "draft" ? null : record.draft, selection: reviewed.review.selection }, resolved);
   },
   async discardCatalog(ctx, args) {
     const previous = await readConfiguration(ctx, args, true); expectRevision(previous, args.expectedRevision);
@@ -85,12 +85,18 @@ const productHandlers: ProductHandlers = {
     if (!record.draft) throw new CodeRefusal("catalog_missing");
     return commitConfiguration(ctx, previous, { ...record, draft: null });
   },
+  // An explicit choice, even of the very selection already saved: reviewed canonically, weighed
+  // against the saved choice, then written with the witness of the model it resolves to.
   async select(ctx, args) {
     const previous = await readConfiguration(ctx, args, true); expectRevision(previous, args.expectedRevision);
     const record = requireConfiguration(previous);
     if (!record.active) throw new CodeRefusal("catalog_missing");
-    reviewCatalog(compileCatalog(record.active.document), args.selection, ctx.now());
-    return commitConfiguration(ctx, previous, { ...record, selection: args.selection });
+    const catalog = compileCatalog(record.active.document);
+    reviewCatalog(catalog, args.selection, ctx.now());
+    if (newPremiumLead(catalog, args.selection, previousChoice(record, previous.resolved, catalog)))
+      throw new DomainError("invalid_selection");
+    return commitConfiguration(ctx, previous, { ...record, selection: args.selection },
+      explicitWitness(record.active, catalog, args.selection));
   },
   readChecks,
   approveChecks,

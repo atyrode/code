@@ -9,6 +9,70 @@ cross-repository integration. The
 [architecture's section 6](manifold-transition.md#6-transition-steps) is the sole
 transition ledger. This page records constraints, not another roadmap.
 
+## Native shared-role cutover
+
+[#286](https://github.com/atyrode/code/issues/286) owns the native routing refresh.
+The typed caller package is 0.2.0 and the root action plugin is 0.5.0 because the
+strict public route result no longer contains `agentBacked`; the generator is 0.4.0.
+These are exact authored labels for one clean generation: Code caller 0.2.0, root
+plugin 0.5.0 and generator 0.4.0 pair with OMP family 0.4.0. They are not manifest
+minimums: no manifest declares a version range, nothing compares these numbers and
+a higher label is not admitted for being higher. Admission is separate and exact:
+
+- The source gate uses Bun 1.4.4 and the exact
+  [Manifold revision](../plugins/MANIFOLD_REV). Both Code package manifests and their
+  resolved locks pin the same immutable OMP commit; its paired SDK revision and Code's
+  workflow SDK source must match that file. Protocol and hardened-contract admission
+  come from that exact SDK, not an older installed hub. The gate prepares the pinned
+  source rather than installed CLI or branch bytes.
+- At runtime the hub admits Code's required OMP dependencies by plugin ID, the typed
+  caller holds OMP inputs and results to strict schemas, and installation admits
+  bundles only against the hub's actual core protocol, owner RPC and hardened-contract
+  capabilities.
+- A catalog's `ompVersion` is recorded provenance, never compared or admitted.
+
+This source pins the tagged OMP
+[`a538300`](https://github.com/atyrode/manifold-omp/commit/a538300d2832dc4a8a006a72a5fd348e829d8f08)
+(family 0.4.0 on OMP 18.20.1) and Manifold
+[`5693107`](https://github.com/atyrode/manifold/commit/5693107cfb8b135f4753477d2d25e82b66925476)
+(v0.37.0: protocol 60, owner RPC 46, hardened contract 14), which is also OMP's own
+`MANIFOLD_REV`. The Code gate is source proof against that locally prepared OMP
+commit. Separate publisher proof for
+[stable OMP v0.4.0](https://github.com/atyrode/manifold-omp/releases/tag/v0.4.0)
+[passed](https://github.com/atyrode/manifold-omp/actions/runs/43690414939):
+ordinary unauthenticated HTTPS downloads of all six assets, strict publisher sums
+and full native verification with a fresh normal owner and no prepared archive map.
+The release is versioned and SHA-verified, not GitHub-immutable or Sigstore-attested.
+That upstream release proof does not establish Code's own gate or live activation.
+The pinned native runtime is OMP 18.20.1 inside that family; a standalone OMP 18.20.2
+found on a workstation is ambient, not a substitute for this pin, and nothing here
+admits, tests or launches it.
+
+Separately pinned callers intentionally remain on their old caller/root pair until
+their owner upgrades and repacks them; nothing shims the old pair. Before activating
+the new root, the operator must confirm every installed dependent caller in that
+deployment is paired. An authorized read-only inventory of the selected development
+deployment found Babel installed with native execution enabled beside a
+native-disabled Code bundle, so Babel's owner-upgraded, repacked compatible caller is
+required there before any later Code activation. Babel's local source pin does not
+establish the installed bundle's provenance, and this records a pairing prerequisite,
+not an observed failure. This page does not publish an installed roster or assert
+cross-version compatibility.
+
+There is no compatibility alias. Code configures only shared native roles and does
+not replace bundled agents or emit `task.agentModelOverrides`. The
+[routing contract](configuration.md#routing-cost-and-speed) distinguishes configured
+role effort from native agent thinking and bounds automatic fallbacks below premium
+tiers unless explicitly selected. Widget and memory stay on the cheap first rung with
+their own empty retry chains, including while ordinary fallbacks are off. Shared
+memory routing does not change its enabled/backend/retention/autolearn preferences.
+
+Disposable browser and synthetic native proof do not establish live activation,
+native owner binding, credential migration, provider availability or production
+acceptance. Operational follow-through stays open at the owning issue until the
+authorized owner supplies and reviews native authority and exercises the deployed
+surface. No production action is part of this source cutover.
+
 ## Integrated source and preview acceptance
 
 The integrated source contains four Code bundles: container-CAS
@@ -44,7 +108,7 @@ fresh quota observation afterward. Run-scoped credentials and grants were
 revoked after each proof. Existing credential backups were retained, and no
 production deployment, backup disposal or personal-session mutation occurred.
 
-See [plugin development](../plugins/README.md) for the Bun 1.4.2 and pinned
+See [plugin development](../plugins/README.md) for the Bun 1.4.4 and pinned
 Code/OMP/Manifold gate, and [configuration](configuration.md) for the exact
 actions. Source retirement does not authorize moving or deleting existing user
 files, service state, credentials or backups.
@@ -71,7 +135,13 @@ files, service state, credentials or backups.
   as the person's check of that pool and budget, reviewed, promoted and saved with the
   selection), or the person's kept check of that pool, adopted without spending. Stored active policy
   wins and unrecorded historical provenance
-  stays unknown. Read-only native panels remain locally explorable, not writable.
+  stays unknown. A saved tier that a list read at its models' named tiers would give
+  another model is never given it on its own: reads answer the record as stored, listings
+  name no selected model, and compositions and background adoptions refuse it with nothing written; the raw list, digest,
+  provenance and kept check stay as stored, and the panel's rows let the person choose
+  that profile again, its same word included, and Save it; Code then keeps privately
+  which model that choice resolved to (no public field, input or migration), and no
+  check is run or paid for again. Read-only native panels remain locally explorable, not writable.
   Disposable presentation/CAS proof is not native consent, configured accounts,
   provider execution, a release or authenticated preview acceptance.
 - Agent launch through Code reaches Manifold's real doors only up to `launchRun`. The
@@ -166,8 +236,8 @@ files, service state, credentials or backups.
   sealed resource reads, restricted tools, native resume, explicit model/thinking
   precedence, missing/changed-state refusal and cancellation. Synthetic inference
   in isolated network namespaces is not paid-provider or live-fleet acceptance.
-- The credential runtime uses OMP's published 18.8.6 graph with its retained
-  patch; the ordinary CLI and the independent, unpatched SDK host use 18.8.6 too.
+- The earlier OMP 0.2.0 qualification used the published 18.8.6 credential graph
+  with its retained patch; its ordinary CLI and independent unpatched SDK host also used 18.8.6.
   Native lifecycle accounting uses public SDK hooks and passes the retained
   deadline/quiescence regressions without copying credential algorithms. This
   does not qualify the separate unpatched credential migration in
@@ -192,7 +262,7 @@ files, service state, credentials or backups.
   The gate runs real Code-to-native tool and bounded-material proof against Code's
   current pins. Source and disposable verification do not establish a released Code bundle
   or deployed production capability, and no transition-ledger row advances.
-  Code now pins Manifold
+  That baseline pinned Manifold
   [`8260541`](https://github.com/atyrode/manifold/commit/82605419ea9a67198d9ea0dae1257a8fd812ecd8)
   ([manifold#1078](https://github.com/atyrode/manifold/pull/1078)), protocol 57, and OMP
   [`0639a16`](https://github.com/atyrode/manifold-omp/commit/0639a16900ae145677370a4ced669afcc5d19faf)
@@ -217,9 +287,9 @@ files, service state, credentials or backups.
   `SHA256SUMS` of the family under verification
   ([manifold-omp#119](https://github.com/atyrode/manifold-omp/pull/119)); Code's
   `verify:native` names the sums of the OMP bundles its gate prepared and installed.
-  OMP's inventory receipt is now its 18.8.6 one, and each row carries the SDK's
-  `quotaTier`, which the derivation reads directly. OMP's bundled catalog is stamped
-  with its separately pinned SDK's version, now also 18.8.6. No version string decides
+  That baseline's inventory receipt was its 18.8.6 one, and each row carried the SDK's
+  `quotaTier`, which the derivation reads directly. Its bundled catalog was stamped
+  with its separately pinned SDK's version, then also 18.8.6. No version string decides
   whether a verification holds: it records the artifact its inventory ran from and the bundled
   catalog's revision. An OMP update alone, another artifact or another catalog revision that
   still publishes every routed model, leaves it current and is noted in Models; it goes stale

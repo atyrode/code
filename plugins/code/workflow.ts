@@ -1,5 +1,5 @@
 import { createOmpClient, OmpHarnessProfileSchema, OmpSessionRefSchema, OMP_PLUGIN_ID, LAUNCH_OPERATION_ID, MATERIAL_SESSION_OPERATION_ID, RESUME_OPERATION_ID, skillInputBindings, PREPARE_WORKSPACE_OPERATION_ID, VALIDATE_WORKSPACE_OPERATION_ID,
-  INVENTORY_OPERATION_ID, BENCHMARK_OPERATION_ID, ThinkingSelectorSchema, probeAddress,
+  INVENTORY_OPERATION_ID, BENCHMARK_OPERATION_ID, ThinkingSelectorSchema, ProbeError, probeAddress,
   type BenchmarkInput, type BenchmarkReceipt, type InventoryReceipt, type OmpHarnessProfile, type OmpSessionRef, type OmpAction, type RunDials, type ThinkingSelector,
   type ActionInput as OmpInput, type ActionResult as OmpResult } from "@atyrode/manifold-omp";
 import { JobDeploymentApplyArgsSchema, JobDeploymentListArgsSchema, JobDeploymentListResultSchema,
@@ -12,11 +12,11 @@ import { createCodeClient, reviewedSessionOptions, sessionInput, type SessionOpt
   type Configuration, type Target, type VerificationProvenance } from "./contract.ts";
 import { HARNESS_OPERATION_ID, observePermissionPlan, operationReady, type PermissionPlanInput } from "./permission-plan.ts";
 import { selectedAccountPool } from "../domain/accounts.ts";
-import { compileCatalog } from "../domain/catalog.ts";
+import { compileCatalog, type CompiledCatalog } from "../domain/catalog.ts";
 import { projectUsage } from "../domain/usage.ts";
 import { providerPolicy } from "../domain/providers.ts";
-import type { Exclusion } from "../domain/probe.ts";
-import { clampSelection, laneFamilies } from "../domain/routing.ts";
+import { inventoryPlan, type Exclusion } from "../domain/probe.ts";
+import { clampSelection, defaultSelection, laneFamilies, newPremiumLead, reviewCatalog, selectionForLane } from "../domain/routing.ts";
 import { DomainError, type AccountChoices, type Selection } from "../domain/contracts.ts";
 
 export type Dispatch = (door: string, input: unknown) => Promise<unknown>;
@@ -177,9 +177,32 @@ function unansweredNeeds(exclusions: readonly Exclusion[], inUse: ReadonlySet<st
     (inUse.has(probeAddress(exclusion)) || lost.includes(providerPolicy(exclusion.provider).family))).map(probeAddress);
 }
 
+/** A missing balanced default needs an actual-tier choice only when a complete authored
+ * premium profile exists under the same budget and exact pool. This never selects it. */
+function hasPremiumProfile(catalog: CompiledCatalog, budget: Selection["budget"], serves: (provider: string) => boolean): boolean {
+  for (const model of catalog.models) {
+    if (model.tier !== 3 && model.tier !== 4) continue;
+    const selection: Selection = { ...selectionForLane({ kind: "provider", family: catalog.family(model.key), blend: "only" }, model.tier), budget };
+    try {
+      const review = reviewCatalog(catalog, selection, 0);
+      if (review.routes.every(route => serves(catalog.model(route.lead.key).provider))) return true;
+    } catch (error) {
+      if (!(error instanceof DomainError)) throw error;
+    }
+  }
+  return false;
+}
+
+/** The selection a verified list is put in use with: `wanted` narrowed to it or, without one, the
+ * list's default under exactly the charged budget — a free check never becomes an any-spend default. */
+function narrowedSelection(catalog: CompiledCatalog, wanted: Selection | null, budget: Selection["budget"],
+  serves: (provider: string) => boolean): Selection {
+  return clampSelection(catalog, wanted ?? { ...defaultSelection(catalog, serves), budget }, serves);
+}
+
 /** The steps of a model verification, in the order they run; a failure names the one it stopped at. `adopt` replaces
  * every step from `inventory` on when the caller keeps a newer check of the workspace's pool. */
-export type VerificationStep = "observe" | "initialize" | "adopt" | "inventory" | "draft" | "benchmark" | "derive" | "stage" | "review" | "promote" | "select";
+export type VerificationStep = "observe" | "initialize" | "adopt" | "inventory" | "draft" | "benchmark" | "derive" | "stage" | "review" | "promote";
 /** Requests a provider's benchmark has answered out of those it was charged. */
 export type ProviderProgress = { provider: string; done: number; total: number };
 export type VerificationProgress = { step: VerificationStep; providers: ProviderProgress[] };
@@ -508,8 +531,10 @@ export function createCodeWorkflowClient(transport: Dispatch) {
   async function native<K extends keyof typeof nativeActions>(name: K, input: z.infer<(typeof nativeActions)[K]["input"]>): Promise<z.infer<(typeof nativeActions)[K]["result"]>> {
     return nativeActions[name].result.parse(await dispatch(`engine.jobs.${name}`, nativeActions[name].input.parse(input))) as z.infer<(typeof nativeActions)[K]["result"]>;
   }
-  // The bundled list the render-only preview is drawn from. Never a source of a saved profile.
-  const readStarterCatalog = () => omp("readModelCatalog", { providers: ["anthropic", "deepseek", "openai-codex"] });
+  // The bundled list the render-only preview is drawn from. Never a source of a saved profile. OpenAI's API rows sit beside
+  // Codex's: where both bundle a model the Codex row is the one previewed, and a model only the API bundles (GPT-6.1 Terra in
+  // 18.20.1) is previewed at its API address, never as a Codex row or a served model.
+  const readStarterCatalog = () => omp("readModelCatalog", { providers: ["anthropic", "deepseek", "openai", "openai-codex"] });
   async function readJob(node: JobNode) {
     if (!node.operationId.startsWith(`${OMP_PLUGIN_ID}.`)) throw new WorkflowError("omp_result_unavailable");
     const job = PublicJobSchema.parse(await dispatch("engine.jobs.status", { node }));
@@ -588,7 +613,7 @@ export function createCodeWorkflowClient(transport: Dispatch) {
    * nothing has been probed or paid for yet; an `adoptOnly` run instead ends with `none`, having
    * started and written nothing (and it never initializes an absent workspace). Only `confirm`
    * spends: one benchmark job per provider, then derive, stage (which also keeps the list as the
-   * caller's check of that pool and budget), review, promote, and save the caller's selection
+   * caller's check of that pool and budget), review, and promote with the caller's selection
    * narrowed to what the verified catalog hosts.
    *
    * Every step re-observes before it acts and stops, naming itself, on a moved revision, pool,
@@ -603,6 +628,10 @@ export function createCodeWorkflowClient(transport: Dispatch) {
     run.enter("observe");
     const observed = await run.call(() => code("readConfiguration", { containerId: target.containerId }));
     if (observed.revision !== input.expectedRevision) throw run.fail("code_stale_preferences");
+    // A run without a selection keeps the saved one. Only Code reads what that saved choice resolved to, so
+    // its own read-only review of the list in use admits it before anything is started, written or spent.
+    if (input.selection === null && observed.configuration?.active && observed.configuration.selection)
+      await run.call(() => code("reviewCatalog", { containerId: target.containerId, expectedRevision: observed.revision, source: "active" }));
     let record = observed.configuration;
     if (record === null) {
       if (input.adoptOnly) return { kind: "none" };
@@ -655,12 +684,13 @@ export function createCodeWorkflowClient(transport: Dispatch) {
     await unchangedCharge(charge, run);
     run.progress(charge.providers.map(({ provider, requests: total }) => ({ provider, done: 0, total })));
     let confirmed = false;
+    const previous = record.active && record.selection ? { catalog: compileCatalog(record.active.document), selection: record.selection } : null;
     return {
       kind: "charge", charge, approvedRequests: checks.approvedRequests,
       confirm: (selection, confirmOptions = options) => {
         if (confirmed) return Promise.reject(new WorkflowError("code_verification_confirmed"));
         confirmed = true;
-        return confirmVerification(charge, inUse, selection, verificationRun(confirmOptions, { ...evidence, benchmarkJobIds: [] }), confirmOptions.unasked === true);
+        return confirmVerification(charge, inUse, previous, selection, verificationRun(confirmOptions, { ...evidence, benchmarkJobIds: [] }), confirmOptions.unasked === true);
       },
     };
   }
@@ -669,12 +699,31 @@ export function createCodeWorkflowClient(transport: Dispatch) {
    * read again now, still covers it: an approval withdrawn since the charge was answered stops the
    * run before its first benchmark request.
    */
-  async function confirmVerification(charge: ChargeReview, inUse: ReadonlySet<string>, wanted: Selection | null, run: VerificationRun,
-    unasked: boolean): Promise<VerifiedModels> {
+  async function confirmVerification(charge: ChargeReview, inUse: ReadonlySet<string>, previous: { catalog: CompiledCatalog; selection: Selection } | null,
+    wanted: Selection | null, run: VerificationRun, unasked: boolean): Promise<VerifiedModels> {
     const { target } = charge;
     run.enter("benchmark");
     await unchangedCharge(charge, run);
     if (unasked && !approvalCovers((await run.call(() => code("readChecks", {}))).approvedRequests, charge.requests)) throw run.fail("code_approval_withdrawn");
+    // An advertised ladder can reveal premium intent before spending, but cannot establish
+    // reachability: a plan that cannot be formed leaves that question to the real receipts.
+    let plannedPremium = false, missingDefault = false;
+    try {
+      const catalog = compileCatalog(inventoryPlan(charge.inventory, charge.budget));
+      try {
+        const selection = narrowedSelection(catalog, wanted, charge.budget, provider => charge.pool.providers.includes(provider));
+        plannedPremium = newPremiumLead(catalog, selection, previous) !== null;
+      } catch (error) {
+        if (wanted !== null || !(error instanceof DomainError)) throw error;
+        // A valid advertised list with no balanced default requires deliberate tier intent,
+        // not a benchmark that might charge the same unanswered question again.
+        missingDefault = true;
+      }
+    } catch (error) {
+      if (!(error instanceof DomainError) && !(error instanceof ProbeError))
+        throw run.fail(error instanceof Error ? error.message : "code_invalid_selection");
+    }
+    if (plannedPremium || missingDefault) throw run.fail("code_invalid_selection");
     const progress: ProviderProgress[] = charge.providers.map(({ provider, requests }) => ({ provider, done: 0, total: requests }));
     run.progress(progress);
     const receipts: BenchmarkReceipt[] = [];
@@ -703,11 +752,20 @@ export function createCodeWorkflowClient(transport: Dispatch) {
     const unanswered = unansweredNeeds(derived.exclusions, inUse, wanted, families);
     if (unanswered.length > 0)
       throw run.fail(`code_models_unanswered: ${unanswered.slice(0, 8).join(", ")}${unanswered.length > 8 ? ` and ${unanswered.length - 8} more` : ""}`);
-    // Narrowed before anything is written, so a selection the verified catalog cannot serve stops
-    // here with nothing staged, rather than after a promotion saved its default instead.
-    let selection: Selection;
-    try { selection = clampSelection(compileCatalog(derived.document), wanted); }
-    catch (error) { throw run.fail(error instanceof Error ? error.message : "code_invalid_selection"); }
+    // Invalid selections still write nothing. A newly discovered premium lead instead keeps
+    // the completed check, but cannot promote it without an actual-tier selection.
+    let selection: Selection | null = null, premium = false;
+    try {
+      const catalog = compileCatalog(derived.document);
+      try {
+        selection = narrowedSelection(catalog, wanted, charge.budget, provider => charge.pool.providers.includes(provider));
+        premium = newPremiumLead(catalog, selection, previous) !== null;
+      } catch (error) {
+        if (wanted !== null || !(error instanceof DomainError) ||
+          !hasPremiumProfile(catalog, charge.budget, provider => charge.pool.providers.includes(provider))) throw error;
+        premium = true;
+      }
+    } catch (error) { throw run.fail(error instanceof Error ? error.message : "code_invalid_selection"); }
     await run.hold();
     run.enter("stage");
     const pool = await unchangedCharge(charge, run);
@@ -717,15 +775,13 @@ export function createCodeWorkflowClient(transport: Dispatch) {
         poolIdentityDigest: charge.pool.poolIdentityDigest, budget: charge.budget } }));
     run.evidence.revision = staged.revision;
     run.enter("review");
-    const review = await run.call(() => code("reviewCatalog", { containerId: target.containerId, expectedRevision: staged.revision, source: "draft" }));
+    if (premium || selection === null) throw run.fail("code_invalid_selection");
+    const review = await run.call(() => code("reviewCatalog", { containerId: target.containerId, expectedRevision: staged.revision, source: "draft", selection }));
     if (review.catalogDigest !== staged.draft?.digest || canonicalJobJson(review.provenance) !== canonicalJobJson(staged.draft.provenance))
       throw run.fail("code_preview_changed");
     run.enter("promote");
-    const promoted = await run.call(() => code("promoteCatalog", { containerId: target.containerId, expectedRevision: staged.revision, source: "draft", reviewDigest: review.reviewDigest }));
-    run.evidence.revision = promoted.revision;
-    run.enter("select");
-    const configuration = canonicalJobJson(promoted.selection) === canonicalJobJson(selection) ? promoted
-      : await run.call(() => code("select", { containerId: target.containerId, expectedRevision: promoted.revision, selection }));
+    const configuration = await run.call(() => code("promoteCatalog", { containerId: target.containerId, expectedRevision: staged.revision,
+      source: "draft", selection, reviewDigest: review.reviewDigest }));
     run.evidence.revision = configuration.revision;
     if (!configuration.active?.provenance) throw run.fail("code_preview_changed");
     return { configuration, exclusions: derived.exclusions, provenance: configuration.active.provenance };

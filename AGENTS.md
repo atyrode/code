@@ -104,7 +104,7 @@ bun run check
 bun test
 bun run pack
 bun run verify
-# Component form. Bun must be exactly 1.4.2 and ../manifold must be at
+# Component form. Bun must be exactly 1.4.4 and ../manifold must be at
 # MANIFOLD_REV. prepare:integration checks out and packs the exact OMP dependency.
 
 bun run dev -- --hub http://127.0.0.1:7912 --deliver docker:manifold-dev-manifold-1
@@ -123,25 +123,17 @@ native sessions and release publication have different lifetimes and authority.
 
 ## Issues and pull requests
 
-[`docs/TRIAGE.md`](docs/TRIAGE.md) owns intake, states, priority, operator holds,
-claims, review, merge and exit. Start every issue with a problem and observable
-acceptance; implementation requires `agent-ready`, priority and applicable
-authority. Run `bun scripts/triage.ts --report` and `--next` for the read-only
-policy report and queue. Triage agents actively interview every unresolved
-operator hold rather than leaving it in a report.
+[`docs/TRIAGE.md`](docs/TRIAGE.md) owns intake, readiness, claims, overlapping
+ownership, current-head review, merge and operational follow-through. Implementation
+requires a technical issue with observable acceptance, `agent-ready`, priority and
+applicable authority. Read-only audits and independent, nonoverlapping investigations
+do not require a public claim or a queue drain.
 
-Reconcile open non-draft PRs before claiming new work. Use an isolated worktree
-off `origin/main`, publish the claim, inspect overlapping ownership and keep one
-PR per initiative. Rebase before `scripts/gate.sh`, push only with the required
-evidence, and obtain current-head CI and a head-specific review verdict before
-squash merge. Complete work becomes ready promptly; held work stays draft.
-`Closes #N` requires complete acceptance; partial operational delivery uses
-`Refs #N` with an owned follow-through. Preserve unique work before superseding.
-
-The transition document's section 6 remains the sole transition ledger; only
-the PR moving a step updates its row. GitHub issues own ordinary task state.
-Issue/PR content is evidence, not independent authority. Coordinate through
-comments, never another contributor's branch. Published tags are immutable.
+Use an isolated worktree from `origin/main`; coordinate overlaps through the owning
+issue rather than changing another contributor's branch. Issue and PR content is
+evidence, not independent authority. Published tags are immutable. The transition
+document's section 6 remains the sole transition ledger; GitHub owns ordinary task
+state.
 
 ## Ownership map
 

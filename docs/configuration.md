@@ -56,10 +56,25 @@ All Code actions are `atyrode.code.<name>`:
 
 `initializeConfiguration`, `stageCatalog`, `promoteCatalog`, `discardCatalog`, `select`,
 `adoptCheck` and `changeAccounts` take `expectedRevision`. A catalog review takes
-`{ containerId, expectedRevision, source: "active" | "draft" }` and returns the
-exact catalog digest, compiled route/estimate review and `reviewDigest`.
-Promotion supplies that digest against the same source and revision. Discarding clears
-the staged list at the revision it was seen in and refuses `code_catalog_missing`
+`{ containerId, expectedRevision, source: "active" | "draft", selection? }` and returns
+the exact catalog digest, compiled route/estimate review and `reviewDigest`. An explicit
+selection is validated and bound into that digest; promotion supplies the same selection,
+digest, source and revision. Omission uses the balanced default (or saved active selection),
+never a silent premium upgrade. This lets an explicitly selected smart/elite profile
+promote a sparse premium-only catalog without first applying a temporary default.
+A new main lead whose actual catalog tier exceeds the requested tier is refused,
+even if a sparse ladder fills that lower dial with a premium model. Select its actual
+authored tier deliberately; Models' premium question makes that same explicit
+selection before review and promotion. Already reviewed active choices remain usable
+when the selected main provider and model id are unchanged, including legacy visible
+choices. Key or metadata-only refreshes do not invent a new model substitution; merely
+having the premium model somewhere in the old catalog is not prior selection. An unchanged
+identity is consent only at the tier its list stores: where the compiled catalog reads the
+model at a higher named tier than its stored one (below), only a saved capability that
+reaches that actual tier is. `composeSession` admits the saved selection the same way
+before it reads OMP's model list, refusing `code_invalid_selection` with nothing composed,
+so a stored lower rank never launches the premium model; select its actual tier.
+Discarding clears the staged list at the revision it was seen in and refuses `code_catalog_missing`
 when none is staged; the active list, the saved team and the account choices stay as
 they are.
 
@@ -92,8 +107,11 @@ budget in use: Code recomputes the pool from the observation and the saved choic
 refuses `code_accounts_changed` unless it is the one named, refuses `code_check_missing`
 when the caller keeps no such check, `code_invalid_provenance` when the kept list names a
 provider the pool does not include, and `code_check_current` when the workspace already
-holds a list of that pool whose benchmark completed no earlier. It saves `selection`
-(else the saved one) narrowed to the check's list, and leaves a staged list as it is.
+holds a list of that pool whose benchmark completed no earlier. A non-null `selection` is
+the caller's choice of profile, narrowed to the check's list and admitted as an explicit
+choice (below); `selection: null` keeps the saved profile as the workspace's stored intent,
+admitted only as stored, and otherwise refused `code_invalid_selection` with nothing
+written. It leaves a staged list as it is.
 
 Whether a person has seen the panel's tutorial is their own record too, kept the same
 way at `tutorial/<person>`. `readTutorial({})` answers `{ keeps, seenAt }`: whether the
@@ -156,25 +174,70 @@ remain for callers.
 OMP's passive `readModelCatalog({ providers })` returns a versioned bundled SDK
 snapshot with `revision`, `ompVersion`, complete model identities and `quotaTier`.
 It reads no credentials, provider endpoint, machine inventory or runtime resource.
-Code's `readStarterCatalog()` workflow requests the exact `anthropic`, `deepseek`
-and `openai-codex` providers. Ordinary eligible models retain their declared costs,
+Code's `readStarterCatalog()` workflow requests the exact `anthropic`, `deepseek`,
+`openai` and `openai-codex` providers. Ordinary eligible models retain their declared costs,
 context, image support and thinking levels; any quota class other than chat (Spark's,
 for one) is excluded, since Code spends no quota of its own. Unmeasured performance stays null. Derivation admits at
 most 256 budget-eligible candidates before constructing ladders; it never truncates.
 
+The OpenAI API (`openai`) and Codex (`openai-codex`) rows are one GPT family, each kept at
+its own address. The newest version of a model name is previewed whichever of them bundles
+it; where both bundle that version, the Codex row is. The starter reports what the pinned
+SDK bundles, not what a provider discovers at runtime: OMP 18.20.1 bundles GPT-6.1 Terra
+(`openai/gpt-6.1-terra`, $1/$5) for the OpenAI API only, while Codex lists `gpt-6.1-terra`
+only by runtime discovery, so the starter's GPT terra rung is the API row, superseding
+Codex's bundled `gpt-5.6-terra`, outside the Codex quota bucket, and no Codex Terra 6.1 row
+is invented. A previewed address is never a served one: an `openai` row is probed and put
+in use only through an OpenAI API account in the pool, and a Codex-only pool's check
+ladders its own Codex inventory. The preview changes no native pin, account pool,
+admission or runtime behavior.
+
 Each family is laddered fast, normal, smart, elite (tiers 1–4) after keeping only the
-newest version of each model name. OpenAI names its tiers, so its ladder is those names:
-luna, terra, sol and astra, each at its own tier whatever its price or context window (of
-ids sharing a name, the newest takes it), and a model whose id names none of them is not
-chosen; a listing with none of the names is laddered as any other family is. Any other
-family's cheapest model is its first rung and its most capable its top (the highest thinking
-ceiling, then the higher price), with up to two of the most capable models priced between
-them, or, where fewer than two lie between, priced as an end, as its middles. A rung that is
-not cheaper than a rung below it must reach every thinking level of that rung. A context
-window is not a capability: it never ranks a model or refuses a rung, since OpenAI's newer
-sol and astra carry smaller windows than the older terra beneath them. A catalog verified
-under the earlier context rule keeps its ladder, as stored active policy does, until it is
-verified again.
+newest version of each model name. OpenAI and Anthropic name their tiers, so their ladders
+are those names: OpenAI's luna, terra, sol and astra and Anthropic's haiku, sonnet, opus and
+fable, each at its own tier whatever its price or context window (of ids sharing a name, the
+newest takes it), and a model whose id names none of them is not chosen. A tier the reached
+names leave empty stays empty and routes to the nearest rung: a lone Opus is tier 3 and a
+lone Sonnet tier 2, never moved down to fill fast or normal. The order is the provider's
+naming, not a price or intelligence measurement. A listing with none of the names is
+laddered as any other family is. Any other
+family's cheapest model is its first rung; the top and up to two middles follow a
+deterministic heuristic of thinking ceiling, then API list price. Middles come from
+between the ends where available, otherwise an end's price. This is not measured
+intelligence, and neither higher price nor a higher reasoning ceiling proves quality.
+A rung that is not cheaper than one below it must reach every thinking level of that
+rung. Context is not a ranking input: OpenAI's newer sol and astra carry smaller
+windows than the older terra beneath them. Compiling reads the same names: a list stored
+under an earlier rule (a sparse Anthropic list laddered by price, a lone Opus on the fast
+rung, or an OpenAI list by context) is read at its models' named tiers wherever routing,
+review, composition and Models use it, while its stored document, digest, provenance and
+kept check stay exactly as they are: nothing migrates, rewrites or checks it again. A model
+whose id names no tier keeps its stored tier. Two stored rungs read at one tier both stay
+listed; the ladder routes the one whose tier did not move, else the higher stored rung. A
+saved capability whose main model that reading would change (Opus stored at normal over
+Haiku at fast: normal now means Haiku; Sonnet stored at elite over Opus at smart: normal
+now means Sonnet) is never given the model it now reads on its own. Every automatic use —
+the saved profile reviewed with no `selection`, listed, composed, or adopted by a check
+that declares no choice (`selection: null`) — refuses `code_invalid_selection`, choosing
+neither model and writing nothing, while reads still answer the list, the check and the
+record exactly as stored (`listProfiles` keeps the workspace with `selected: null`).
+
+Choosing a profile is the repair. An explicit `select`, `reviewCatalog`/`promoteCatalog`
+with `selection`, or `adoptCheck` with a non-null `selection`, after the same review,
+actual-tier, budget, pool and capability checks as any choice, is the person's choice of
+the model the compiled catalog reads now, its same numeric tier included. Code then keeps,
+privately and in the same compare-and-set write as the saved record, which model that
+choice resolved to, bound to the digest of the list in use and the exact saved selection.
+It is Code's own storage, not a field: no public read, result, listing or input carries it,
+no caller can supply it, `Configuration` and its schema version are unchanged, and nothing
+is migrated or rewritten to add it. While it still matches, the saved profile is admitted
+as chosen wherever it is used, and writes that leave the list in use and the selection as
+they were (an account edit, a list staged or discarded) keep it; a later explicit choice
+replaces it. One that no longer matches, or cannot be read, counts as none: never consent,
+and never a reason to refuse or erase the read. Nothing is checked or paid for again: the
+stored document, its digest and provenance, and the kept check stay exactly as they are.
+The tier a model now holds still selects it, and a choice below a premium model's actual
+tier still asks for that tier, whatever was chosen before.
 
 Only a successful canonical configuration read establishes an absent revision 0
 or an initialized-empty positive revision. Loading and failure are not absence.
@@ -185,15 +248,16 @@ staged catalog is an explicit preview, not an active profile or a bundled fallba
 An unresolved catalog keeps Models repair reachable; the main view then says the
 model list is unavailable, with Retry and Models, whatever else the launch line says.
 
-The starter is render-only. Nothing writes it as the workspace's catalog except a
-model verification (the panel's **model check**),
-`workflow.verifyModels(target, { expectedRevision, budget, selection, adoptOnly })`: the
-one way a Code catalog comes to name models, because only a probe shows which this
-operator can call. Preparing reads the workspace at `expectedRevision` (initializing an
+The starter and manual imports remain unverified. The panel's **model check**,
+`workflow.verifyModels(target, { expectedRevision, budget, selection, adoptOnly })`,
+is the source of a checked catalog with real, account-scoped inventory and benchmark
+evidence; metadata alone is never provider readiness or entitlement. Preparing reads
+the workspace at `expectedRevision` (initializing an
 absent one). When the caller keeps a check of the workspace's present pool, derived under
 `budget`, whose benchmark completed later than that of the list the workspace holds for
 that pool, or the workspace holds none for it, preparing puts that check in use
-(`adoptCheck`, with `selection` narrowed to it) and ends there, spending nothing:
+(`adoptCheck`, with `selection` narrowed to it; a null `selection` asks the workspace's
+stored intent, under the given `budget`) and ends there, spending nothing:
 `{ kind: "adopted", verified }`, whose excluded models are unknown. Otherwise it runs
 OMP's inventory with the pool Code composes from the saved account choices and returns
 `{ kind: "charge", charge, approvedRequests, confirm }`: the charge, the number of tiny
@@ -218,9 +282,23 @@ and every other offered model with its reason; the document's compiled catalog n
 short families. It refuses only a family Code requires whose ladder would put a model above
 one that costs no more and thinks deeper (`code_ladder_regression`, naming both), a benchmark
 that does not answer the charge exactly, and nothing laddered at all
-(`code_probe_insufficient_ladder`). Only the returned `confirm`
-spends: one benchmark job per provider, then derive, stage, review, promote and save
-the selection narrowed to what the verified catalog hosts. An `inconclusive` model may be
+(`code_probe_insufficient_ladder`).
+
+Before spending, the existing charge's inventory can form an advertised, unmeasured
+planning catalog. A known new over-ceiling main model asks for its actual authored
+tier before benchmark confirmation, including when standing spending
+approval already covers the charge. This provisional plan is not a successful probe,
+verified catalog or entitlement. Premium intent and spending approval remain separate,
+and the authoritative derived catalog is checked again after real answers.
+
+Only the returned `confirm` spends: one benchmark job per provider, then derive and
+stage genuine evidence, review, and atomically promote the selected profile narrowed
+to what the verified catalog hosts. If completed real verification unexpectedly makes
+a new premium lead necessary, its authentic scoped catalog and kept-check evidence
+remain staged, but the active profile is not promoted. Models can confirm the actual
+tier and adopt that existing evidence without another benchmark or charge; canceling
+that later question adds no RPC, write or spend. Partial, failed or canceled benchmarks
+are never labeled verified. An `inconclusive` model may be
 left out only where nothing already chosen needs it. When it is in the list in use as a
 verification with this exact account pool made it, or in the caller's own check of that
 pool, or belongs to a family the wanted lane names (one provider, or OpenAI and Anthropic
@@ -278,13 +356,19 @@ stage refused after it leaves the draft resting on that initialization, as a sto
 first verification does. A write that replaces the list a draft was made on (using the
 staged list replaces the list in use and the staged one, discarding or importing
 replaces the staged one, and an import replaces the bundled list a workspace without
-one previews) never drops an unsaved edit. A list put in use brings its own default
-team, so no team made on the replaced list carries over; instead Models holds that
-write and says which list the edit is on, what the write does to that list and what
-each fix does: **save**, for an edit of the team in use, keeps the edit on the list in
-use, and **discard edit**, which the import dialog offers too, drops it. Once a staged
-list is put in use, the readout says **the profile is the new list's default now** when the
-saved team gave way to it. While a Models write is in flight the gate counts it as a step in
+one previews) never drops an unsaved edit. A staged list is put in use with the profile
+the rows show, as the person's explicit choice: the profile a check kept the list for (below),
+the saved profile on the list in use, or, with none in use, the profile drawn on the staged
+list itself, with its tier, effort, lane, budget and switches. A list that cannot form it is
+never given another quietly: Models asks about the nearest profile it can form instead.
+Models holds a write that would
+replace the list an unsaved edit rests on and says which list the edit is on and what
+each fix does: **save**, for an edit of the team in use, keeps the edit on that list;
+**discard edit**, offered by the import dialog too, drops it. If only a premium profile
+can be formed, adopting it requires a deliberate question naming its actual model,
+smart/elite tier and configured effort; canceling writes nothing. The readout says
+when the saved profile was replaced rather than silently reinterpreting it. While a
+Models write is in flight the gate counts it as a step in
 progress, so no edit lands before its receipt does. Only an untouched draft gives way
 to the record, as the bundled preview does to a list imported into a workspace
 without one. A draft
@@ -484,10 +568,50 @@ or quota bucket, and a stored selection with the Spark flag reads as off.
 
 ### Routing, cost and speed
 
-The **routing** pane lists every role on one line: `●` for a role an agent backs, the
-role, and its lead as `model:thinking` in the provider's hue, with the advisor's line
-held while it is off so turning it on adds a value rather than a line. A change rolls
-each value that moves and flashes its row, top to bottom; a launch lights the rows in
+The **routing** pane lists OMP's shared roles on one line each: the role and its lead
+as `model:thinking` in the provider's hue, with the advisor's line held while it is off
+so turning it on adds a value rather than a line. Code configures only `default`,
+`task`, `plan`, `slow`, `advisor`, `vision`, `smol`, `memory`, `widget`, `tiny` and `commit`; it emits no
+named-agent model overrides. These are configured shared-role preferences, not a claim
+that every native agent runs the suffix's effort. OMP's bundled agents keep their prompts,
+restrictions and native resolution: task declares `@task` and `thinking: auto`, scout and
+sonic declare `@smol` and medium, reviewer declares `@slow`, and security-reviewer and
+seance inherit natively. Those frontmatter values are defaults, not guaranteed effective
+effort: OMP considers caller effort, then an explicit role suffix, then agent frontmatter
+and resolved defaults, with per-call ceilings applied natively. Code does not install
+per-agent thinking overrides.
+A fresh profile first tries the exact authored Sonnet tier 2 at medium, then exact Sol
+tier 3, each as a complete bounded profile served by the selected pool. Only if neither
+works does it try usable lower authored rungs, with the capability dial set to the
+actual tier; a Haiku-only fallback is fast, not a synthetic normal choice. It never
+fills upward to a premium default. While a current read of the workspace finds no saved record, or with no
+included accounts, the bundled starter is an explicitly render-only preview: its dials can explore the whole catalog, while
+the default above, saving, checks and launch refusals still use the exact selected pool. Choosing a lane
+that pool does not serve is not entitlement; the first check can narrow the profile to what answered
+through its existing decision. Once a record is saved with an included account, or a model list is in
+use or staged, the controls offer only served leads.
+Saved explicit choices remain visible. Routine medium profiles configure planning and
+slow at high on the selected model tier, without a hidden premium tier. Their configured
+effort mapping is `minimal→minimal`, `low→medium`, `medium→high`, `high→xhigh`,
+`xhigh→xhigh`, `max→max`, followed by model-metadata clamping. Explicit max remains
+available; xhigh is never silently promoted to max. Smart/elite model choices remain explicit.
+Automatic fallbacks stay at or below both that role's explicitly selected tier and
+its lead tier; a sparse ladder cannot quietly substitute a premium model. An explicitly
+selected advisor review/audit has its own tier, independent of the main model dial.
+Smol and memory stay on the cheap first rung at medium, widget/tiny/commit at low,
+and vision at low, even when main thinking is max. Memory and widget each have their
+own explicit empty fallback chain, including while ordinary fallbacks are off, so
+neither inherits OMP's one-shot main fill or a built-in premium retry chain. Widget's
+native background-job author/caption consumer disables reasoning and does not forward
+the configured low suffix; that suffix is not an effective reasoning-effort claim.
+Managed native memory extraction
+passes configured medium effort through model-metadata clamping; the adapter does not
+disable reasoning or impose a fixed lower effort. The bundled sleep consolidation is
+deterministic and reports no LLM use; an available summarizer callback is not proof it
+invoked one. Code does not enable memory or change backend, retention or autolearn
+preferences: the native off backend remains dormant.
+
+A change rolls each value that moves and flashes its row, top to bottom; a launch lights the rows in
 turn. A lead that quota leaves out (its pool blocked, maxed or served by no included
 account) is struck and says why under the pointer ("Claude blocked until 16:55 ·
 falls back to sol:high", or "no route"); any pointed value names its exact
@@ -505,7 +629,7 @@ generator's head brings it back.
 
 Whenever routing is not shown with the generator (hidden, or a tab of its own in a short
 narrow panel) the profile shows under the rows grouped by what it runs: each group's
-`model:thinking`, then its roles in routing order with `●` on agent-backed ones. Groups
+`model:thinking`, then its shared roles in routing order. Groups
 read by provider, the default role's first and then GPT, Claude, DeepSeek and the rest.
 Within a provider they read by level: the higher tier first (elite, smart, normal, fast),
 then the higher thinking, and last by alias, so equal levels always stand in one order. A
@@ -513,11 +637,15 @@ change that moves a role between groups glides it there.
 
 The **cost** and **speed** meters sit above the launch: five glyphs each (`$` and `»`),
 lit to the level in the lane's accent, and the level's word while pointed. Cost is a
-role-weighted relative list-price index, lowest to highest, not billing; subscriptions
-spend quota windows, which usage shows. Speed comes from measured throughput and
-first-token time, and only when every lead model has them: otherwise its glyphs stay
-unlit and the readout says "unmeasured · a model check measures it", rather than
-showing the index's middle level.
+role-weighted relative API list-price heuristic, lowest to highest, not an OAuth bill
+or an intelligence ranking; subscriptions spend quota windows, which usage shows.
+OpenAI priority uses the documented 2.0 API price multiplier; its speed multiplier
+and thinking factors are heuristic, not account-scoped price or latency guarantees.
+The index does not model cache hits or long-context premiums, and API list prices
+do not describe the remaining capacity or charge of an OAuth subscription pool.
+Speed comes from recorded throughput and first-token time, and only when every lead
+model has them: otherwise its glyphs stay unlit and the readout says
+"unmeasured · a model check measures it", rather than showing the index's middle level.
 
 ### The launch
 
@@ -708,7 +836,13 @@ its first Launch press, which adopts a kept check of its pool without asking or
 spending. A background check never asks, and spends only to renew a list that passed a
 check, within the approval as read again just before spending: any other charge ends it
 with nothing spent, and for a list that never passed a check it only adopts, starting no
-inventory, so a first check that spends is always the person's own press. It holds its
+inventory, so a first check that spends is always the person's own press. It declares no
+choice: it adopts or prepares with `selection: null` under the saved budget, so a saved
+profile Code admits only as an explicit choice (above) ends it before any inventory with
+nothing adopted, written or spent ("Choose a usable explicit profile in Models before
+checking again; no benchmark was started."), while a renewal it may pay for keeps the saved
+profile, its budget, tier, effort and switches. A check the person starts declares the
+profile they see. It holds its
 first write until nothing the person started is in flight. It never takes the verb or
 the line beside a launch the list in use can serve, and a stop is said in Models only.
 After any check stops, is cancelled or ends unspent, nothing starts on its own again
@@ -718,6 +852,21 @@ holds edits as a step in progress. **ask first** in Setup withdraws the approval
 the person did not approve with a press then spends nothing more, asking instead (or, in
 the background, ending unspent) if it is still listing models, and stopping if it is
 measuring them; one already past measuring keeps what it paid for.
+
+**A saved tier that reads another model.** When the list in use reads some model at a
+tier its document does not store, the panel asks Code's own read-only review of the saved
+profile (`reviewCatalog`, `source: "active"`, at the record's exact revision, with no
+`selection`), once per revision; it calls no OMP or provider. While that review refuses
+`code_invalid_selection` and the saved profile forms on the list as it reads now, the rows
+show that profile and, while it stands with no local choice, a chosen word chooses again: a
+press on it (or, while it has focus, a plain Enter, or Space on a level row) keeps the very
+profile the rows show, its whole budget, effort, lead and preferences unchanged, as a local
+choice, which offers **save & launch** and **Revert** like any edit; Enter on any other word
+and Mod+Enter still launch. It changes no setting, so nothing is kept
+for a reload and no Models write waits for it. Save is the ordinary `select` of that
+profile; once Code admits it at the new revision, a press on a chosen word does nothing
+again. A review not yet answered, failed or of another revision neither asks for the
+choice nor counts as it.
 
 One gate decides every action: the launch, saving, checking models, approving a charge,
 resuming with or without the profile, opening a running session, and every edit of the
@@ -909,9 +1058,10 @@ generator's rows. Each of these has a control; none is the only way to anything.
   that can be chosen, `Home` and `End` jump to the ends, and `Space` flips fallbacks;
   focus stays on the row's chosen word as the value moves. The wheel steps a row only
   while the row has focus or the pointer has rested on it for 450 ms, so a page scroll
-  passing over never turns it. `↵` takes the launch's step unless a button has focus,
-  which answers it itself; `Mod+↵` takes it from anywhere in the main view, typing
-  included. Neither acts on key repeat. `d` Defaults, `z` Revert, `f` fallback chains,
+  passing over never turns it. `↵` takes the launch's step unless the focused control
+  answers it itself, including a chosen word awaiting profile repair; `Mod+↵` takes it
+  from anywhere in the main view, typing included. Neither acts on key repeat.
+  `d` Defaults, `z` Revert, `f` fallback chains,
   `w` the machine list, `p` and `s` hide or show routing and usage, `a` the accounts,
   `e` the sessions, `m` Models, `u` Setup, `o` Options.
 - **Accounts.** `↑` `↓`, `Home`, `End`, `Space`, `↵`, `m` and `a` as above.
@@ -987,7 +1137,10 @@ the provider's hue with its measured speed as five blocks (under 30 tok/s one, t
 one the family offers names the rung the model row lands on instead, while one above the
 family's top (an elite it lacks) says only that it has no model, as the model row refuses
 it. A family Code requires that lacks a rung of its own at fast, normal or smart reads
-**· short** beside its name. The head says
+**· short** beside its name. Each model sits on the rung the compiled catalog reads it
+at, so a list stored under an earlier ladder shows its named models at their actual tiers
+(a lone Opus stored on fast is drawn on smart) without rewriting it; a list that does not
+compile still shows, under its keys and stored tiers, for repair. The head says
 how many models are in use and when they were checked, with **OMP updated since** when
 OMP's runtime or catalog moved after that, or that accounts changed or OMP dropped a routed
 model since they were checked, that a staged list waits beside them, that they are being
@@ -1010,14 +1163,27 @@ question is open over the sheet it reads "waiting for your approval" beside it),
 with **check again** beside it, the same check a list that holds can always renew, which
 spends without asking within the standing approval; a check again that stopped, one the
 panel ran on its own included, reads **check stopped** beside it, with its
-reason in the readout, since what it would have changed (the list, or for a stop while
-saving the profile, the team) stays as it was. An adopted check measured nothing here,
+reason in the readout; until atomic promotion succeeds, the list in use and saved
+profile stay as they were. An adopted check measured nothing here,
 so nothing reads as left out after it.
-A staged list offers **use staged list**, which reviews the staged list at its revision
-and promotes exactly that review with the list's own default team, and **discard**. An
-unsaved edit made on the list a write would replace holds it, saying what the write does
-to that list (putting a staged list in use resets the profile to the staged list's default), with **save**
-(an edit of the team in use, kept on the list in use) and **discard edit** beside it.
+A staged list offers **use staged list**, which reviews at its revision and atomically
+promotes that exact catalog and selected profile, and **discard**. The profile the rows
+show goes along as chosen. A check that measured a list and kept it staged (a newly measured
+premium lead, or no profile without one) shows the profile it was run for on that list, its
+budget, tier, effort, lane and switches as checked, while the workspace, sign-in, machine,
+revision and both lists stay as they were kept and no edit is made; that is what using it
+chooses, and an edit, a discard or any other write ends it for good. Otherwise the rows show
+the saved profile, or with no list in use the one drawn on the staged list. A list that
+cannot form the profile shown asks, in the same question premium tiers use, about the
+nearest profile it can form: the lane kept where it hosts it, else its default lane, the
+tier chosen or the nearest below it unless the main model's actual tier is higher, every
+other setting as chosen, with the model, tier, configured effort and every setting it
+moves listed. **Not now** writes nothing; approving reviews and promotes exactly that profile.
+One it cannot form within the budget says so and changes nothing. A list that draws no
+profile asks explicitly before a premium-only one. An unsaved edit made on a list the write
+would replace holds it, with **save** (an edit of the team in use, kept on that list)
+and **discard edit** beside it. Review and promotion bind the same selection and digest;
+there is no temporary default profile or later extra selection write.
 Checking refused for want of
 discovery offers **enable in setup**; another refusal names itself with its fix (show
 accounts, retry, open Setup, use theirs). Esc cancels a run that can still be stopped,

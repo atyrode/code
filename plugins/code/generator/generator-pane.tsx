@@ -23,6 +23,7 @@ import { strandsNote } from "./earlier-model.ts";
 import type { RecentTeam } from "./recent-teams.ts";
 import { profileGroups, type LedgerRow } from "./routing-model.ts";
 import { Profile, rippleTeam } from "./routing-pane.tsx";
+import { TIERS } from "./sheets-model.ts";
 import { generatorRows, ROW_EXTRAS, type GeneratorRow, type RowId, type RowWord } from "./rows-model.ts";
 import {
   changeSentence, commitKind, estimateReadouts, fixView, launchLine, launchReadout, laneFix, poolCounts, quotaParts, refusalView, reviewDifferences,
@@ -49,7 +50,7 @@ const CHECK = "M3 8.5 6.5 12 13 4.5";
 const STEP_WORDS: Readonly<Record<VerificationStep, string>> = {
   observe: "reading the accounts", initialize: "setting up the workspace", adopt: "using your earlier check", inventory: "listing models",
   draft: "preparing the charge", benchmark: "measuring models", derive: "building the model list", stage: "saving the model list",
-  review: "reviewing the model list", promote: "putting the model list in use", select: "saving the profile",
+  review: "reviewing the model list", promote: "putting the model list in use",
 };
 /** What the cost meter is, said in the readout while it is pointed. */
 const COST_NOTE = "a relative list-price index; subscriptions spend quota windows, which usage shows";
@@ -170,9 +171,19 @@ export function GeneratorPane(props: GeneratorPaneProps) {
   // The saved workspace profile, while the rows hold an unsaved edit of it: what `z` returns to and the launch's save would change.
   const saved = model.localDraft?.source === "active" ? model.record?.selection ?? null : null;
   const rosterError = model.rosterError !== null;
+  // A starter with no included account is a render-only model preview: Defaults, like its dials, draws on the catalog,
+  // while the workbench keeps the exact empty pool for every save, check and launch refusal. Otherwise Defaults is the
+  // served-aware default the workbench forms.
+  const defaultServed = model.profile?.source === "starter" && served?.size === 0 ? null : served;
+  // A starter's dials may also explore the catalog while the current, successful read of this workspace says it has no
+  // saved record (`configurationCurrent` also excludes a save receipt that read has not caught up with). Exploring is not
+  // entitlement: saves, checks and launches still judge the exact pool, and the first check's existing decision can
+  // narrow the profile to what answered. Every other profile's controls keep the served restriction.
+  const recordAbsent = model.configurationCurrent && model.queries.configuration.data?.configuration === null;
+  const optionServed = model.profile?.source === "starter" && recordAbsent ? null : defaultServed;
   const context = useMemo<StatementContext | null>(() => catalog && selection && controlsReview ? {
-    catalog, selection, review: controlsReview, served, nowMs: Date.now(), pools, machines, rosterError, machineId: model.machineId, omp: presence,
-  } : null, [catalog, selection, controlsReview, served, pools, machines, rosterError, model.machineId, presence]);
+    catalog, selection, review: controlsReview, served: optionServed, nowMs: Date.now(), pools, machines, rosterError, machineId: model.machineId, omp: presence,
+  } : null, [catalog, selection, controlsReview, optionServed, pools, machines, rosterError, model.machineId, presence]);
   const slots = useMemo(() => context && statementSlots(context, vocab), [context, vocab]);
   // The machine is chosen from the roster alone: a profile that cannot be formed (a first use whose bundled list failed) still has somewhere to run.
   const machineOptions = useMemo(() => machineSlot({ machines, rosterError, machineId: model.machineId, omp: presence }).options,
@@ -192,7 +203,9 @@ export function GeneratorPane(props: GeneratorPaneProps) {
   const estimates = useMemo(() => catalog && shown ? estimateReadouts(catalog, shown) : null, [catalog, shown]);
   const groups = useMemo(() => profile && ledger ? profileGroups(ledger) : null, [profile, ledger]);
 
-  const verb = verbView({
+  const verb = model.record?.draft?.provenance != null && verification.phase === null && !model.busy && !model.chaining
+    ? { label: "Review in Models", state: "ready" as const, refusal: null, saves: false, checks: false, opens: "models" as const }
+    : verbView({
     step: model.step, verdict: model.verb, busy: model.busy, inFlight: model.inFlight, chaining: model.chaining, unsaved: model.unsaved,
     draft: model.localDraft !== null, edited: model.edited, phase: verification.phase, mode: verification.mode,
     serves: listServes({ verification, unservedLead: model.unservedLead }),
@@ -209,7 +222,8 @@ export function GeneratorPane(props: GeneratorPaneProps) {
   // The other machine a fix offers: one where OMP answers, else any other online one.
   const others = machines?.filter(entry => entry.id !== model.machineId && entry.online && entry.revoked !== true) ?? [];
   const other = others.find(entry => presence?.get(entry.id) === "ok") ?? (presence ? null : others[0] ?? null);
-  const charge = verification.phase === "charge" ? verification.charge : null;
+  const premium = verification.premium;
+  const charge = verification.phase === "charge" && premium === null ? verification.charge : null;
   const progress = verification.progress?.providers.reduce((sum, entry) => ({ done: sum.done + entry.done, total: sum.total + entry.total }), { done: 0, total: 0 }) ?? null;
   // A check that stopped says so until the next one starts; the verb, Launch again, is its retry. One the panel ran on its own
   // stopped beside a launch it never held up, so it is said in Models only.
@@ -239,7 +253,11 @@ export function GeneratorPane(props: GeneratorPaneProps) {
     nobodyServes: served !== null && served.size === 0, listFailure,
     ompMissing: model.ompMissing || presence?.get(model.machineId) === "absent", accountsProblem: model.accountsProblem, configurationFailed: model.configurationFailed,
   };
-  const line = launchLine(status, vocab);
+  const launchStatusLine = launchLine(status, vocab);
+  const line: StatusLine | null = stoppedVerifying && selection === null
+    ? { parts: launchStatusLine?.parts ?? [], actions: [...(launchStatusLine?.actions ?? []),
+      { kind: "fix", key: "actual-tier", label: "Choose a profile in Models", fix: { kind: "open", place: "models" } }] }
+    : launchStatusLine;
   // A refused press's question goes with its refusal: a refusal that lifted or changed, even within its kind, is not asked
   // again without a press.
   const refusal = verb.state === "refused" && verb.refusal ? refusalView(verb.refusal, status, vocab) : null;
@@ -313,19 +331,26 @@ export function GeneratorPane(props: GeneratorPaneProps) {
     announce(text);
     say({ value, text, warn: true, color: null });
   }
+  // The saved profile Code refuses, shown as it reads with no local draft: its selected words choose it again for Save.
+  const reselect = model.savedChoiceNeeded && model.localDraft === null && model.profile?.source === "active";
   function commitTeam(next: Selection, say: string, value: string): boolean {
     if (!selection) return false;
     if (!teamGate.open) { refuse(teamGate.refusal.text, value); return false; }
     const kind = commitKind(next, selection, model.record?.selection ?? null, model.localDraft?.source ?? null);
-    if (kind === "none") return false;
-    if (kind === "discard") model.actions.discardChanges();
+    // The saved profile Code refused as it reads now is chosen again here, its same word included: an explicit choice the
+    // rows keep for Save, never "nothing changed" or a return to the saved profile that would keep the refusal.
+    const chosenAgain = model.savedChoiceNeeded && model.record?.selection != null && sameTeam(next, model.record.selection) &&
+      model.localDraft?.source !== "draft" && !(model.localDraft !== null && sameTeam(model.localDraft.selection, next));
+    if (kind === "none" && !chosenAgain) return false;
+    if (kind === "discard" && !chosenAgain) model.actions.discardChanges();
     else model.actions.updateSelection(next);
     announce(say);
     return true;
   }
   function choose(row: GeneratorRow, word: RowWord, via: "pointer" | "keyboard" | "scrub") {
     const value = row.kind === "switch" ? `${row.label} ${word.text}` : word.text;
-    if (!word.option?.selection || !commitTeam(word.option.selection, `${word.name}${word.says ? `: ${word.says}` : ""}`, value)) return;
+    const next = word.option?.selection ?? (word.selected && reselect ? selection : null);
+    if (!next || !commitTeam(next, `${word.name}${word.says ? `: ${word.says}` : ""}`, value)) return;
     // The keyboard says what it did where a pointer read it before choosing; a scrub says its whole way from where it began,
     // no longer a refusal it passed on the way.
     if (via === "keyboard") say(wordSaid(row, word));
@@ -368,7 +393,11 @@ export function GeneratorPane(props: GeneratorPaneProps) {
 
   function resetTo(which: "defaults" | "saved") {
     if (!catalog || !selection || !controlsReview) return;
-    const target = which === "defaults" ? defaultSelection(catalog) : saved;
+    let target = saved;
+    if (which === "defaults") {
+      try { target = defaultSelection(catalog, defaultServed === null ? undefined : provider => defaultServed.has(provider)); }
+      catch { refuse("No default profile can be formed from the included accounts and this model list.", which); return; }
+    }
     if (!target) return;
     const before = controlsReview;
     if (which === "saved") {
@@ -557,6 +586,7 @@ export function GeneratorPane(props: GeneratorPaneProps) {
     </header>
     <div className={`${G}dials`} role="group" aria-label="profile">
       {rows ? rows.map((row, index) => <DialRow key={row.id} row={row} cursor={row.id === cursorRow} locked={!teamGate.open}
+        reselect={reselect}
         onCursor={() => setCursor(row.id)} onChoose={(word, via) => choose(row, word, via)} onRefuse={(word, via) => refuseWord(row, word, via)}
         onHover={word => setHovered(current => word ? { kind: "word", row: row.id, key: word.key } : current?.kind === "word" && current.row === row.id ? null : current)}
         onFocusChange={on => { setFocused(current => on ? row.id : current === row.id ? null : current); if (on) setCursor(row.id); }}
@@ -601,7 +631,19 @@ export function GeneratorPane(props: GeneratorPaneProps) {
         </span>
       </div>
     </div>
-    <DecisionDialog decision={decision} onChoose={decide} />
+    <DecisionDialog decision={premium ? {
+      kind: "premium", title: "Check this premium profile?",
+      text: ["Inventory advertises the model below at its actual tier. It is unmeasured: the model check has not yet been performed, and account access is not verified.",
+        "The proposed profile carries your preferences and budget into the advertised list; any changes are listed below. You must approve the check's spending separately, even if standing approval covers it."],
+      items: [`${premium.model} · ${TIERS[premium.tier - 1]!} · configured ${premium.effort}`,
+        ...selection ? teamEdits(selection, premium.selection, familyWord).map(edit => `${WORD_NAMES[edit.word].toLowerCase()} ${edit.from} → ${edit.to}`) : []],
+      choices: [{ label: `Choose ${TIERS[premium.tier - 1]!} profile`, does: { kind: "approve" } }, { label: "Not now", does: { kind: "cancel" } }],
+    } : decision} onChoose={(choice, detail) => {
+      if (premium) {
+        if (choice.does.kind === "approve") verification.choosePremium(premium);
+        else verification.cancel();
+      } else decide(choice, detail);
+    }} />
   </section>;
 }
 

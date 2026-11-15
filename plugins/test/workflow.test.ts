@@ -4,12 +4,13 @@ import { actionDoor, actionSchemas as ompActionSchemas, BENCHMARK_OPERATION_ID, 
 import { approvalCovers, createCodeWorkflowClient, inventoryArtifact, VerificationError, type VerificationOptions, type VerificationProgress } from "../code/workflow.ts";
 import { verificationState } from "../code/generator/verification.ts";
 import { PublicJobSchema, type PublicJob, type TerminalSummary } from "@manifold/protocol";
-import { actionSchemas, type ActionResult, type Configuration } from "../code/contract.ts";
+import { actionSchemas, type ActionResult, type Configuration, type VerificationProvenance } from "../code/contract.ts";
 import { compileCatalog } from "../domain/catalog.ts";
 import type { Selection } from "../domain/contracts.ts";
+import { inventoryPlan } from "../domain/probe.ts";
 import { compileOmpOverlay, defaultSelection, reviewCatalog, routedModels, unpublishedModels } from "../domain/routing.ts";
 import { handlers } from "../code/server.ts";
-import type { CodeContext } from "../code/context.ts";
+import { digestOf, type CodeContext } from "../code/context.ts";
 import { z } from "zod";
 
 const target = { containerId: "workspace", machineId: "destination" };
@@ -52,9 +53,11 @@ function row(provider: string, id: string, input: number, context: number, level
  */
 function verificationFixture() {
   const store = new Map<string, string>(), calls: string[] = [], cancelled: string[] = [], benchmarked: BenchmarkInput[] = [];
+  const derived: ActionResult<"deriveCatalog">[] = [];
   const hooks: Partial<Record<string, () => void | Promise<void>>> = {};
   const states = new Map<string, PublicJob["state"][]>();
   const exitCodes = new Map<string, number>();
+  const omitted = new Set<string>();
   const verdicts: Record<string, "not_found" | "client_blocked" | "unresolved" | "unmatched"> = {};
   // Who calls: a person with an unconfined token unless a test says otherwise, as a session would carry them. `ceiling` is a
   // credential confined by an authority ceiling: still unscoped, but refused at the workspace root.
@@ -79,7 +82,11 @@ function verificationFixture() {
       readConfiguration: unavailable, configureConfiguration: unavailable,
       describeInstance: unavailable, readInstance: unavailable, listInstances: unavailable,
       readInstanceConfiguration: unavailable, configureInstance: unavailable, invokeInstance: unavailable },
-    actions: { call: unavailable },
+    // Code's own server-side calls onto OMP (session composition reads OMP's published list) reach the same fixed OMP, recorded alike.
+    actions: { call: async ({ plugin, action, input }: { plugin: string; action: string; input: unknown }) => {
+      calls.push(`${plugin}.${action}`);
+      return answer(`${plugin}.${action}`, input);
+    } },
   };
   const scope = "shared-instance";
   const slot = (provider: string, credentialId: number): AccountsObservation["accounts"][number] => ({
@@ -124,7 +131,7 @@ function verificationFixture() {
       const candidates = benchmarked[Number(jobId.slice("benchmark-".length)) - 1]!.candidates;
       return { job: probeJob(jobId, BENCHMARK_OPERATION_ID, "exited"), benchmark: { schemaVersion: 1, kind: "benchmark", ompVersion: OMP_VERSION,
         inventoryObservedAt: omp.inventory.observedAt, startedAt: 7_000 + benchmarks, completedAt: 8_000 + benchmarks,
-        results: candidates.map(candidate => verdicts[candidate.id]
+        results: candidates.filter(candidate => !omitted.has(candidate.id)).map(candidate => verdicts[candidate.id]
           ? { ...candidate, status: verdicts[candidate.id], tokensPerSecond: null, timeToFirstTokenMs: null }
           : { ...candidate, status: "reachable", tokensPerSecond: 50, timeToFirstTokenMs: 300 }) } };
     }
@@ -140,11 +147,15 @@ function verificationFixture() {
   const workflow = createCodeWorkflowClient(async (door, raw) => {
     calls.push(door);
     const result = await answer(door, raw);
+    if (door === "atyrode.code.deriveCatalog") {
+      const document = actionSchemas.deriveCatalog.result.safeParse(result);
+      if (document.success) derived.push(document.data);
+    }
     await hooks[door]?.();
     return result;
   });
   const configuration = async (at: typeof target = target) => actionSchemas.readConfiguration.result.parse(await handlers.readConfiguration!(ctx, { containerId: at.containerId }));
-  return { workflow, store, calls, cancelled, benchmarked, hooks, states, exitCodes, verdicts, omp, ctx, caller, configuration, slot };
+  return { workflow, store, calls, cancelled, benchmarked, derived, hooks, states, exitCodes, omitted, verdicts, omp, ctx, caller, configuration, slot };
 }
 /** The operator's preview, made against a catalog with OpenAI and a fourth rung. */
 const preview: Selection = { lane: { kind: "mixed" }, capability: 4, thinking: "high", advisor: "review", spark: true,
@@ -164,7 +175,7 @@ test("verification prepares a charge without spending, and one confirmation save
   expect((await f.configuration()).configuration).toMatchObject({ revision: 1, active: null, draft: null });
   const verified = await pending.confirm(preview, { onProgress: value => progress.push(value) });
   expect(f.calls.filter(door => effects.includes(door))).toEqual(["atyrode.code.initializeConfiguration", actionDoor("startInventory"),
-    actionDoor("startBenchmark"), actionDoor("startBenchmark"), "atyrode.code.stageCatalog", "atyrode.code.promoteCatalog", "atyrode.code.select"]);
+    actionDoor("startBenchmark"), actionDoor("startBenchmark"), "atyrode.code.stageCatalog", "atyrode.code.promoteCatalog"]);
   // One job per provider, each probing only that provider's candidates.
   expect(f.benchmarked.map(input => [...new Set(input.candidates.map(candidate => candidate.provider))])).toEqual([["anthropic"], ["deepseek"]]);
   const saved = verified.configuration;
@@ -176,12 +187,270 @@ test("verification prepares a charge without spending, and one confirmation save
   // own default lane and highest capability; every other choice is the operator's.
   expect(saved.selection).toEqual({ ...preview, lane: { kind: "provider", family: "anthropic", blend: "only" }, capability: 3, spark: false });
   expect(verified.exclusions).toEqual([{ provider: "deepseek", id: "deepseek-vision-exp", reason: "unstable_id" }]);
-  expect([...new Set(progress.map(value => value.step))]).toEqual(["observe", "initialize", "inventory", "draft", "benchmark", "derive", "stage", "review", "promote", "select"]);
+  expect([...new Set(progress.map(value => value.step))]).toEqual(["observe", "initialize", "inventory", "draft", "benchmark", "derive", "stage", "review", "promote"]);
   expect(progress.filter(value => value.step === "benchmark").map(value => value.providers.map(entry => `${entry.provider} ${entry.done}/${entry.total}`)))
     .toEqual([[], ["anthropic 0/3", "deepseek 0/2"], ["anthropic 3/3", "deepseek 0/2"], ["anthropic 3/3", "deepseek 2/2"]]);
   // A charge is spent once; a second confirmation never repeats it.
   await expect(pending.confirm(preview)).rejects.toThrow("code_verification_confirmed");
   expect(f.calls.filter(door => door === actionDoor("startBenchmark"))).toHaveLength(2);
+});
+
+test("null selections verify and adopt everyday served Sonnet, otherwise served Sol, using only the exact pool", async () => {
+  for (const source of ["anthropic", "sol-with-haiku", "sol-only"] as const) {
+    const f = verificationFixture(), withAnthropic = source !== "sol-only", choosesAnthropic = source === "anthropic";
+    f.omp.accounts.accounts = [f.slot("openai-codex", 3), ...(withAnthropic ? [f.slot("anthropic", 1)] : [])];
+    const levels = ["low", "medium", "high", "max"] as const;
+    f.omp.inventory.models = [
+      ...(withAnthropic ? [
+        row("anthropic", "claude-haiku-5-5", 0.1, 200_000, levels, true),
+        row("anthropic", "claude-sonnet-5-5", 2, 200_000, levels, true),
+        row("anthropic", "claude-opus-5-5", 4, 200_000, levels, true),
+        row("anthropic", "claude-fable-5-2", 8, 200_000, levels, true),
+      ] : []),
+      row("openai-codex", "gpt-6-luna", 0.1, 200_000, levels, true),
+      row("openai-codex", "gpt-6.1-terra", 1, 200_000, levels, true),
+      row("openai-codex", "gpt-6.1-sol", 2, 200_000, levels, true),
+      row("openai-codex", "gpt-6-astra", 10, 200_000, levels, true),
+    ];
+    if (source === "sol-with-haiku") f.verdicts["claude-sonnet-5-5"] = "not_found";
+    const pending = await prepared(f, 0), verified = await pending.confirm(null);
+    const selection = verified.configuration.selection!;
+    expect(selection).toMatchObject({
+      lane: { kind: "provider", family: choosesAnthropic ? "anthropic" : "openai", blend: "only" },
+      capability: choosesAnthropic ? 2 : 3, thinking: "medium",
+    });
+    const catalog = compileCatalog(verified.configuration.active!.document);
+    const review = reviewCatalog(catalog, selection, 10_000);
+    expect(catalog.model(review.routes.find(route => route.role === "default")!.lead.key).id)
+      .toBe(choosesAnthropic ? "claude-sonnet-5-5" : "gpt-6.1-sol");
+    expect(verified.provenance.providers).toEqual(withAnthropic ? ["anthropic", "openai-codex"] : ["openai-codex"]);
+    const from = f.calls.length;
+    const adopted = await f.workflow.verifyModels(second, { expectedRevision: 0, budget: "any", selection: null });
+    expect(adopted.kind).toBe("adopted");
+    expect((await f.configuration(second)).configuration?.selection).toEqual(selection);
+    expect(f.calls.slice(from)).not.toContain(actionDoor("startInventory"));
+    expect(f.calls.slice(from)).not.toContain(actionDoor("startBenchmark"));
+  }
+});
+
+test("verification requires the actual premium tier before spending and promotes that selection atomically", async () => {
+  for (const model of [{ provider: "anthropic", id: "claude-opus-5", family: "anthropic", tier: 3 },
+    { provider: "openai-codex", id: "gpt-6-astra", family: "openai", tier: 4 }] as const) for (const capability of [model.tier, 2, null] as const) {
+    const f = verificationFixture();
+    f.omp.accounts.accounts = [f.slot(model.provider, 3)];
+    f.omp.inventory.models = [row(model.provider, model.id, 10, 200_000, ["low", "medium", "high", "max"], true)];
+    const pending = await prepared(f, 0), from = f.calls.length, before = [...f.store];
+    const selection: Selection = { ...preview, lane: { kind: "provider", family: model.family, blend: "only" },
+      capability: capability ?? model.tier, thinking: "max", advisor: "off", spark: false };
+    if (capability !== model.tier) {
+      const stopped = await stopOf(pending.confirm(capability === null ? null : selection));
+      expect([stopped.step, stopped.reason]).toEqual(["benchmark", "code_invalid_selection"]);
+      expect(stopped.evidence).toEqual({ inventoryJobId: "inventory-1", benchmarkJobIds: [], revision: 1 });
+      expect(f.calls.slice(from).filter(door => effects.includes(door))).toEqual([]);
+      expect(f.benchmarked).toEqual([]);
+      expect([...f.store]).toEqual(before);
+      expect((await f.configuration()).configuration).toMatchObject({ revision: 1, selection: null, active: null, draft: null });
+      continue;
+    }
+    const verified = await pending.confirm(selection);
+    expect(verified.configuration.selection).toEqual(selection);
+    expect(verified.configuration.active?.document.models.map(value => [value.tier, value.id])).toEqual([[model.tier, model.id]]);
+    expect(verified.configuration.active?.provenance).toEqual(verified.provenance);
+    expect(verified.provenance.providers).toEqual([model.provider]);
+    expect(verified.configuration.revision).toBe(3);
+    expect(f.calls.filter(door => effects.includes(door))).toEqual(["atyrode.code.initializeConfiguration", actionDoor("startInventory"),
+      actionDoor("startBenchmark"), "atyrode.code.stageCatalog", "atyrode.code.promoteCatalog"]);
+    expect(f.calls).not.toContain("atyrode.code.select");
+  }
+});
+
+test("standing spend approval never approves a known premium tier, and freshness and cancellation still stop first", async () => {
+  for (const change of ["covered", "withdrawn", "cancelled", "defaults", "accounts", "omp", "revision"] as const) {
+    const f = verificationFixture(), controller = new AbortController();
+    f.omp.accounts.accounts = [f.slot("openai-codex", 3)];
+    f.omp.inventory.models = [row("openai-codex", "gpt-6-astra", 10, 200_000, ["low", "medium", "high", "max"], true)];
+    await f.workflow.approveChecks(0, 1);
+    const pending = await prepared(f, 0);
+    if (change === "withdrawn") await f.workflow.approveChecks(1, 0);
+    if (change === "cancelled") controller.abort();
+    if (change === "defaults") f.omp.defaults.revision++;
+    if (change === "accounts") f.omp.accounts.accounts = [f.slot("openai-codex", 4)];
+    if (change === "omp") f.omp.artifact = "d".repeat(64);
+    if (change === "revision") await f.workflow.code("changeAccounts", { containerId: target.containerId, expectedRevision: pending.charge.revision,
+      change: { kind: "create-preset", preset: { id: "other", name: "Other", disabled: [] } } });
+    const from = f.calls.length, before = [...f.store];
+    const stopped = await stopOf(pending.confirm(null, { unasked: true, signal: controller.signal }));
+    expect(stopped.reason).toBe({ covered: "code_invalid_selection", withdrawn: "code_approval_withdrawn",
+      cancelled: "code_verification_cancelled", defaults: "omp_defaults_changed", accounts: "code_accounts_changed",
+      omp: "code_omp_changed", revision: "code_stale_preferences" }[change]);
+    expect(f.calls.slice(from).filter(door => effects.includes(door))).toEqual([]);
+    expect(f.benchmarked).toEqual([]);
+    expect([...f.store]).toEqual(before);
+  }
+});
+
+test("an invalid provisional ladder is not mistaken for an unreachable real check", async () => {
+  const f = verificationFixture();
+  f.omp.accounts.accounts = [f.slot("anthropic", 1)];
+  f.omp.inventory.models = [
+    row("anthropic", "claude-haiku-5", 1, 200_000, ["low", "high", "max"], true),
+    row("anthropic", "claude-sonnet-5", 3, 200_000, ["low", "high"], true),
+  ];
+  expect(() => inventoryPlan(f.omp.inventory, "any")).toThrow("code_ladder_regression");
+  f.verdicts["claude-haiku-5"] = "not_found";
+  const verified = await (await prepared(f, 0)).confirm(null);
+  expect(f.benchmarked).toHaveLength(1);
+  expect(verified.configuration.active?.document.models.map(model => model.id)).toEqual(["claude-sonnet-5"]);
+  expect(verified.configuration.selection?.capability).toBe(2);
+  expect(verified.provenance.providers).toEqual(["anthropic"]);
+});
+
+test("a real default failure without a complete premium profile retains the existing no-stage failure semantics", async () => {
+  const f = verificationFixture(), levels = ["low", "medium", "high", "max"] as const;
+  f.omp.accounts.accounts = [f.slot("anthropic", 1)];
+  f.omp.inventory.models = [
+    row("anthropic", "claude-sonnet-5", 3, 200_000, levels, true),
+    row("anthropic", "claude-opus-5", 5, 200_000, levels, false),
+  ];
+  const pending = await prepared(f, 0), before = [...f.store];
+  f.verdicts["claude-sonnet-5"] = "not_found";
+  const stopped = await stopOf(pending.confirm(null));
+  expect([stopped.step, stopped.reason]).toEqual(["derive", "code_invalid_selection"]);
+  expect(f.benchmarked).toHaveLength(1);
+  expect(f.derived.at(-1)?.document.models.map(model => model.id)).toEqual(["claude-opus-5"]);
+  expect(f.calls).not.toContain("atyrode.code.stageCatalog");
+  expect([...f.store]).toEqual(before);
+  expect((await f.workflow.readChecks()).checks).toEqual([]);
+});
+
+test("unexpected premium reachability keeps the exact completed check without promotion, then adopts or promotes without repeating spend", async () => {
+  for (const existing of [false, true]) for (const adoption of ["kept", "staged"] as const) {
+    const f = verificationFixture(), controller = new AbortController(), levels = ["low", "medium", "high", "max"] as const;
+    f.omp.accounts.accounts = [f.slot("openai-codex", 3)];
+    f.omp.inventory.models = [
+      row("openai-codex", "gpt-6-luna", 0.1, 200_000, levels, true),
+      row("openai-codex", "gpt-6.1-terra", 1, 200_000, levels, true),
+      row("openai-codex", "gpt-6.1-sol", 2, 200_000, levels, true),
+      row("openai-codex", "gpt-6-astra", 10, 200_000, levels, true),
+    ];
+    const everyday: Selection = { ...preview, lane: { kind: "provider", family: "openai", blend: "only" },
+      capability: 2, thinking: "medium", advisor: "off", spark: false };
+    const first = existing ? await (await prepared(f, 0)).confirm(everyday) : null;
+    const pending = await prepared(f, first?.configuration.revision ?? 0), before = (await f.configuration()).configuration!;
+    for (const id of ["gpt-6-luna", "gpt-6.1-terra", "gpt-6.1-sol"]) f.verdicts[id] = "not_found";
+    const from = f.calls.length;
+    const stopped = await stopOf(pending.confirm(existing ? everyday : null, { signal: controller.signal }));
+    expect([stopped.step, stopped.reason]).toEqual(["review", "code_invalid_selection"]);
+    expect(stopped.evidence).toEqual({ inventoryJobId: pending.charge.inventoryJobId,
+      benchmarkJobIds: [`benchmark-${existing ? 2 : 1}`], revision: before.revision + 1 });
+    expect(f.calls.slice(from).filter(door => effects.includes(door))).toEqual([actionDoor("startBenchmark"), "atyrode.code.stageCatalog"]);
+    expect(f.calls.slice(from)).not.toContain("atyrode.code.reviewCatalog");
+    const retained = (await f.configuration()).configuration!, draft = retained.draft!;
+    expect({ ...retained, revision: before.revision, draft: before.draft }).toEqual(before);
+    expect(draft.document).toEqual(f.derived.at(-1)!.document);
+    expect(draft.digest).toBe(digestOf(draft.document));
+    expect(draft.document.models).toEqual([expect.objectContaining({ provider: "openai-codex", id: "gpt-6-astra", tier: 4,
+      tokensPerSecond: 50, timeToFirstTokenMs: 300 })]);
+    const provenance: VerificationProvenance = { ompVersion: pending.charge.inventory.ompVersion,
+      inventoryArtifactSha256: pending.charge.inventoryArtifactSha256, catalogRevision: pending.charge.catalogRevision,
+      inventoryObservedAt: pending.charge.inventory.observedAt, benchmarkCompletedAt: 8_000 + f.benchmarked.length,
+      providers: ["openai-codex"], poolIdentityDigest: pending.charge.pool.poolIdentityDigest };
+    expect(draft.provenance).toEqual(provenance);
+    expect((await f.workflow.readChecks()).checks).toEqual([{ poolIdentityDigest: pending.charge.pool.poolIdentityDigest,
+      budget: pending.charge.budget, digest: draft.digest, provenance, recordedAt: 10_000, models: ["openai-codex/gpt-6-astra"] }]);
+    const kept = JSON.parse([...f.store].find(([key]) => key.startsWith("checks/"))![1]);
+    expect(kept).toMatchObject({ document: draft.document, digest: draft.digest, provenance: draft.provenance,
+      poolIdentityDigest: pending.charge.pool.poolIdentityDigest, budget: pending.charge.budget });
+    // Leaving a later premium decision cancels only the caller's intent, not these retained facts.
+    const after = [...f.store], calls = [...f.calls], benchmarks = f.benchmarked.length;
+    controller.abort();
+    await Promise.resolve();
+    expect(f.calls).toEqual(calls);
+    expect([...f.store]).toEqual(after);
+    // An ordinary retry encounters the kept premium boundary before preparing another charge.
+    const refused = await stopOf(f.workflow.verifyModels(target, { expectedRevision: retained.revision, budget: "any",
+      selection: existing ? everyday : null }));
+    expect([refused.step, refused.reason]).toEqual(["adopt", "code_invalid_selection"]);
+    expect((await f.configuration()).configuration).toEqual(retained);
+    const actual: Selection = { ...everyday, capability: 4 };
+    const resume = f.calls.length;
+    let configuration: Configuration;
+    if (adoption === "kept") {
+      const adopted = await f.workflow.verifyModels(target, { expectedRevision: retained.revision, budget: "any", selection: actual });
+      if (adopted.kind !== "adopted") throw new Error("expected the retained check without another charge");
+      configuration = adopted.verified.configuration;
+    } else {
+      const input = { containerId: target.containerId, expectedRevision: retained.revision, source: "draft" as const, selection: actual };
+      const review = await f.workflow.code("reviewCatalog", input);
+      configuration = await f.workflow.code("promoteCatalog", { ...input, reviewDigest: review.reviewDigest });
+    }
+    expect(configuration.selection).toEqual(actual);
+    expect(configuration.active).toEqual(draft);
+    expect(configuration.accounts).toEqual(before.accounts);
+    expect(f.benchmarked).toHaveLength(benchmarks);
+    expect(f.calls.slice(resume).filter(door => effects.includes(door) || door === "atyrode.code.adoptCheck"))
+      .toEqual(adoption === "kept" ? ["atyrode.code.adoptCheck"] : ["atyrode.code.promoteCatalog"]);
+    expect(f.calls.slice(from).filter(door => door === actionDoor("startInventory"))).toEqual([]);
+  }
+});
+
+test("a model merely listed in the old catalog cannot become an over-ceiling main lead during verification", async () => {
+  const f = verificationFixture(), levels = ["low", "medium", "high", "max"] as const;
+  f.omp.accounts.accounts = [f.slot("openai-codex", 3)];
+  f.omp.inventory.models = [
+    row("openai-codex", "gpt-6-luna", 0.1, 200_000, levels, true),
+    row("openai-codex", "gpt-6.1-terra", 1, 200_000, levels, true),
+    row("openai-codex", "gpt-6.1-sol", 2, 200_000, levels, true),
+    row("openai-codex", "gpt-6-astra", 10, 200_000, levels, true),
+  ];
+  const selection: Selection = { ...preview, lane: { kind: "provider", family: "openai", blend: "only" },
+    capability: 2, thinking: "medium", advisor: "off", spark: false };
+  const first = await (await prepared(f, 0)).confirm(selection);
+  expect(first.configuration.active?.document.models.some(model => model.id === "gpt-6-astra")).toBe(true);
+  const old = compileCatalog(first.configuration.active!.document);
+  expect(old.model(reviewCatalog(old, selection, 10_000).routes.find(route => route.role === "default")!.lead.key).id).toBe("gpt-6.1-terra");
+  f.omp.inventory.models = f.omp.inventory.models.filter(model => model.id === "gpt-6-astra");
+  const pending = await prepared(f, first.configuration.revision), from = f.calls.length;
+  const stopped = await stopOf(pending.confirm(selection));
+  expect([stopped.step, stopped.reason]).toEqual(["benchmark", "code_invalid_selection"]);
+  expect(f.calls.slice(from).filter(door => effects.includes(door))).toEqual([]);
+  expect((await f.configuration()).configuration).toEqual(first.configuration);
+  const chosen = await (await prepared(f, first.configuration.revision)).confirm({ ...selection, capability: 4 });
+  expect(chosen.configuration.selection?.capability).toBe(4);
+  expect(chosen.configuration.active?.document.models.map(model => model.id)).toEqual(["gpt-6-astra"]);
+});
+
+test("verification retains the same legacy premium identity through metadata refresh, but never changes its provider or id without an explicit tier", async () => {
+  for (const change of ["metadata", "provider", "id"] as const) {
+    const f = verificationFixture();
+    f.omp.accounts.accounts = [f.slot("openai-codex", 3), f.slot("openai", 4)];
+    f.omp.inventory.models = [row("openai-codex", "gpt-6-astra", 10, 200_000, ["low", "medium", "high", "max"], true)];
+    const elite: Selection = { ...preview, lane: { kind: "provider", family: "openai", blend: "only" },
+      capability: 4, thinking: "medium", advisor: "off", spark: false };
+    const first = await (await prepared(f, 0)).confirm(elite);
+    const legacy = await f.workflow.code("select", { containerId: target.containerId, expectedRevision: first.configuration.revision,
+      selection: { ...elite, capability: 2 } });
+    f.omp.inventory.models = [row(change === "provider" ? "openai" : "openai-codex",
+      change === "id" ? "gpt-6.1-astra" : "gpt-6-astra", 10, 199_999, ["low", "medium", "high", "max"], true)];
+    const pending = await prepared(f, legacy.revision), from = f.calls.length;
+    if (change !== "metadata") {
+      const stopped = await stopOf(pending.confirm(legacy.selection));
+      expect([stopped.step, stopped.reason]).toEqual(["benchmark", "code_invalid_selection"]);
+      expect(f.calls.slice(from).filter(door => effects.includes(door))).toEqual([]);
+      expect((await f.configuration()).configuration).toEqual(legacy);
+      continue;
+    }
+    const refreshed = await pending.confirm(legacy.selection);
+    expect(refreshed.configuration.selection).toEqual(legacy.selection);
+    expect(refreshed.configuration.active?.document.models[0]).toMatchObject({ provider: "openai-codex", id: "gpt-6-astra", tier: 4, contextWindow: 199_999 });
+    expect(refreshed.configuration.active?.digest).not.toBe(legacy.active?.digest);
+    // Asking for a new balanced default never inherits this already selected premium identity.
+    const reset = await prepared(f, refreshed.configuration.revision), resetFrom = f.calls.length;
+    const stopped = await stopOf(reset.confirm(null));
+    expect([stopped.step, stopped.reason]).toEqual(["benchmark", "code_invalid_selection"]);
+    expect(f.calls.slice(resetFrom).filter(door => effects.includes(door))).toEqual([]);
+    expect((await f.configuration()).configuration).toEqual(refreshed.configuration);
+  }
 });
 
 test("a confirmation refuses to spend against a revision, pool, OMP defaults or OMP that moved since the charge", async () => {
@@ -292,6 +561,42 @@ test("a stop cancels the probe job in flight, and a failed one names its step an
   expect([failed.step, failed.reason]).toEqual(["benchmark", "job benchmark-2 exited with exit code 1"]);
   expect(failed.evidence.benchmarkJobIds).toEqual(["benchmark-1", "benchmark-2"]);
   expect((await failing.configuration()).configuration).toMatchObject({ revision: 1, active: null, draft: null });
+});
+
+test("partial receipts, failed jobs and cancelled jobs never stage or keep a verified premium list", async () => {
+  for (const outcome of ["partial", "failed", "cancelled", "before-write"] as const) {
+    const f = verificationFixture(), controller = new AbortController(), levels = ["low", "medium", "high", "max"] as const;
+    f.omp.accounts.accounts = [f.slot("anthropic", 1), f.slot("openai-codex", 3)];
+    f.omp.inventory.models = [...f.omp.inventory.models.slice(0, 2),
+      row("openai-codex", "gpt-6-luna", 0.1, 200_000, levels, true),
+      row("openai-codex", "gpt-6.1-terra", 1, 200_000, levels, true),
+      row("openai-codex", "gpt-6.1-sol", 2, 200_000, levels, true),
+      row("openai-codex", "gpt-6-astra", 10, 200_000, levels, true),
+    ];
+    for (const id of ["gpt-6-luna", "gpt-6.1-terra", "gpt-6.1-sol"]) f.verdicts[id] = "not_found";
+    if (outcome === "partial") f.omitted.add("gpt-6-astra");
+    if (outcome === "failed") f.exitCodes.set("benchmark-2", 1);
+    if (outcome === "cancelled") {
+      f.states.set("benchmark-2", ["started"]);
+      f.hooks[actionDoor("startBenchmark")] = () => { if (f.benchmarked.length === 2) controller.abort(); };
+    }
+    const pending = await prepared(f, 0), before = [...f.store];
+    const wanted: Selection = { ...preview, lane: { kind: "provider", family: "openai", blend: "only" },
+      capability: 2, advisor: "off", spark: false };
+    const stopped = await stopOf(pending.confirm(wanted, { signal: controller.signal,
+      beforeWrite: async () => { if (outcome === "before-write") controller.abort(); } }));
+    expect([stopped.step, stopped.reason]).toEqual(outcome === "partial" ? ["derive", "code_probe_missing_probe"]
+      : outcome === "before-write" ? ["derive", "code_verification_cancelled"]
+        : ["benchmark", outcome === "failed" ? "job benchmark-2 exited with exit code 1" : "code_verification_cancelled"]);
+    expect(stopped.evidence).toEqual({ inventoryJobId: "inventory-1", benchmarkJobIds: ["benchmark-1", "benchmark-2"], revision: 1 });
+    expect(f.benchmarked).toHaveLength(2);
+    expect(f.calls).not.toContain("atyrode.code.stageCatalog");
+    expect(f.calls).not.toContain("atyrode.code.promoteCatalog");
+    expect([...f.store]).toEqual(before);
+    expect((await f.configuration()).configuration).toMatchObject({ revision: 1, active: null, draft: null, selection: null });
+    expect((await f.workflow.readChecks()).checks).toEqual([]);
+    expect(f.cancelled).toEqual(outcome === "cancelled" ? ["benchmark-2"] : []);
+  }
 });
 
 test("a status read that fails while a probe runs cancels the probe, and a cancellation that fails is named", async () => {
@@ -448,6 +753,23 @@ test("a workspace whose saved choices select a kept pool adopts the person's che
   expect((await prepared(f, saved.revision, {}, second)).charge.requests).toBe(5);
 });
 
+test("adopting a newer check with no new selection preserves the workspace's explicit saved controls", async () => {
+  const f = verificationFixture();
+  const first = await (await prepared(f, 0)).confirm(preview);
+  const adopted = await f.workflow.verifyModels(second, { expectedRevision: 0, budget: "any", selection: null });
+  if (adopted.kind !== "adopted") throw new Error("expected a kept check");
+  const chosen = await f.workflow.code("select", { containerId: second.containerId, expectedRevision: adopted.verified.configuration.revision,
+    selection: { ...adopted.verified.configuration.selection!, capability: 3, thinking: "max", advisor: "off", prewalk: true, fallback: false } });
+  const newer = await (await prepared(f, first.configuration.revision)).confirm(preview);
+  expect(newer.provenance.benchmarkCompletedAt).toBeGreaterThan(first.provenance.benchmarkCompletedAt);
+  const from = f.calls.length;
+  const again = await f.workflow.verifyModels(second, { expectedRevision: chosen.revision, budget: "any", selection: null });
+  expect(again.kind).toBe("adopted");
+  expect((await f.configuration(second)).configuration?.selection).toEqual(chosen.selection);
+  expect(f.calls.slice(from)).not.toContain(actionDoor("startInventory"));
+  expect(f.calls.slice(from)).not.toContain(actionDoor("startBenchmark"));
+});
+
 test("adopting refuses another pool, a pool with no kept check, and a workspace already holding one no older", async () => {
   const f = verificationFixture();
   const first = await (await prepared(f, 0)).confirm(preview);
@@ -475,6 +797,221 @@ test("adopting refuses another pool, a pool with no kept check, and a workspace 
   f.caller.principal = { id: "reader", kind: "human", name: "Reader", color: "#abcdef" };
   expect(await adopt(second.containerId, initialized.revision)).toEqual({ refused: "code_check_missing" });
   expect((await f.configuration(second)).configuration).toEqual(initialized);
+});
+
+test("adopting a check refuses a new over-ceiling lead and retains only an exact already selected premium identity", async () => {
+  for (const change of ["metadata", "provider", "id"] as const) {
+    const f = verificationFixture();
+    f.omp.accounts.accounts = [f.slot("openai-codex", 3), f.slot("openai", 4)];
+    f.omp.inventory.models = [row("openai-codex", "gpt-6-astra", 10, 200_000, ["low", "medium", "high", "max"], true)];
+    const elite: Selection = { ...preview, lane: { kind: "provider", family: "openai", blend: "only" },
+      capability: 4, thinking: "medium", advisor: "off", spark: false };
+    const first = await (await prepared(f, 0)).confirm(elite);
+    const initialized = await f.workflow.code("initializeConfiguration", { containerId: second.containerId, expectedRevision: 0 });
+    const input = { containerId: second.containerId, accounts: f.omp.accounts, poolIdentityDigest: first.provenance.poolIdentityDigest, budget: "any" as const };
+    expect(await handlers.adoptCheck!(f.ctx, { ...input, expectedRevision: initialized.revision, selection: { ...elite, capability: 2 } }))
+      .toEqual({ refused: "code_invalid_selection" });
+    expect((await f.configuration(second)).configuration).toEqual(initialized);
+    const adopted = await f.workflow.code("adoptCheck", { ...input, expectedRevision: initialized.revision, selection: elite });
+    const legacy = await f.workflow.code("select", { containerId: second.containerId, expectedRevision: adopted.revision, selection: { ...elite, capability: 2 } });
+    const document = { ...first.configuration.active!.document, models: first.configuration.active!.document.models.map(model => ({
+      ...model, key: `${model.key}.refreshed`, contextWindow: 199_999,
+      provider: change === "provider" ? "openai" : model.provider, id: change === "id" ? "gpt-6.1-astra" : model.id,
+    })) };
+    const { providers: _providers, ...verification } = first.provenance;
+    const staged = await f.workflow.code("stageCatalog", { containerId: target.containerId, expectedRevision: first.configuration.revision, document,
+      verification: { ...verification, benchmarkCompletedAt: 9_000, accounts: f.omp.accounts, budget: "any" } });
+    if (change !== "metadata") {
+      expect(await handlers.adoptCheck!(f.ctx, { ...input, expectedRevision: legacy.revision, selection: null }))
+        .toEqual({ refused: "code_invalid_selection" });
+      expect((await f.configuration(second)).configuration).toEqual(legacy);
+      const chosen = await f.workflow.code("adoptCheck", { ...input, expectedRevision: legacy.revision, selection: elite });
+      expect(chosen.selection).toEqual(elite);
+      expect(chosen.active).toEqual(staged.draft);
+      continue;
+    }
+    const refreshed = await f.workflow.code("adoptCheck", { ...input, expectedRevision: legacy.revision, selection: null });
+    expect(refreshed.selection).toEqual(legacy.selection);
+    expect(refreshed.active).toEqual(staged.draft);
+  }
+});
+
+/**
+ * A completed check as Code stored it before Anthropic's names laddered it: this run's real inventory, benchmark
+ * receipt and provenance, its measured models at the stored `tiers` a price ladder gave them, kept as the person's
+ * check of the pool and in use in the workspace at the stored rank `selection`.
+ */
+function storeLegacyCheck(f: ReturnType<typeof verificationFixture>, verified: Configuration, tiers: Readonly<Record<string, 1 | 2 | 3 | 4>>,
+  selection: Selection): Configuration {
+  const measured = verified.active!;
+  const document = { ...measured.document, models: measured.document.models.map(model => ({ ...model, tier: tiers[model.id] ?? model.tier })) };
+  const active = { document, digest: digestOf(document), provenance: measured.provenance };
+  const key = [...f.store.keys()].find(entry => entry.startsWith("checks/"))!;
+  f.store.set(key, JSON.stringify({ ...JSON.parse(f.store.get(key)!), document, digest: active.digest }));
+  const record: Configuration = { ...verified, active, selection };
+  f.store.set(`configuration/${digestOf({ containerId: target.containerId })}`, JSON.stringify(record));
+  return record;
+}
+
+test("a completed check a price ladder stored with a lone Opus at fast is composed and adopted only at Opus's actual tier, spending nothing again", async () => {
+  for (const rank of [1, 2] as const) {
+    const f = verificationFixture(), levels = ["low", "medium", "high", "max"] as const;
+    f.omp.accounts.accounts = [f.slot("anthropic", 1)];
+    f.omp.inventory.models = [row("anthropic", "claude-opus-5", 5, 200_000, levels, true)];
+    f.omp.catalog = { ...f.omp.catalog, models: f.omp.inventory.models };
+    const smart: Selection = { ...preview, lane: { kind: "provider", family: "anthropic", blend: "only" }, capability: 3, thinking: "medium", advisor: "off", spark: false };
+    const verified = await (await prepared(f, 0)).confirm(smart);
+    const legacy = storeLegacyCheck(f, verified.configuration, { "claude-opus-5": 1 }, { ...smart, capability: rank });
+    const kept = (await f.workflow.readChecks()).checks, spent = f.benchmarked.length, since = f.calls.length;
+    expect(kept).toEqual([expect.objectContaining({ digest: legacy.active!.digest, provenance: verified.provenance, models: ["anthropic/claude-opus-5"] })]);
+    // The stored rank is not a choice of the smart model the list now reads Opus as: composing refuses before OMP is read.
+    const compose = { accounts: f.omp.accounts, prompt: "" }, stored = [...f.store];
+    let from = f.calls.length;
+    expect(await handlers.composeSession!(f.ctx, { ...compose, containerId: target.containerId, expectedRevision: legacy.revision }))
+      .toEqual({ refused: "code_invalid_selection" });
+    expect([f.calls.slice(from), [...f.store]]).toEqual([[], stored]);
+    expect((await f.configuration()).configuration).toEqual(legacy);
+    // Another workspace of the pool finds the kept check: neither that rank nor a balanced default adopts it, nor checks again.
+    const initialized = await f.workflow.code("initializeConfiguration", { containerId: second.containerId, expectedRevision: 0 });
+    const before = [...f.store];
+    for (const selection of [{ ...smart, capability: rank }, null]) {
+      from = f.calls.length;
+      const refused = await stopOf(f.workflow.verifyModels(second, { expectedRevision: initialized.revision, budget: "any", selection }));
+      expect([refused.step, refused.reason]).toEqual(["adopt", "code_invalid_selection"]);
+      expect(f.calls.slice(from).filter(door => effects.includes(door) || door === "atyrode.code.adoptCheck")).toEqual(["atyrode.code.adoptCheck"]);
+      expect([...f.store]).toEqual(before);
+    }
+    // Opus's actual tier adopts the very check, raw list, digest and provenance as kept, and composes it.
+    from = f.calls.length;
+    const adopted = await f.workflow.verifyModels(second, { expectedRevision: initialized.revision, budget: "any", selection: smart });
+    if (adopted.kind !== "adopted") throw new Error("expected the kept check without another charge");
+    expect([adopted.verified.configuration.active, adopted.verified.configuration.selection]).toEqual([legacy.active, smart]);
+    expect(f.calls.slice(from).filter(door => effects.includes(door) || door === "atyrode.code.adoptCheck")).toEqual(["atyrode.code.adoptCheck"]);
+    const catalog = compileCatalog(legacy.active!.document);
+    for (const [containerId, expectedRevision] of [[second.containerId, adopted.verified.configuration.revision],
+      [target.containerId, (await f.workflow.code("select", { containerId: target.containerId, expectedRevision: legacy.revision, selection: smart })).revision]] as const) {
+      const composed = await f.workflow.code("composeSession", { ...compose, containerId, expectedRevision });
+      expect(catalog.model(composed.review.routes.find(route => route.role === "default")!.lead.key)).toMatchObject({ id: "claude-opus-5", tier: 3 });
+    }
+    expect((await f.configuration()).configuration?.active).toEqual(legacy.active);
+    expect((await f.workflow.readChecks()).checks).toEqual(kept);
+    expect(f.benchmarked).toHaveLength(spent);
+    expect(f.calls.slice(since).filter(door => door === actionDoor("startInventory") || door === actionDoor("startBenchmark"))).toEqual([]);
+  }
+});
+
+test("a completed check that stored Haiku at fast and Opus at normal runs nothing at that unchosen rank, and each tier chosen explicitly resolves canonically from the kept check", async () => {
+  const f = verificationFixture(), levels = ["low", "medium", "high", "max"] as const;
+  f.omp.accounts.accounts = [f.slot("anthropic", 1)];
+  f.omp.inventory.models = [row("anthropic", "claude-haiku-5", 1, 200_000, levels, true), row("anthropic", "claude-opus-5", 5, 200_000, levels, true)];
+  f.omp.catalog = { ...f.omp.catalog, models: f.omp.inventory.models };
+  const smart: Selection = { ...preview, lane: { kind: "provider", family: "anthropic", blend: "only" }, capability: 3, thinking: "medium", advisor: "off", spark: false };
+  const verified = await (await prepared(f, 0)).confirm(smart);
+  // Normal meant Opus as stored; read by name it is Haiku's nearest rung, a silent change of model.
+  const normal = { ...smart, capability: 2 as const };
+  const legacy = storeLegacyCheck(f, verified.configuration, { "claude-opus-5": 2 }, normal);
+  const kept = (await f.workflow.readChecks()).checks, spent = f.benchmarked.length, since = f.calls.length, stored = [...f.store];
+  const compose = { containerId: target.containerId, accounts: f.omp.accounts, prompt: "" };
+  expect(await handlers.composeSession!(f.ctx, { ...compose, expectedRevision: legacy.revision })).toEqual({ refused: "code_invalid_selection" });
+  // A run that keeps the saved selection admits it first: refused while observing, nothing started, written or spent.
+  const background = await stopOf(f.workflow.verifyModels(target, { expectedRevision: legacy.revision, budget: "any", selection: null }));
+  expect([background.step, background.reason]).toEqual(["observe", "code_invalid_selection"]);
+  expect(f.calls.slice(since).filter(door => effects.includes(door) || door === "atyrode.code.adoptCheck" || door === actionDoor("readModelCatalog"))).toEqual([]);
+  expect([...f.store]).toEqual(stored);
+  // Reads still answer the stored list and the completed check.
+  expect((await f.configuration()).configuration).toEqual(legacy);
+  expect(kept).toEqual([expect.objectContaining({ digest: legacy.active!.digest, provenance: verified.provenance,
+    models: ["anthropic/claude-haiku-5", "anthropic/claude-opus-5"] })]);
+  // Normal chosen explicitly is a choice of what it names now, Haiku; smart names Opus. Both come from the same kept check.
+  const initialized = await f.workflow.code("initializeConfiguration", { containerId: second.containerId, expectedRevision: 0 });
+  const adopted = await f.workflow.verifyModels(second, { expectedRevision: initialized.revision, budget: "any", selection: normal });
+  if (adopted.kind !== "adopted") throw new Error("expected the kept check without another charge");
+  expect(adopted.verified.configuration.active).toEqual(legacy.active);
+  const catalog = compileCatalog(legacy.active!.document);
+  for (const [containerId, expectedRevision, id] of [[second.containerId, adopted.verified.configuration.revision, "claude-haiku-5"],
+    [target.containerId, (await f.workflow.code("select", { containerId: target.containerId, expectedRevision: legacy.revision, selection: smart })).revision, "claude-opus-5"]] as const) {
+    const composed = await f.workflow.code("composeSession", { ...compose, containerId, expectedRevision });
+    expect(catalog.model(composed.review.routes.find(route => route.role === "default")!.lead.key).id).toBe(id);
+  }
+  expect((await f.workflow.readChecks()).checks).toEqual(kept);
+  expect(f.benchmarked).toHaveLength(spent);
+  expect(f.calls.slice(since).filter(door => door === actionDoor("startInventory") || door === actionDoor("startBenchmark"))).toEqual([]);
+});
+
+test("a kept check whose stored ladder compressed Opus and Sonnet adopts only an explicit choice, witnessed privately, and composes it without checking again", async () => {
+  const f = verificationFixture(), levels = ["low", "medium", "high", "max"] as const;
+  f.omp.accounts.accounts = [f.slot("anthropic", 1)];
+  f.omp.inventory.models = [row("anthropic", "claude-sonnet-5", 3, 200_000, levels, true), row("anthropic", "claude-opus-5", 5, 200_000, levels, true)];
+  f.omp.catalog = { ...f.omp.catalog, models: f.omp.inventory.models };
+  const smart: Selection = { ...preview, lane: { kind: "provider", family: "anthropic", blend: "only" }, capability: 3, thinking: "medium", advisor: "off", spark: false };
+  const normal: Selection = { ...smart, capability: 2 };
+  const verified = await (await prepared(f, 0)).confirm(smart);
+  // Stored Opus at smart and Sonnet at elite, saved at normal, which then meant Opus; read by name, normal is Sonnet.
+  const legacy = storeLegacyCheck(f, verified.configuration, { "claude-opus-5": 3, "claude-sonnet-5": 4 }, normal);
+  const kept = (await f.workflow.readChecks()).checks, spent = f.benchmarked.length, since = f.calls.length;
+  const compose = { accounts: f.omp.accounts, prompt: "" };
+  const configurationKey = (containerId: string) => `configuration/${digestOf({ containerId })}`;
+  expect(await handlers.composeSession!(f.ctx, { ...compose, containerId: target.containerId, expectedRevision: legacy.revision }))
+    .toEqual({ refused: "code_invalid_selection" });
+  const listed = actionSchemas.listProfiles.result.parse(await handlers.listProfiles!(f.ctx, {}));
+  expect(listed.profiles.find(profile => profile.containerId === target.containerId)).toMatchObject({ revision: legacy.revision, selected: null });
+  // A new workspace of the pool, in the background (no selection): the default over that ladder is no choice, so nothing is written or run.
+  const initialized = await f.workflow.code("initializeConfiguration", { containerId: second.containerId, expectedRevision: 0 });
+  const before = [...f.store];
+  let from = f.calls.length;
+  const background = await stopOf(f.workflow.verifyModels(second, { expectedRevision: initialized.revision, budget: "any", selection: null }));
+  expect([background.step, background.reason]).toEqual(["adopt", "code_invalid_selection"]);
+  expect(f.calls.slice(from).filter(door => effects.includes(door) || door === "atyrode.code.adoptCheck")).toEqual(["atyrode.code.adoptCheck"]);
+  expect([...f.store]).toEqual(before);
+  // In the foreground the person's explicit normal adopts the very check and records what it resolved to, privately.
+  from = f.calls.length;
+  const adopted = await f.workflow.verifyModels(second, { expectedRevision: initialized.revision, budget: "any", selection: normal });
+  if (adopted.kind !== "adopted") throw new Error("expected the kept check without another charge");
+  const saved = adopted.verified.configuration;
+  expect([saved.active, saved.selection]).toEqual([legacy.active, normal]);
+  expect(saved.active!.digest).toBe(digestOf(saved.active!.document));
+  expect(saved.active!.provenance).toEqual(verified.provenance);
+  expect(f.calls.slice(from).filter(door => effects.includes(door) || door === "atyrode.code.adoptCheck")).toEqual(["atyrode.code.adoptCheck"]);
+  expect(JSON.parse(f.store.get(configurationKey(second.containerId))!)).toEqual({ ...saved, resolvedSelection: {
+    catalogDigest: legacy.active!.digest, selectionDigest: digestOf(normal), provider: "anthropic", id: "claude-sonnet-5" } });
+  expect((await f.configuration(second)).configuration).toEqual(saved);
+  // The workspace that saved the rank repairs it with the same explicit choice; both then compose and list Sonnet.
+  const repaired = await f.workflow.code("select", { containerId: target.containerId, expectedRevision: legacy.revision, selection: normal });
+  expect(repaired).toEqual({ ...legacy, revision: legacy.revision + 1 });
+  const catalog = compileCatalog(legacy.active!.document);
+  for (const [containerId, expectedRevision] of [[second.containerId, saved.revision], [target.containerId, repaired.revision]] as const) {
+    const composed = await f.workflow.code("composeSession", { ...compose, containerId, expectedRevision });
+    expect(catalog.model(composed.review.routes.find(route => route.role === "default")!.lead.key).id).toBe("claude-sonnet-5");
+  }
+  expect(actionSchemas.listProfiles.result.parse(await handlers.listProfiles!(f.ctx, {})).profiles.map(profile => profile.selected?.model))
+    .toEqual(["anthropic/claude-sonnet-5", "anthropic/claude-sonnet-5"]);
+  // Opus stays reachable at its actual tier; under it, nothing new is admitted and nothing is written.
+  const opus = await f.workflow.code("select", { containerId: target.containerId, expectedRevision: repaired.revision, selection: smart });
+  const held = [...f.store];
+  expect(await handlers.select!(f.ctx, { containerId: target.containerId, expectedRevision: opus.revision, selection: { ...smart, capability: 1 } }))
+    .toEqual({ refused: "code_invalid_selection" });
+  expect([...f.store]).toEqual(held);
+  const composed = await f.workflow.code("composeSession", { ...compose, containerId: target.containerId, expectedRevision: opus.revision });
+  expect(catalog.model(composed.review.routes.find(route => route.role === "default")!.lead.key).id).toBe("claude-opus-5");
+  expect((await f.configuration()).configuration?.active).toEqual(legacy.active);
+  expect((await f.workflow.readChecks()).checks).toEqual(kept);
+  expect(f.benchmarked).toHaveLength(spent);
+  expect(f.calls.slice(since).filter(door => door === actionDoor("startInventory") || door === actionDoor("startBenchmark"))).toEqual([]);
+});
+
+test("a run without a selection keeps a free budget: the default it saves and adopts stays free", async () => {
+  const f = verificationFixture(), levels = ["low", "medium", "high", "max"] as const;
+  f.omp.accounts.accounts = [f.slot("openai-codex", 3)];
+  f.omp.inventory.models = [row("openai-codex", "gpt-6-luna", 0, 200_000, levels, true),
+    row("openai-codex", "gpt-6.1-terra", 0, 200_000, levels, true), row("openai-codex", "gpt-6.1-sol", 0, 200_000, levels, true)];
+  const pending = await f.workflow.verifyModels(target, { expectedRevision: 0, budget: "free", selection: null });
+  if (pending.kind !== "charge") throw new Error("expected a charge");
+  const verified = await pending.confirm(null);
+  expect(verified.configuration.selection).toMatchObject({ lane: { kind: "provider", family: "openai", blend: "only" }, capability: 3, budget: "free" });
+  const adopted = await f.workflow.verifyModels(second, { expectedRevision: 0, budget: "free", selection: null });
+  if (adopted.kind !== "adopted") throw new Error("expected the kept check");
+  expect(adopted.verified.configuration.selection).toEqual(verified.configuration.selection);
+  expect(f.benchmarked).toHaveLength(1);
 });
 
 test("the standing approval is the caller's own, written at its exact revision, and bounds what checks spend without asking", async () => {

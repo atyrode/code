@@ -31,6 +31,30 @@ describe("the Models sheet", () => {
     expect([null, 29, 30, 45, 60, 90].map(speedLevel)).toEqual([0, 1, 2, 3, 4, 5]);
   });
 
+  test("a list stored under an older ladder shows each named model at its actual tier, keeping the stored bytes, and one that does not compile still shows", () => {
+    // Haiku and Opus as a price ladder once stored them: Opus on the normal rung.
+    const legacy: CatalogDocument = { schemaVersion: 1, models: [
+      { ...document.models[0]!, key: "haiku", id: "claude-haiku-5", tier: 1 },
+      { ...document.models[1]!, key: "opus", id: "claude-opus-5", tier: 2 },
+    ] };
+    const stored = structuredClone(legacy);
+    const rows = modelRows(legacy);
+    expect(rows.map(row => [row.key, row.id, row.tier, row.tps, row.pin])).toEqual([["haiku", "claude-haiku-5", 1, 30, 1], ["opus", "claude-opus-5", 3, 60, 2]]);
+    expect(legacy).toEqual(stored);
+    // The same models checked again, stored at their named tiers, change no tier against it.
+    const named = { ...legacy, models: legacy.models.map(model => model.key === "opus" ? { ...model, tier: 3 as const } : model) };
+    expect(listChanges(rows, modelRows(named))).toEqual([]);
+    // Two stored rungs read at one tier both stay listed; the one the ladder routes, whose tier did not move, comes first.
+    const versions: CatalogDocument = { schemaVersion: 1, models: [
+      { ...document.models[2]!, key: "sonnet-new", id: "claude-sonnet-5", tier: 3 },
+      { ...document.models[1]!, key: "sonnet-old", id: "claude-sonnet-4", tier: 2 },
+    ] };
+    expect(modelRows(versions).map(row => [row.key, row.tier])).toEqual([["sonnet-old", 2], ["sonnet-new", 2]]);
+    // A list that does not compile (one provider/id twice) is still shown, under its keys and stored tiers, to repair.
+    const broken = { ...legacy, models: [...legacy.models, { ...legacy.models[1]!, key: "opus-again" }] };
+    expect(modelRows(broken).map(row => [row.key, row.alias, row.tier])).toEqual([["haiku", "haiku", 1], ["opus", "opus", 2], ["opus-again", "opus-again", 2]]);
+  });
+
   test("a model left out for OMP's Spark quota class reads retired, by that class and never by its id; another class of its own reads own quota", () => {
     const left = (quotaTier: string, id: string) => exclusionWords({ provider: "openai-codex", id, reason: "separate_quota", quotaTier });
     expect(left("spark", "gpt-5.3-codex-spark")).toEqual(["retired", "Retired: Code no longer routes to Spark"]);

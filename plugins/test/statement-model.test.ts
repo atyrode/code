@@ -29,7 +29,7 @@ const catalog = compileCatalog({ schemaVersion: 1, models: [
   model("a1", "anthropic", 1), model("a2", "anthropic", 2), model("a3", "anthropic", 3),
 ] });
 const gptOnly: Selection["lane"] = { kind: "provider", family: "openai", blend: "only" };
-const gptLed: Selection["lane"] = { kind: "provider", family: "openai", blend: "led" };
+const mixed: Selection["lane"] = { kind: "mixed" };
 const claudeOnly: Selection["lane"] = { kind: "provider", family: "anthropic", blend: "only" };
 const team = (changes: Partial<Selection> = {}): Selection => ({
   lane: gptOnly, capability: 2, thinking: "medium", advisor: "off", spark: false, priority: false, prewalk: false, planYolo: false, fallback: false, budget: "any", ...changes,
@@ -70,13 +70,13 @@ describe("the redline marks only the option that causes the strain", () => {
 
   test("an option that leaves a role with no route that has one now carries it", () => {
     const fromGptOnly = review();
-    const led = optionConsequence(catalog, fromGptOnly, "lane", "gpt-led", { ...known, pools: claudeBlocked });
-    expect(led?.redline).not.toBeNull();
-    expect(causalRedline(catalog, fromGptOnly, led, claudeBlocked)).toMatchObject({ reason: "blocked", roles: ["reviewer", "security-reviewer"] });
+    const blended = optionConsequence(catalog, fromGptOnly, "lane", "mixed", { ...known, pools: claudeBlocked });
+    expect(blended?.redline).not.toBeNull();
+    expect(causalRedline(catalog, fromGptOnly, blended, claudeBlocked)).toMatchObject({ reason: "blocked", roles: ["plan", "slow"] });
   });
 
   test("an option that keeps roles on a pool the team already waits on carries none, though it leads there", () => {
-    const stranded = review({ lane: gptLed });
+    const stranded = review({ lane: mixed });
     const thinking = optionConsequence(catalog, stranded, "thinking", "high", { ...known, pools: claudeBlocked });
     expect(thinking?.redline?.reason).toBe("blocked");
     expect(causalRedline(catalog, stranded, thinking, claudeBlocked)).toBeNull();
@@ -95,7 +95,7 @@ describe("the redline marks only the option that causes the strain", () => {
     const slots = statementSlots(context(team(), claudeBlocked), vocab);
     const lane = slots.lane.options;
     expect(lane.find(option => option.current)?.redline).toBeNull();
-    expect(lane.find(option => option.value === "gpt-led")?.redline).not.toBeNull();
+    expect(lane.find(option => option.value === "mixed")?.redline).not.toBeNull();
     expect(slots.thinking.options.every(option => option.redline === null)).toBe(true);
   });
 });
@@ -106,6 +106,18 @@ describe("the settings' values", () => {
     expect(slots.tier.options.map(option => [option.value, option.available])).toEqual([["fast", true], ["normal", true], ["smart", true], ["elite", false]]);
     expect(slots.thinking.options.map(option => option.value)).toEqual(["minimal", "low", "medium", "high", "xhigh", "max"]);
     expect(slots.lane.options.map(option => option.value)).toEqual(["gpt-only", "gpt-led", "mixed", "claude-led", "claude-only"]);
+  });
+
+  test("explicit xhigh and max options retain their deliberative routes without a premium tier move", () => {
+    const slots = statementSlots(context(team(), pools()), vocab);
+    for (const thinking of ["xhigh", "max"] as const) {
+      const option = slots.thinking.options.find(option => option.value === thinking)!;
+      expect(option.available).toBe(true);
+      expect(option.selection?.thinking).toBe(thinking);
+      for (const role of ["default", "task", "plan", "slow"]) {
+        expect(option.review?.routes.find(route => route.role === role)?.lead).toEqual({ key: "o2", thinking });
+      }
+    }
   });
 
   test("an extra says what its present position means and what turning it would do, never the same sentence twice", () => {
@@ -195,7 +207,7 @@ describe("the verb names the model's step", () => {
 });
 
 describe("a Launch press stops on a review unlike what the panel showed", () => {
-  const shown = review({ lane: gptLed });
+  const shown = review({ lane: mixed });
   const pool = { "openai-codex": [{}], anthropic: [{}] };
 
   test("it goes on only for the same leads through the same providers' accounts", () => {
@@ -203,12 +215,14 @@ describe("a Launch press stops on a review unlike what the panel showed", () => 
     expect(reviewMatches(projected, { review: shown, accountPool: pool })).toBe(true);
     expect(reviewMatches(projected, { review: review({ lane: gptOnly }), accountPool: pool })).toBe(false);
     expect(reviewMatches(projected, { review: shown, accountPool: { "openai-codex": [{}], anthropic: [] } })).toBe(false);
+    expect(reviewMatches(projected, { review: review({ lane: mixed, thinking: "high" }), accountPool: pool })).toBe(false);
+    expect(reviewMatches(projected, { review: review({ lane: mixed, thinking: "max" }), accountPool: pool })).toBe(false);
     expect(reviewMatches(projectionOf(shown, null), { review: shown, accountPool: pool })).toBe(false);
   });
 
   test("what the review shows unlike the projection is said role by role, grouped where roles go alike", () => {
-    expect(movesText(catalog, review(), shown)).toBe("reviewer, security-reviewer o3 → a3");
-    expect(movesText(catalog, review(), review({ thinking: "high" }))).toContain("high → x-high");
+    expect(movesText(catalog, review(), shown)).toBe("plan, slow o2 → a2");
+    expect(movesText(catalog, review(), review({ thinking: "high" }))).toBe("default, task medium → high · plan, slow high → x-high");
     expect(movesText(catalog, shown, shown)).toBe("");
   });
 
@@ -221,9 +235,9 @@ describe("a Launch press stops on a review unlike what the panel showed", () => 
 });
 
 describe("the fix for roles with no route", () => {
-  test("GPT-led with Claude blocked and no fallbacks: GPT only gives all 12 a route", () => {
+  test("Mixed with Claude blocked and no fallbacks: GPT only gives every shared role a route", () => {
     const claudeBlocked = pools({ claudeBlockedUntil: now + 2 * HOUR });
-    const stranded = review({ lane: gptLed });
+    const stranded = review({ lane: mixed });
     const fix = fixView(rescue(catalog, stranded, claudeBlocked, known)!, catalog, claudeBlocked, vocab);
     expect(fix).toMatchObject({ label: "GPT only", result: `gives all ${stranded.routes.length} a route` });
     expect(fix?.selection.lane).toEqual(gptOnly);
@@ -233,7 +247,7 @@ describe("the fix for roles with no route", () => {
     const claudeBlocked = pools({ claudeBlockedUntil: now + 2 * HOUR });
     // Codex read long ago: the fix still routes every role there, but no one measured its room.
     const codexStale = claudeBlocked.map(pool => pool.provider === "openai-codex" ? { ...pool, verdict: { kind: "stale" as const, ageMs: HOUR } } : pool);
-    const fix = fixView(rescue(catalog, review({ lane: gptLed }), codexStale, known)!, catalog, codexStale, vocab);
+    const fix = fixView(rescue(catalog, review({ lane: mixed }), codexStale, known)!, catalog, codexStale, vocab);
     expect(fix?.result).toMatch(/· availability unknown$/);
   });
 });
@@ -296,24 +310,24 @@ describe("the launch line, in precedence", () => {
   test("roles waiting on two pools name both, each with its own reopening, never one pool with the other's time", () => {
     const claude = pools({ claudeBlockedUntil: now + 4 * HOUR }).find(pool => pool.provider === "anthropic")!;
     const codex = { ...pools().find(pool => pool.provider === "openai-codex")!, verdict: { kind: "maxed" as const, until: now + HOUR } };
-    expect(said({ stop: { roles: ["reviewer", "default"], waits: [claude, codex] } }).parts[0]).toEqual({ text: "Claude blocked until T+4h · GPT maxed until T+1h", tone: "attention" });
+    expect(said({ stop: { roles: ["slow", "default"], waits: [claude, codex] } }).parts[0]).toEqual({ text: "Claude blocked until T+4h · GPT maxed until T+1h", tone: "attention" });
   });
 
   test("an offline destination offers another machine; an unserved lead offers the nearest served lane and its accounts", () => {
     const unavailable = { ...ready, state: "refused" as const, refusal: { code: "unavailable" as const, text: "Runtime unavailable." } };
     const offline = said({ verb: unavailable, machine: { name: "Laptop", online: false, revoked: false }, otherMachine: { id: "studio", name: "Studio" } });
     expect(offline.actions).toEqual([{ kind: "fix", key: "machine", label: "Use Studio", fix: { kind: "machine", machineId: "studio" } }]);
-    const unserved = { ...ready, state: "refused" as const, refusal: { code: "no-account" as const, text: "", gap: { provider: "anthropic", family: "anthropic", roles: ["reviewer"] } } };
+    const unserved = { ...ready, state: "refused" as const, refusal: { code: "no-account" as const, text: "", gap: { provider: "anthropic", family: "anthropic", roles: ["slow"] } } };
     const lane = slotOption({ label: "GPT only", selection: team(), review: review() });
     expect(fixes(said({ verb: unserved, laneFix: lane }))).toEqual(["team", "open"]);
   });
 
   test("roles with no route say so with the fix that routes them, which commits through a team fix", () => {
-    const stop = { roles: ["reviewer", "security-reviewer"], waits: [] };
-    const fix = { label: "GPT only", result: "keeps all 12 on Codex", selection: team(), review: review() };
+    const stop = { roles: ["plan", "slow"], waits: [] };
+    const fix = { label: "GPT only", result: "keeps all 10 on Codex", selection: team(), review: review() };
     const line = said({ stop, fix });
     expect(line.parts.some(part => part.tone === "attention")).toBe(true);
-    expect(line.actions).toEqual([{ kind: "fix", key: "rescue", label: "GPT only keeps all 12 on Codex", fix: { kind: "team", selection: fix.selection, review: fix.review } }]);
+    expect(line.actions).toEqual([{ kind: "fix", key: "rescue", label: "GPT only keeps all 10 on Codex", fix: { kind: "team", selection: fix.selection, review: fix.review } }]);
     expect(said({ stop }).actions).toEqual([]);
   });
 
@@ -360,8 +374,8 @@ describe("the launch line, in precedence", () => {
     expect(refused.parts.at(-1)!.tone).toBe("warn");
     expect(keys(refused)).toEqual(["accounts-read", ...listFixes]);
     // Routes beside the failure with roles that have no route: the rescue stays beside its stop.
-    const fix = { label: "GPT only", result: "keeps all 12 on Codex", selection: team(), review: review() };
-    expect(keys(said({ stop: { roles: ["reviewer"], waits: [] }, fix, listFailure: "beside" }))).toEqual(["rescue", ...listFixes]);
+    const fix = { label: "GPT only", result: "keeps all 10 on Codex", selection: team(), review: review() };
+    expect(keys(said({ stop: { roles: ["slow"], waits: [] }, fix, listFailure: "beside" }))).toEqual(["rescue", ...listFixes]);
     // At rest the failure is the whole line.
     expect(keys(said({ listFailure: "beside" }))).toEqual(listFixes);
   });

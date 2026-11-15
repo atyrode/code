@@ -16,7 +16,10 @@ const G = "plugin-atyrode_code_generator__";
  * take the way out (the last choice) at any time, since it never spends or launches. Closing gives
  * focus back to what had it before.
  */
-export function DecisionDialog({ decision, onChoose }: { decision: Decision | null; onChoose: (choice: DecisionChoice, detail: number) => void }) {
+export function DecisionDialog({ decision, onChoose }: {
+  decision: (Omit<Decision, "kind"> & { readonly kind: string }) | null;
+  onChoose: (choice: DecisionChoice, detail: number) => void;
+}) {
   const id = useId();
   const heading = useRef<HTMLHeadingElement>(null);
   // The question as it stands when an event arrives.

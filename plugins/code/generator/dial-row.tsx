@@ -59,6 +59,11 @@ export type DialRowProps = {
   readonly onScrub: (phase: "start" | "end") => void;
   /** ↑ or ↓ on the row. */
   readonly onMove: (delta: -1 | 1) => void;
+  /**
+   * The chosen word chooses again (a press, Enter, or Space on a level row): the saved profile it shows waits for the
+   * person's explicit choice of it (workbench-model.ts `savedChoiceNeeded`). Otherwise choosing the chosen word does nothing.
+   */
+  readonly reselect?: boolean;
 };
 
 /**
@@ -72,7 +77,7 @@ export type DialRowProps = {
  * refuses with its reason. The row is a radio group with one Tab stop, its chosen word, which keeps
  * focus as the value moves; ↑/↓ go to the next row, as the rows read top to bottom.
  */
-export function DialRow({ row, cursor, locked, onCursor, onChoose, onRefuse, onHover, onFocusChange, onScrub, onMove }: DialRowProps) {
+export function DialRow({ row, cursor, locked, reselect = false, onCursor, onChoose, onRefuse, onHover, onFocusChange, onScrub, onMove }: DialRowProps) {
   const element = useRef<HTMLDivElement>(null);
   const labelId = useId();
   const box = useRef<HTMLDivElement>(null);
@@ -163,7 +168,7 @@ export function DialRow({ row, cursor, locked, onCursor, onChoose, onRefuse, onH
     box.current?.querySelector<HTMLElement>('[role="radio"][tabindex="0"]')?.focus({ preventScroll: true });
   }
   function choose(word: RowWord, via: "pointer" | "keyboard" | "scrub") {
-    if (word.selected) return;
+    if (word.selected && !reselect) return;
     if (!word.available || locked) { if (via !== "scrub") shake(word); onRefuse(word, via); return; }
     refocus.current = box.current?.contains(box.current.ownerDocument.activeElement) ?? false;
     onChoose(word, via);
@@ -292,8 +297,11 @@ export function DialRow({ row, cursor, locked, onCursor, onChoose, onRefuse, onH
       }
       case "ArrowUp": onMove(-1); break;
       case "ArrowDown": onMove(1); break;
-      case " ": {
-        if (!switchRow || event.repeat) return;
+      case "Enter": case " ": {
+        if (event.repeat) return;
+        // The chosen word chosen again from the keyboard, as a press on it chooses it, while that choice is awaited.
+        if (reselect && selected && (event.key === "Enter" || !switchRow)) { choose(selected, "keyboard"); break; }
+        if (event.key === "Enter" || !switchRow) return;
         const other = latest.current.words.find(word => !word.selected);
         if (other) choose(other, "keyboard");
         break;
@@ -308,7 +316,7 @@ export function DialRow({ row, cursor, locked, onCursor, onChoose, onRefuse, onH
   // A row with nothing chosen yet still has one Tab stop: its first word.
   const stop = selected ?? row.words[0];
   return <div ref={element} className={`${G}dial`} data-row={row.id} data-kind={row.kind} role="radiogroup" aria-labelledby={labelId}
-    aria-disabled={locked || undefined} data-cursor={cursor || undefined} style={style}
+    aria-disabled={locked || undefined} data-cursor={cursor || undefined} data-reselect={reselect || undefined} style={style}
     onKeyDown={keys} onFocus={() => onFocusChange(true)} onBlur={event => { if (!event.currentTarget.contains(event.relatedTarget as Node | null)) onFocusChange(false); }}
     onPointerDown={event => { if (!(event.target as HTMLElement).closest(`.${G}words`)) onCursor(); }}
     onPointerLeave={() => { hovered.current = null; onHover(null); }}>

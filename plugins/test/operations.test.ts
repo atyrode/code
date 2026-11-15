@@ -7,7 +7,7 @@ import { actionDoor, actionSchemas, createCodeClient, CODE_PLUGIN_ID,
 import { digestOf, type CodeContext } from "../code/context.ts";
 import plugin, { handlers } from "../code/server.ts";
 import { configurationMigration } from "../code/state.ts";
-import type { CatalogDocument } from "../domain/contracts.ts";
+import type { CatalogDocument, Selection } from "../domain/contracts.ts";
 import { buildCodeServices } from "../code/service-policies.ts";
 
 const target: Target = { containerId: "container-a", machineId: "machine-a" };
@@ -42,6 +42,8 @@ interface Fixture {
   store: Map<string, string>;
   /** OMP's current bundled model list, the only OMP door a configuration action reaches. */
   published: ModelCatalogSnapshot;
+  /** How many times a door read that list. */
+  publishedReads: number;
   holdTwoReads(): void;
   afterNextRead(hook: () => Promise<void>): void;
 }
@@ -103,10 +105,11 @@ function fixture(isRoot = false): Fixture {
     actions: { call: async ({ plugin, action, input }: { plugin: string; action: string; input: unknown }) => {
       if (plugin !== "atyrode.omp" || action !== "readModelCatalog") return unavailable();
       const { providers } = input as { providers: string[] };
+      fixtureState.publishedReads++;
       return { ...fixtureState.published, models: fixtureState.published.models.filter(model => providers.includes(model.provider)) };
     } },
   };
-  const fixtureState: Fixture = { ctx, access, store, published: published(),
+  const fixtureState: Fixture = { ctx, access, store, published: published(), publishedReads: 0,
     holdTwoReads() {
       let release!: () => void;
       const ready = new Promise<void>(resolve => { release = resolve; });
@@ -198,7 +201,11 @@ describe("container-owned policy configuration", () => {
     const next = await accepted(f, "select", { ...workspace, expectedRevision: saved.revision,
       selection: { ...saved.selection!, prewalk: true } });
     expect(next).toEqual({ ...saved, revision: saved.revision + 1, selection: { ...saved.selection!, prewalk: true } });
-    expect(JSON.parse(f.store.get(key)!)).toEqual(next);
+    // The explicit choice's one CAS stores the public record and, beside it, the private witness of the model it resolved to;
+    // the unparsed public answer is the record alone.
+    expect(JSON.parse(f.store.get(key)!)).toEqual({ ...next, resolvedSelection: { catalogDigest: digestOf(document()),
+      selectionDigest: digestOf(next.selection), provider: "anthropic", id: "native-model2" } });
+    expect(await invoke(f, "readConfiguration", workspace)).toEqual({ revision: next.revision, configuration: next, legacyMachineId: null });
     expect(await invoke(f, "changeAccounts", { ...workspace, expectedRevision: saved.revision,
       change: { kind: "delete-preset", id: "focus" } })).toEqual({ refused: "code_stale_preferences" });
     expect((await configuration(f))?.accounts).toEqual(saved.accounts);
@@ -229,7 +236,9 @@ describe("container-owned policy configuration", () => {
       selection: { ...saved.selection!, planYolo: true } });
     expect(next.revision).toBe(saved.revision + 1);
     expect(next.accounts).toEqual(saved.accounts);
-    expect(JSON.parse(f.store.get(key)!)).toEqual(next);
+    expect(JSON.parse(f.store.get(key)!)).toEqual({ ...next, resolvedSelection: { catalogDigest: digestOf(document()),
+      selectionDigest: digestOf(next.selection), provider: "anthropic", id: "native-model2" } });
+    expect(await invoke(f, "readConfiguration", workspace)).toEqual({ revision: next.revision, configuration: next, legacyMachineId: null });
     expect(next.schemaVersion).toBe(4);
   });
 
@@ -349,6 +358,95 @@ describe("container-owned policy configuration", () => {
       .toEqual({ refused: "code_stale_preferences" });
   });
 
+  test("an explicit elite selection reviews and promotes a premium-only list without creating an automatic premium default", async () => {
+    const f = fixture(), catalog: CatalogDocument = { schemaVersion: 1, models: [{ ...document().models[0]!,
+      key: "astra", provider: "openai-codex", id: "gpt-6-astra", api: "openai-codex-responses", tier: 4 }] };
+    const record = await staged(f, catalog);
+    const input = { ...workspace, expectedRevision: record.revision, source: "draft" as const };
+    const selection: Selection = { lane: { kind: "provider", family: "openai", blend: "only" }, capability: 4, thinking: "max", advisor: "off",
+      spark: false, priority: false, prewalk: false, planYolo: false, fallback: true, budget: "any" };
+    expect(await invoke(f, "reviewCatalog", input)).toEqual({ refused: "code_invalid_selection" });
+    expect(await invoke(f, "reviewCatalog", { ...input, selection: { ...selection, capability: 2 } }))
+      .toEqual({ refused: "code_invalid_selection" });
+    const review = await accepted(f, "reviewCatalog", { ...input, selection });
+    expect(review.review.selection).toEqual(selection);
+    expect(review.review.routes.find(route => route.role === "default")?.lead).toEqual({ key: "astra", thinking: "max" });
+    expect(await invoke(f, "promoteCatalog", { ...input, reviewDigest: review.reviewDigest }))
+      .toEqual({ refused: "code_invalid_selection" });
+    expect(await invoke(f, "promoteCatalog", { ...input, selection: { ...selection, capability: 2 }, reviewDigest: review.reviewDigest }))
+      .toEqual({ refused: "code_invalid_selection" });
+    expect(await invoke(f, "promoteCatalog", { ...input, selection: { ...selection, prewalk: true }, reviewDigest: review.reviewDigest }))
+      .toEqual({ refused: "code_preview_changed" });
+    expect(await configuration(f)).toEqual(record);
+    const promoted = await accepted(f, "promoteCatalog", { ...input, selection, reviewDigest: review.reviewDigest });
+    expect(promoted.revision).toBe(record.revision + 1);
+    expect(promoted.selection).toEqual(selection);
+    expect(promoted.active).toEqual(record.draft);
+    expect(promoted.draft).toBeNull();
+    expect((await accepted(f, "reviewCatalog", { ...workspace, expectedRevision: promoted.revision, source: "active" })).review.selection).toEqual(selection);
+  });
+
+  test("a new premium-only draft cannot turn a saved everyday selection into a different premium lead", async () => {
+    const f = fixture(), original = await active(f);
+    const catalog: CatalogDocument = { schemaVersion: 1, models: [{ ...document().models[0]!,
+      key: "fable", id: "claude-fable-5-2", tier: 4 }] };
+    const draft = await accepted(f, "stageCatalog", { ...workspace, expectedRevision: original.revision, document: catalog });
+    const input = { ...workspace, expectedRevision: draft.revision, source: "draft" as const };
+    expect(await invoke(f, "reviewCatalog", { ...input, selection: original.selection! })).toEqual({ refused: "code_invalid_selection" });
+    const elite = { ...original.selection!, capability: 4 as const };
+    const reviewed = await accepted(f, "reviewCatalog", { ...input, selection: elite });
+    expect(await invoke(f, "promoteCatalog", { ...input, selection: original.selection!, reviewDigest: reviewed.reviewDigest }))
+      .toEqual({ refused: "code_invalid_selection" });
+    expect(await configuration(f)).toEqual(draft);
+    const promoted = await accepted(f, "promoteCatalog", { ...input, selection: elite, reviewDigest: reviewed.reviewDigest });
+    expect(promoted.selection).toEqual(elite);
+    expect(promoted.active?.document).toEqual(catalog);
+  });
+
+  test("active review, promotion and selection cannot introduce an over-ceiling lead, but retain an already selected identity", async () => {
+    const f = fixture(), catalog: CatalogDocument = { schemaVersion: 1, models: [...document().models,
+      { ...document().models[0]!, key: "astra", provider: "openai-codex", id: "gpt-6-astra", tier: 4 }] };
+    const draft = await staged(f, catalog);
+    const reviewed = await accepted(f, "reviewCatalog", { ...workspace, expectedRevision: draft.revision, source: "draft" });
+    const record = await accepted(f, "promoteCatalog", { ...workspace, expectedRevision: draft.revision, source: "draft", reviewDigest: reviewed.reviewDigest });
+    const selection: Selection = { ...record.selection!, lane: { kind: "provider", family: "openai", blend: "only" }, capability: 2 };
+    const input = { ...workspace, expectedRevision: record.revision };
+    expect(await invoke(f, "select", { ...input, selection })).toEqual({ refused: "code_invalid_selection" });
+    expect(await invoke(f, "reviewCatalog", { ...input, source: "active", selection })).toEqual({ refused: "code_invalid_selection" });
+    expect(await invoke(f, "promoteCatalog", { ...input, source: "active", selection, reviewDigest: reviewed.reviewDigest }))
+      .toEqual({ refused: "code_invalid_selection" });
+    expect(await configuration(f)).toEqual(record);
+    const elite = await accepted(f, "select", { ...input, selection: { ...selection, capability: 4 } });
+    const legacy = await accepted(f, "select", { ...workspace, expectedRevision: elite.revision, selection });
+    expect((await accepted(f, "reviewCatalog", { ...workspace, expectedRevision: legacy.revision, source: "active" })).review.selection).toEqual(selection);
+  });
+
+  test("a legacy over-ceiling lead survives metadata and key refreshes, never a provider or model identity change", async () => {
+    for (const change of ["metadata", "provider", "id"] as const) {
+      const f = fixture(), catalog: CatalogDocument = { schemaVersion: 1, models: [{ ...document().models[0]!,
+        key: "astra", provider: "openai-codex", id: "gpt-6-astra", tier: 4 }] };
+      const draft = await staged(f, catalog);
+      const elite: Selection = { lane: { kind: "provider", family: "openai", blend: "only" }, capability: 4, thinking: "medium", advisor: "off",
+        spark: false, priority: false, prewalk: false, planYolo: false, fallback: true, budget: "any" };
+      const reviewed = await accepted(f, "reviewCatalog", { ...workspace, expectedRevision: draft.revision, source: "draft", selection: elite });
+      const promoted = await accepted(f, "promoteCatalog", { ...workspace, expectedRevision: draft.revision, source: "draft", selection: elite, reviewDigest: reviewed.reviewDigest });
+      const legacy = await accepted(f, "select", { ...workspace, expectedRevision: promoted.revision, selection: { ...elite, capability: 2 } });
+      const refreshed: CatalogDocument = { schemaVersion: 1, models: [{ ...catalog.models[0]!, key: "refreshed-astra", contextWindow: 199_999,
+        provider: change === "provider" ? "openai" : "openai-codex", id: change === "id" ? "gpt-6.1-astra" : "gpt-6-astra" }] };
+      const stagedNext = await accepted(f, "stageCatalog", { ...workspace, expectedRevision: legacy.revision, document: refreshed });
+      const input = { ...workspace, expectedRevision: stagedNext.revision, source: "draft" as const, selection: legacy.selection! };
+      if (change !== "metadata") {
+        expect(await invoke(f, "reviewCatalog", input)).toEqual({ refused: "code_invalid_selection" });
+        expect(await configuration(f)).toEqual(stagedNext);
+        continue;
+      }
+      const nextReview = await accepted(f, "reviewCatalog", input);
+      const next = await accepted(f, "promoteCatalog", { ...input, reviewDigest: nextReview.reviewDigest });
+      expect(next.selection).toEqual(legacy.selection);
+      expect(next.active?.document).toEqual(refreshed);
+    }
+  });
+
   test("discarding a staged list clears it at the revision it was seen in, keeping the list in use and the team", async () => {
     const f = fixture(), promoted = await active(f);
     const changed = document(); changed.models[0]!.contextWindow = 199_999;
@@ -388,6 +486,7 @@ describe("pure client-supplied policy composition", () => {
     const composed = await accepted(f, "composeSession", input);
     expect(composed.review.selection).toEqual(record.selection!);
     expect(composed.overlay.modelRoles?.default).toContain("anthropic/native-model");
+    expect(composed.overlay.task).toEqual({});
     expect(Object.keys(composed).sort()).toEqual(["accountPool", "compositionDigest", "overlay", "planYolo", "prompt", "review", "revision"]);
     expect(await accepted(f, "composeSession", input)).toEqual(composed);
     expect((await accepted(f, "composeSession", { ...input, prompt: "A different change" })).compositionDigest).not.toBe(composed.compositionDigest);
@@ -401,6 +500,127 @@ describe("pure client-supplied policy composition", () => {
     expect(current.compositionDigest).not.toBe(composed.compositionDigest);
   });
 
+  test("composition maps deliberative effort without moving model tiers or propagating main effort to helpers", async () => {
+    const f = fixture();
+    let record = await active(f);
+    const roles = ["default", "task", "plan", "slow", "advisor", "vision", "smol", "memory", "widget", "tiny", "commit"];
+    for (const capability of [2, 3] as const) {
+      for (const [thinking, deliberative] of [
+        ["minimal", "minimal"], ["low", "medium"], ["medium", "high"],
+        ["high", "xhigh"], ["xhigh", "xhigh"], ["max", "max"],
+      ] as const) {
+        record = await accepted(f, "select", { ...workspace, expectedRevision: record.revision,
+          selection: { ...record.selection!, capability, thinking, advisor: "glance", prewalk: true, fallback: true } });
+        const composed = await accepted(f, "composeSession", { ...workspace, expectedRevision: record.revision, accounts: accounts(), prompt: "" });
+        expect(composed.review.selection.thinking).toBe(thinking);
+        expect(composed.review.routes.map(route => route.role)).toEqual(roles);
+        expect(Object.keys(composed.overlay.modelRoles!)).toEqual(roles);
+        expect(Object.keys(composed.overlay.retry!.fallbackChains!)).toEqual(roles);
+        expect(composed.overlay.task).toEqual({ prewalk: true });
+        expect(Object.hasOwn(composed.overlay, "memory")).toBe(false);
+        expect(composed.overlay.modelRoles).toEqual({
+          default: `anthropic/native-model${capability}:${thinking}`, task: `anthropic/native-model${capability}:${thinking}`,
+          plan: `anthropic/native-model${capability}:${deliberative}`, slow: `anthropic/native-model${capability}:${deliberative}`,
+          advisor: "anthropic/native-model1:low", vision: `anthropic/native-model${capability}:low`,
+          smol: "anthropic/native-model1:medium", memory: "anthropic/native-model1:medium", widget: "anthropic/native-model1:low",
+          tiny: "anthropic/native-model1:low", commit: "anthropic/native-model1:low",
+        });
+        for (const role of ["plan", "slow"])
+          expect(composed.overlay.retry!.fallbackChains![role]).toEqual(capability === 2
+            ? [`anthropic/native-model1:${deliberative}`]
+            : [`anthropic/native-model2:${deliberative}`, `anthropic/native-model1:${deliberative}`]);
+        for (const role of ["default", "task"])
+          expect(composed.overlay.retry!.fallbackChains![role]).toEqual(capability === 2
+            ? [`anthropic/native-model1:${thinking}`]
+            : [`anthropic/native-model2:${thinking}`, `anthropic/native-model1:${thinking}`]);
+        for (const role of ["advisor", "smol", "memory", "widget", "tiny", "commit"])
+          expect(composed.overlay.retry!.fallbackChains![role]).toEqual([]);
+      }
+    }
+
+    record = await accepted(f, "select", { ...workspace, expectedRevision: record.revision, selection: { ...record.selection!, advisor: "off" } });
+    const off = await accepted(f, "composeSession", { ...workspace, expectedRevision: record.revision, accounts: accounts(), prompt: "" });
+    expect(Object.keys(off.overlay.modelRoles!)).toEqual(roles.filter(role => role !== "advisor"));
+    expect(Object.keys(off.overlay.retry!.fallbackChains!)).toEqual(roles.filter(role => role !== "advisor"));
+    expect(off.overlay.advisor).toEqual({ enabled: false });
+    record = await accepted(f, "select", { ...workspace, expectedRevision: record.revision, selection: { ...record.selection!, fallback: false } });
+    const noFallback = await accepted(f, "composeSession", { ...workspace, expectedRevision: record.revision, accounts: accounts(), prompt: "" });
+    expect(noFallback.overlay.retry?.modelFallback).toBe(false);
+    expect(noFallback.overlay.retry?.fallbackChains?.memory).toEqual([]);
+    expect(Object.hasOwn(noFallback.overlay, "memory")).toBe(false);
+    expect(noFallback.overlay.task).toEqual({ prewalk: true });
+  });
+
+  test("composition clamps mapped effort independently for each model, never rounding xhigh up to max", async () => {
+    const f = fixture(), catalog = document();
+    catalog.models[0]!.thinkingLevels = ["low", "medium"];
+    catalog.models[1]!.thinkingLevels = ["low", "medium", "high", "max"];
+    f.published = published(catalog.models);
+    const draft = await staged(f, catalog);
+    const review = await accepted(f, "reviewCatalog", { ...workspace, expectedRevision: draft.revision, source: "draft" });
+    let record = await accepted(f, "promoteCatalog", { ...workspace, expectedRevision: draft.revision, source: "draft", reviewDigest: review.reviewDigest });
+    for (const [thinking, main, deliberative, fallback] of [
+      ["minimal", "low", "low", "low"], ["low", "low", "medium", "medium"], ["medium", "medium", "high", "medium"],
+      ["high", "high", "high", "medium"], ["xhigh", "high", "high", "medium"], ["max", "max", "max", "medium"],
+    ] as const) {
+      record = await accepted(f, "select", { ...workspace, expectedRevision: record.revision,
+        selection: { ...record.selection!, capability: 2, thinking, advisor: "glance", fallback: true } });
+      const composed = await accepted(f, "composeSession", { ...workspace, expectedRevision: record.revision, accounts: accounts(), prompt: "" });
+      expect(composed.review.selection.thinking).toBe(thinking);
+      expect(composed.overlay.modelRoles).toEqual({
+        default: `anthropic/native-model2:${main}`, task: `anthropic/native-model2:${main}`,
+        plan: `anthropic/native-model2:${deliberative}`, slow: `anthropic/native-model2:${deliberative}`,
+        advisor: "anthropic/native-model1:low", vision: "anthropic/native-model2:low",
+        smol: "anthropic/native-model1:medium", memory: "anthropic/native-model1:medium", widget: "anthropic/native-model1:low",
+        tiny: "anthropic/native-model1:low", commit: "anthropic/native-model1:low",
+      });
+      for (const role of ["plan", "slow"])
+        expect(composed.overlay.retry!.fallbackChains![role]).toEqual([`anthropic/native-model1:${fallback}`]);
+      expect(composed.overlay.retry!.fallbackChains!.memory).toEqual([]);
+      expect(composed.overlay.retry!.fallbackChains!.widget).toEqual([]);
+      expect(composed.overlay.task).toEqual({});
+      expect(Object.hasOwn(composed.overlay, "memory")).toBe(false);
+    }
+  });
+
+  test("advisor intensity keeps its own model and effort when the main effort is max", async () => {
+    const f = fixture();
+    let record = await active(f);
+    for (const [advisor, lead, fallback] of [
+      ["glance", "anthropic/native-model1:low", []],
+      ["review", "anthropic/native-model2:medium", ["anthropic/native-model1:low"]],
+      ["audit", "anthropic/native-model3:high", ["anthropic/native-model2:high", "anthropic/native-model1:low"]],
+    ] as const) {
+      record = await accepted(f, "select", { ...workspace, expectedRevision: record.revision,
+        selection: { ...record.selection!, capability: 2, thinking: "max", advisor, fallback: true } });
+      const composed = await accepted(f, "composeSession", { ...workspace, expectedRevision: record.revision, accounts: accounts(), prompt: "" });
+      expect(composed.overlay.modelRoles?.advisor).toBe(lead);
+      expect(composed.overlay.retry?.fallbackChains?.advisor).toEqual([...fallback]);
+      expect(composed.overlay.modelRoles?.plan).toBe("anthropic/native-model2:max");
+      expect(composed.overlay.modelRoles?.slow).toBe("anthropic/native-model2:max");
+    }
+  });
+
+  test("a free profile composes routine work without promoting to a paid premium rung, but refuses that explicit rung", async () => {
+    const f = fixture(), catalog = document();
+    for (const model of catalog.models.filter(model => model.tier < 3)) {
+      model.inputCostPerMillion = 0;
+      model.outputCostPerMillion = 0;
+    }
+    const draft = await staged(f, catalog);
+    const review = await accepted(f, "reviewCatalog", { ...workspace, expectedRevision: draft.revision, source: "draft" });
+    const promoted = await accepted(f, "promoteCatalog", { ...workspace, expectedRevision: draft.revision, source: "draft", reviewDigest: review.reviewDigest });
+    const selection = { ...promoted.selection!, capability: 2 as const, budget: "free" as const };
+    const saved = await accepted(f, "select", { ...workspace, expectedRevision: promoted.revision, selection });
+    const composed = await accepted(f, "composeSession", { ...workspace, expectedRevision: saved.revision, accounts: accounts(), prompt: "" });
+    expect(composed.overlay.modelRoles?.slow).toBe("anthropic/native-model2:high");
+    expect(Object.values(composed.overlay.modelRoles!).some(reference => reference.includes("native-model3"))).toBe(false);
+    expect(Object.values(composed.overlay.retry!.fallbackChains!).flat().some(reference => reference.includes("native-model3"))).toBe(false);
+    expect(await invoke(f, "select", { ...workspace, expectedRevision: saved.revision, selection: { ...selection, capability: 3 } }))
+      .toEqual({ refused: "code_budget_unsatisfiable" });
+    expect(await configuration(f)).toEqual(saved);
+  });
+
   test("composition refuses choices committed during its configuration read", async () => {
     const f = fixture(), record = await active(f);
     f.afterNextRead(async () => {
@@ -409,6 +629,206 @@ describe("pure client-supplied policy composition", () => {
     });
     expect(await invoke(f, "composeSession", { ...workspace, expectedRevision: record.revision, accounts: accounts(), prompt: "" }))
       .toEqual({ refused: "code_stale_preferences" });
+  });
+
+  const anthropicSmart: Selection = { lane: { kind: "provider", family: "anthropic", blend: "only" }, capability: 3, thinking: "medium", advisor: "off",
+    spark: false, priority: false, prewalk: false, planYolo: false, fallback: true, budget: "any" };
+  const leadOf = (composed: ActionResult<"composeSession">) => composed.review.routes.find(route => route.role === "default")?.lead.key;
+  /** A list put in use at `selection`, then its record as an older Code saved it: the same bytes, at the rank `stored`. */
+  async function storedChoice(f: Fixture, catalog: CatalogDocument, selection: Selection, stored: Selection): Promise<Configuration> {
+    const draft = await staged(f, catalog);
+    const input = { ...workspace, expectedRevision: draft.revision, source: "draft" as const, selection };
+    const review = await accepted(f, "reviewCatalog", input);
+    const record = { ...await accepted(f, "promoteCatalog", { ...input, reviewDigest: review.reviewDigest }), selection: stored };
+    f.store.set(`configuration/${digestOf(workspace)}`, JSON.stringify(record));
+    return record;
+  }
+
+  test("composition admits a saved premium lead as selection does, before reading OMP: an authored legacy identity composes, a rank its named tier moved does not", async () => {
+    // Fable stored at its own elite tier, chosen there, then kept at normal: the same authored model keeps its meaning.
+    const authored = fixture(), fable: CatalogDocument = { schemaVersion: 1, models: [{ ...document().models[0]!, key: "fable", id: "claude-fable-5-2", tier: 4 }] };
+    authored.published = published(fable.models);
+    const elite = await storedChoice(authored, fable, { ...anthropicSmart, capability: 4 }, { ...anthropicSmart, capability: 4 });
+    const kept = await accepted(authored, "select", { ...workspace, expectedRevision: elite.revision, selection: { ...anthropicSmart, capability: 2 } });
+    expect(leadOf(await accepted(authored, "composeSession", { ...workspace, expectedRevision: kept.revision, accounts: accounts(), prompt: "" }))).toBe("fable");
+    // A lone Opus a price ladder stored at fast, saved at fast or normal: that rank was never a choice of a smart model.
+    for (const capability of [1, 2] as const) {
+      const f = fixture(), opus: CatalogDocument = { schemaVersion: 1, models: [{ ...document().models[0]!, key: "opus", id: "claude-opus-5", tier: 1 }] };
+      f.published = published(opus.models);
+      const legacy = await storedChoice(f, opus, anthropicSmart, { ...anthropicSmart, capability });
+      const before = [...f.store];
+      expect(await invoke(f, "composeSession", { ...workspace, expectedRevision: legacy.revision, accounts: accounts(), prompt: "" }))
+        .toEqual({ refused: "code_invalid_selection" });
+      expect([f.publishedReads, [...f.store]]).toEqual([0, before]);
+      expect(await configuration(f)).toEqual(legacy);
+      // Its actual tier, chosen explicitly, composes the same stored model; the stored list is untouched.
+      const chosen = await accepted(f, "select", { ...workspace, expectedRevision: legacy.revision, selection: anthropicSmart });
+      expect(leadOf(await accepted(f, "composeSession", { ...workspace, expectedRevision: chosen.revision, accounts: accounts(), prompt: "" }))).toBe("opus");
+      expect([chosen.active, f.publishedReads]).toEqual([legacy.active, 1]);
+      // Once its actual tier is saved, going back under it is still no premium consent: refused, nothing written, and the
+      // saved actual tier composes as before.
+      const saved = [...f.store];
+      expect(await invoke(f, "select", { ...workspace, expectedRevision: chosen.revision, selection: { ...anthropicSmart, capability } }))
+        .toEqual({ refused: "code_invalid_selection" });
+      expect([...f.store]).toEqual(saved);
+      expect(await configuration(f)).toEqual(chosen);
+      expect(leadOf(await accepted(f, "composeSession", { ...workspace, expectedRevision: chosen.revision, accounts: accounts(), prompt: "" }))).toBe("opus");
+      expect(f.publishedReads).toBe(2);
+    }
+  });
+
+  test("a stored rank whose model the named tiers would change composes nothing until chosen explicitly, and an explicit choice resolves the canonical model", async () => {
+    // Haiku and Opus a price ladder stored at fast and normal, saved at normal, which meant Opus: read by name, normal is Haiku's.
+    const f = fixture(), base = document().models;
+    const catalog: CatalogDocument = { schemaVersion: 1, models: [{ ...base[0]!, key: "haiku", id: "claude-haiku-5", tier: 1 },
+      { ...base[1]!, key: "opus", id: "claude-opus-5", tier: 2 }] };
+    f.published = published(catalog.models);
+    const legacy = await storedChoice(f, catalog, anthropicSmart, { ...anthropicSmart, capability: 2 });
+    const before = [...f.store];
+    expect(await invoke(f, "composeSession", { ...workspace, expectedRevision: legacy.revision, accounts: accounts(), prompt: "" }))
+      .toEqual({ refused: "code_invalid_selection" });
+    expect(await invoke(f, "reviewCatalog", { ...workspace, expectedRevision: legacy.revision, source: "active" })).toEqual({ refused: "code_invalid_selection" });
+    expect([f.publishedReads, [...f.store]]).toEqual([0, before]);
+    expect(await configuration(f)).toEqual(legacy);
+    for (const [capability, key] of [[1, "haiku"], [2, "haiku"], [3, "opus"]] as const) {
+      const review = await accepted(f, "reviewCatalog", { ...workspace, expectedRevision: legacy.revision, source: "active", selection: { ...anthropicSmart, capability } });
+      expect(review.review.routes.find(route => route.role === "default")?.lead.key).toBe(key);
+    }
+    // The same rank chosen again is a choice of what it now names, never of the model it once meant.
+    const normal = await accepted(f, "select", { ...workspace, expectedRevision: legacy.revision, selection: legacy.selection! });
+    expect(leadOf(await accepted(f, "composeSession", { ...workspace, expectedRevision: normal.revision, accounts: accounts(), prompt: "" }))).toBe("haiku");
+    const chosen = await accepted(f, "select", { ...workspace, expectedRevision: normal.revision, selection: anthropicSmart });
+    expect(leadOf(await accepted(f, "composeSession", { ...workspace, expectedRevision: chosen.revision, accounts: accounts(), prompt: "" }))).toBe("opus");
+    expect([normal.active, chosen.active]).toEqual([legacy.active, legacy.active]);
+  });
+
+  describe("the private resolved intent of an explicit choice", () => {
+    // Sonnet and Opus a price ladder stored at elite and smart, saved at normal, which meant Opus: read by name,
+    // Sonnet is normal and Opus smart, so the saved rank alone cannot say which model it chose.
+    const base = document().models;
+    const compressed: CatalogDocument = { schemaVersion: 1, models: [{ ...base[1]!, key: "sonnet", id: "claude-sonnet-5", tier: 4 },
+      { ...base[2]!, key: "opus", id: "claude-opus-5", tier: 3 }] };
+    const normal: Selection = { ...anthropicSmart, capability: 2 };
+    const key = `configuration/${digestOf(workspace)}`;
+    const envelope = (f: Fixture) => JSON.parse(f.store.get(key)!) as Record<string, unknown>;
+    const compose = (f: Fixture, expectedRevision: number) => invoke(f, "composeSession", { ...workspace, expectedRevision, accounts: accounts(), prompt: "" });
+    const profile = async (f: Fixture) => (await accepted(f, "listProfiles", {})).profiles.find(row => row.containerId === workspace.containerId);
+    async function legacyOf(f: Fixture) {
+      f.published = published(compressed.models);
+      return storedChoice(f, compressed, anthropicSmart, normal);
+    }
+
+    test("a deliberate same-rank choice writes its witness in the one CAS, and reads, listing and composition then resolve it without any public field", async () => {
+      const f = fixture(), legacy = await legacyOf(f);
+      // Unwitnessed, the saved rank composes nothing and lists no model, before OMP is read; the record still reads and lists.
+      expect(await compose(f, legacy.revision)).toEqual({ refused: "code_invalid_selection" });
+      expect(await invoke(f, "reviewCatalog", { ...workspace, expectedRevision: legacy.revision, source: "active" })).toEqual({ refused: "code_invalid_selection" });
+      expect(await profile(f)).toMatchObject({ revision: legacy.revision, selected: null });
+      expect(f.publishedReads).toBe(0);
+      // A caller cannot supply a witness: the published input grammar has no place for one.
+      expect(await invoke(f, "select", { ...workspace, expectedRevision: legacy.revision, selection: normal,
+        resolvedSelection: { catalogDigest: legacy.active!.digest, selectionDigest: digestOf(normal), provider: "anthropic", id: "claude-opus-5" } } as never))
+        .toEqual({ refused: "code_invalid_request" });
+      const writes = f.store.size;
+      const saved = await accepted(f, "select", { ...workspace, expectedRevision: legacy.revision, selection: normal });
+      expect(saved).toEqual({ ...legacy, revision: legacy.revision + 1, updatedAt: now });
+      expect(f.store.size).toBe(writes);
+      expect(envelope(f)).toEqual({ ...saved, resolvedSelection: { catalogDigest: legacy.active!.digest, selectionDigest: digestOf(normal),
+        provider: "anthropic", id: "claude-sonnet-5" } });
+      // Every public answer is the strict record: `accepted` parses each through its published schema.
+      expect(await configuration(f)).toEqual(saved);
+      expect(Object.keys((await accepted(f, "readConfiguration", workspace)).configuration!)).not.toContain("resolvedSelection");
+      const reviewed = await accepted(f, "reviewCatalog", { ...workspace, expectedRevision: saved.revision, source: "active" });
+      expect(reviewed.review.routes.find(route => route.role === "default")?.lead.key).toBe("sonnet");
+      expect(await profile(f)).toMatchObject({ selected: { model: "anthropic/claude-sonnet-5", capability: 2 } });
+      expect(leadOf(await accepted(f, "composeSession", { ...workspace, expectedRevision: saved.revision, accounts: accounts(), prompt: "" }))).toBe("sonnet");
+      // The raw list, its digest and its provenance are exactly the ones saved before.
+      expect(saved.active).toEqual(legacy.active);
+      expect(saved.active!.digest).toBe(digestOf(compressed));
+    });
+
+    test("a malformed, stale or mismatched witness is no witness: reads keep working and keep its bytes, composition refuses", async () => {
+      const f = fixture(), legacy = await legacyOf(f);
+      const saved = await accepted(f, "select", { ...workspace, expectedRevision: legacy.revision, selection: normal });
+      const valid = envelope(f).resolvedSelection as Record<string, string>;
+      for (const witness of [{ ...valid, provider: 7 }, "sonnet", null, { ...valid, extra: true },
+        { ...valid, catalogDigest: "0".repeat(64) }, { ...valid, selectionDigest: digestOf({ ...normal, thinking: "high" }) },
+        { ...valid, id: "claude-opus-5" }, { ...valid, provider: "openai" }]) {
+        const raw = JSON.stringify({ ...saved, resolvedSelection: witness });
+        f.store.set(key, raw);
+        expect(await configuration(f)).toEqual(saved);
+        expect(await profile(f)).toMatchObject({ revision: saved.revision, selected: null });
+        expect(await invoke(f, "reviewCatalog", { ...workspace, expectedRevision: saved.revision, source: "active" })).toEqual({ refused: "code_invalid_selection" });
+        expect(await compose(f, saved.revision)).toEqual({ refused: "code_invalid_selection" });
+        expect(f.store.get(key)).toBe(raw);
+      }
+      expect(f.publishedReads).toBe(0);
+      // An unrelated write drops what no longer binds rather than carrying it.
+      const changed = await accepted(f, "changeAccounts", { ...workspace, expectedRevision: saved.revision,
+        change: { kind: "set-account", reference: accounts().accounts[2]!.reference, enabled: false } });
+      expect(envelope(f)).toEqual(changed);
+    });
+
+    test("unrelated writes carry a still-bound witness; a new explicit choice rebinds it and an automatic one never creates it", async () => {
+      const f = fixture(), legacy = await legacyOf(f);
+      const saved = await accepted(f, "select", { ...workspace, expectedRevision: legacy.revision, selection: normal });
+      const witness = envelope(f).resolvedSelection;
+      const refreshed = { ...compressed, models: compressed.models.map(model => ({ ...model, contextWindow: 199_999 })) };
+      const stagedNext = await accepted(f, "stageCatalog", { ...workspace, expectedRevision: saved.revision, document: refreshed });
+      const changed = await accepted(f, "changeAccounts", { ...workspace, expectedRevision: stagedNext.revision,
+        change: { kind: "set-account", reference: accounts().accounts[2]!.reference, enabled: false } });
+      const discarded = await accepted(f, "discardCatalog", { ...workspace, expectedRevision: changed.revision });
+      expect(envelope(f)).toEqual({ ...discarded, resolvedSelection: witness });
+      // Re-saving the list in use with no new choice carries the same witness.
+      const kept = await accepted(f, "reviewCatalog", { ...workspace, expectedRevision: discarded.revision, source: "active" });
+      const repromoted = await accepted(f, "promoteCatalog", { ...workspace, expectedRevision: discarded.revision, source: "active", reviewDigest: kept.reviewDigest });
+      expect(envelope(f)).toEqual({ ...repromoted, resolvedSelection: witness });
+      expect(leadOf(await accepted(f, "composeSession", { ...workspace, expectedRevision: repromoted.revision, accounts: accounts(), prompt: "" }))).toBe("sonnet");
+      // A changed selector is a new choice: the server rebinds the witness to the model it now names.
+      const smart = await accepted(f, "select", { ...workspace, expectedRevision: repromoted.revision, selection: anthropicSmart });
+      expect(envelope(f).resolvedSelection).toEqual({ catalogDigest: legacy.active!.digest, selectionDigest: digestOf(anthropicSmart),
+        provider: "anthropic", id: "claude-opus-5" });
+      // A new list promoted with no choice of its own keeps no witness, even over a witnessed saved choice.
+      const draft = await accepted(f, "stageCatalog", { ...workspace, expectedRevision: smart.revision, document: document() });
+      const automatic = await accepted(f, "reviewCatalog", { ...workspace, expectedRevision: draft.revision, source: "draft" });
+      const promoted = await accepted(f, "promoteCatalog", { ...workspace, expectedRevision: draft.revision, source: "draft", reviewDigest: automatic.reviewDigest });
+      expect(envelope(f)).toEqual(promoted);
+      // The same list chosen explicitly at review and promotion is witnessed in that promotion's CAS.
+      const again = await accepted(f, "stageCatalog", { ...workspace, expectedRevision: promoted.revision, document: compressed });
+      const input = { ...workspace, expectedRevision: again.revision, source: "draft" as const, selection: normal };
+      const explicit = await accepted(f, "reviewCatalog", input);
+      const chosen = await accepted(f, "promoteCatalog", { ...input, reviewDigest: explicit.reviewDigest });
+      expect(envelope(f)).toEqual({ ...chosen, resolvedSelection: witness });
+    });
+
+    test("a witness keeps a model id as long as a catalog admits, beyond Code's own identifier bound, through reads, listing, unrelated writes and composition", async () => {
+      const f = fixture(), sonnet = `claude-${"long".repeat(50)}-sonnet-5`;
+      expect(sonnet.length).toBeGreaterThan(128);
+      const catalog: CatalogDocument = { ...compressed, models: compressed.models.map(model => model.key === "sonnet" ? { ...model, id: sonnet } : model) };
+      f.published = published(catalog.models);
+      const legacy = await storedChoice(f, catalog, anthropicSmart, normal);
+      expect(await invoke(f, "reviewCatalog", { ...workspace, expectedRevision: legacy.revision, source: "active" })).toEqual({ refused: "code_invalid_selection" });
+      const saved = await accepted(f, "select", { ...workspace, expectedRevision: legacy.revision, selection: normal });
+      const witness = { catalogDigest: legacy.active!.digest, selectionDigest: digestOf(normal), provider: "anthropic", id: sonnet };
+      expect(envelope(f)).toEqual({ ...saved, resolvedSelection: witness });
+      expect(await configuration(f)).toEqual(saved);
+      const reviewed = await accepted(f, "reviewCatalog", { ...workspace, expectedRevision: saved.revision, source: "active" });
+      expect(reviewed.review.routes.find(route => route.role === "default")?.lead.key).toBe("sonnet");
+      expect(await profile(f)).toMatchObject({ selected: { model: `anthropic/${sonnet}`, capability: 2 } });
+      const changed = await accepted(f, "changeAccounts", { ...workspace, expectedRevision: saved.revision,
+        change: { kind: "set-account", reference: accounts().accounts[2]!.reference, enabled: false } });
+      expect(envelope(f)).toEqual({ ...changed, resolvedSelection: witness });
+      expect(await profile(f)).toMatchObject({ revision: changed.revision, selected: { model: `anthropic/${sonnet}` } });
+      expect([changed.active, changed.active!.digest]).toEqual([legacy.active, digestOf(catalog)]);
+      // OMP publishes that very id, so composition reads it once and routes the default role to it.
+      expect(f.published.models.map(model => model.id)).toContain(sonnet);
+      const composed = await accepted(f, "composeSession", { ...workspace, expectedRevision: changed.revision, accounts: accounts(), prompt: "" });
+      expect(leadOf(composed)).toBe("sonnet");
+      expect(composed.overlay.modelRoles?.default).toBe(`anthropic/${sonnet}:medium`);
+      expect(f.publishedReads).toBe(1);
+      expect(envelope(f)).toEqual({ ...changed, resolvedSelection: witness });
+      expect(await configuration(f)).toEqual(changed);
+    });
   });
 
   test("freshness and complete route-provider coverage cannot be supplied by stale or empty pools", async () => {
@@ -481,10 +901,50 @@ describe("verified catalogs and launch-time honesty", () => {
       inventoryObservedAt: now - 2000, benchmarkCompletedAt: now - 1000, providers: ["anthropic"], poolIdentityDigest: verified.poolIdentityDigest });
     const review = await accepted(f, "reviewCatalog", { ...workspace, expectedRevision: staged.revision, source: "draft" });
     expect(review.provenance).toEqual(staged.draft!.provenance);
+    expect(review.review.selection).toMatchObject({ lane: { kind: "provider", family: "anthropic", blend: "only" }, capability: 2, thinking: "medium" });
     const promoted = await accepted(f, "promoteCatalog", { ...workspace, expectedRevision: staged.revision, source: "draft", reviewDigest: review.reviewDigest });
     expect(promoted.active).toEqual(staged.draft);
     // Manual authorship stays exactly that: the same document staged without a verification is unverified.
     expect((await accepted(f, "stageCatalog", { ...workspace, expectedRevision: promoted.revision, document: document() })).draft?.provenance).toBeNull();
+  });
+
+  test("refusing a premium promotion preserves the staged verification and active workspace choices until actual-tier review", async () => {
+    const f = fixture(), original = await active(f);
+    const catalog: CatalogDocument = { schemaVersion: 1, models: [{ ...document().models[0]!,
+      key: "fable", id: "claude-fable-5-2", tier: 4 }] };
+    const verified = await verification(f, original.revision);
+    const staged = await accepted(f, "stageCatalog", { ...workspace, expectedRevision: original.revision, document: catalog, verification: verified });
+    const input = { ...workspace, expectedRevision: staged.revision, source: "draft" as const }, before = [...f.store];
+    expect(await invoke(f, "reviewCatalog", { ...input, selection: original.selection! })).toEqual({ refused: "code_invalid_selection" });
+    expect([...f.store]).toEqual(before);
+    expect(await configuration(f)).toEqual(staged);
+    expect(staged.active).toEqual(original.active);
+    expect(staged.selection).toEqual(original.selection);
+    expect(staged.accounts).toEqual(original.accounts);
+    expect(staged.draft?.document).toEqual(catalog);
+    expect(staged.draft?.digest).toBe(digestOf(catalog));
+    expect(staged.draft?.provenance).toMatchObject({ inventoryArtifactSha256: verified.inventoryArtifactSha256,
+      catalogRevision: verified.catalogRevision, poolIdentityDigest: verified.poolIdentityDigest,
+      inventoryObservedAt: verified.inventoryObservedAt, benchmarkCompletedAt: verified.benchmarkCompletedAt });
+    const selection = { ...original.selection!, capability: 4 as const };
+    const review = await accepted(f, "reviewCatalog", { ...input, selection });
+    const promoted = await accepted(f, "promoteCatalog", { ...input, selection, reviewDigest: review.reviewDigest });
+    expect(promoted.active).toEqual(staged.draft);
+    expect(promoted.selection).toEqual(selection);
+    expect(promoted.accounts).toEqual(original.accounts);
+  });
+
+  test("an unverified preview names catalog models without manufacturing verified account coverage", async () => {
+    const f = fixture(), record = await staged(f);
+    const review = await accepted(f, "reviewCatalog", { ...workspace, expectedRevision: record.revision, source: "draft" });
+    expect(review.review.selection).toMatchObject({ lane: { kind: "provider", family: "anthropic", blend: "only" }, capability: 2, thinking: "medium" });
+    expect(review.provenance).toBeNull();
+    expect(await configuration(f)).toEqual(record);
+    const promoted = await accepted(f, "promoteCatalog", { ...workspace, expectedRevision: record.revision, source: "draft", reviewDigest: review.reviewDigest });
+    expect(promoted.active?.provenance).toBeNull();
+    expect(promoted.accounts).toEqual(record.accounts);
+    expect(await invoke(f, "composeSession", { ...workspace, expectedRevision: promoted.revision,
+      accounts: { ...accounts(), accounts: [] }, prompt: "" })).toEqual({ refused: "code_account_unavailable" });
   });
 
   test("a verification recorded without the OMP runtime and model catalog it ran against reads as unverified, without a schema change", async () => {
@@ -523,7 +983,7 @@ describe("verified catalogs and launch-time honesty", () => {
   });
 
   test("a launch prunes the fallbacks no included account serves and still refuses a lead nobody serves", async () => {
-    // Claude-led at capability 3: the tier-2 GPT rung, alone on `openai`, is only ever a fallback, and Codex leads some roles.
+    // Mixed at capability 3: the tier-2 GPT rung, alone on `openai`, is only a fallback, while Codex leads ordinary work.
     const rung = (key: string, provider: string, tier: 1 | 2 | 3, inputCostPerMillion: number) => ({ ...document().models[0]!,
       key, provider, id: `native-${key}`, api: "openai-codex-responses", tier, inputCostPerMillion, images: true });
     const catalog: CatalogDocument = { schemaVersion: 1, models: [rung("o1", "openai-codex", 1, 1), rung("o2", "openai", 2, 2),
@@ -534,7 +994,7 @@ describe("verified catalogs and launch-time honesty", () => {
     const review = await accepted(f, "reviewCatalog", { ...workspace, expectedRevision: record.revision, source: "draft" });
     const promoted = await accepted(f, "promoteCatalog", { ...workspace, expectedRevision: record.revision, source: "draft", reviewDigest: review.reviewDigest });
     const saved = await accepted(f, "select", { ...workspace, expectedRevision: promoted.revision,
-      selection: { ...promoted.selection!, lane: { kind: "provider", family: "anthropic", blend: "led" }, capability: 3, fallback: true, advisor: "off" } });
+      selection: { ...promoted.selection!, lane: { kind: "mixed" }, capability: 3, fallback: true, advisor: "off" } });
     const scope = accounts().scope;
     const slot = (provider: string, credentialId: number) => ({ reference: { kind: "credential" as const, scope, provider, credentialId },
       credentialId, identityKey: null, type: "api_key" as const, email: null, disabled: false, blocks: [] });
@@ -554,11 +1014,11 @@ describe("verified catalogs and launch-time honesty", () => {
     const f = fixture(), record = await active(f);
     const input = { ...workspace, expectedRevision: record.revision, accounts: accounts(), prompt: "" };
     const composed = await accepted(f, "composeSession", input);
-    f.published = published(document().models.filter(model => model.tier !== 3));
-    expect(await invoke(f, "composeSession", input)).toEqual({ refused: "code_model_unpublished: anthropic/native-model3" });
+    f.published = published(document().models.filter(model => model.tier !== 2));
+    expect(await invoke(f, "composeSession", input)).toEqual({ refused: "code_model_unpublished: anthropic/native-model2" });
     f.published = published([]);
     expect(await invoke(f, "composeSession", input))
-      .toEqual({ refused: "code_model_unpublished: anthropic/native-model1, anthropic/native-model2, anthropic/native-model3" });
+      .toEqual({ refused: "code_model_unpublished: anthropic/native-model1, anthropic/native-model2" });
     // Another OMP list that still publishes every routed model composes, as a different composition.
     f.published = { ...published(), revision: "b".repeat(64) };
     expect((await accepted(f, "composeSession", input)).compositionDigest).not.toBe(composed.compositionDigest);

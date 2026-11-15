@@ -1,7 +1,7 @@
 import { describe, expect, test } from "bun:test";
 import { OMP_VERSION, PROBE_MODEL_LIMIT, ThinkingLevelSchema, parseBenchmarkObservation, parseInventoryObservation, type InventoryReceipt,
   type ModelCatalogSnapshot, type QuotaTierOf, type ThinkingLevel } from "@atyrode/manifold-omp";
-import { benchmarkCandidates, catalogFromMetadata, catalogFromObservations, inventoryDraft, type ScaffoldOptions } from "./probe.ts";
+import { benchmarkCandidates, catalogFromMetadata, catalogFromObservations, inventoryDraft, inventoryPlan, type ScaffoldOptions } from "./probe.ts";
 import { compileCatalog } from "./catalog.ts";
 import type { Selection } from "./contracts.ts";
 import { clampSelection, compileOmpOverlay, defaultSelection, reviewCatalog, type Review } from "./routing.ts";
@@ -133,6 +133,7 @@ describe("pure typed scaffolding", () => {
       thinkingLevels: ["minimal"],
     })]);
     const catalog = compileCatalog(document), review = reviewCatalog(catalog, defaultSelection(catalog), 200);
+    expect(review.selection).toMatchObject({ lane: { kind: "provider", family: "vendor-example", blend: "only" }, capability: 1 });
     expect(compileOmpOverlay(catalog, review.selection, review.routes).modelRoles?.default)
       .toBe("vendor-example/free-model:minimal");
   });
@@ -146,16 +147,23 @@ describe("pure typed scaffolding", () => {
       expect(result.document.models.filter(model => model.provider === provider).map(model => [model.tier, model.id]))
         .toEqual([[1, "series1"], [2, "series2"], [3, "series3"], [4, "series4"]]);
       for (const capability of [1, 2, 3, 4] as const) {
+        const effort = ({ 1: "low", 2: "medium", 3: "high", 4: "max" } as const)[capability];
         const review = reviewCatalog(catalog, { ...defaultSelection(catalog), capability, thinking: "max",
           lane: { kind: "provider", family, blend: "only" } }, 200);
         expect(review.available.capabilities).toEqual([1, 2, 3, 4]);
         const overlay = compileOmpOverlay(catalog, review.selection, review.routes);
-        expect(overlay.modelRoles?.default).toBe(`${provider}/series${capability}:${["low", "medium", "high", "max"][capability - 1]}`);
-        expect(review.routes.find(route => route.role === "plan")?.lead.key).toBe(`${provider}.series${Math.min(4, capability + 1)}`);
+        expect(overlay.modelRoles?.default).toBe(`${provider}/series${capability}:${effort}`);
+        for (const role of ["plan", "slow"]) {
+          expect(review.routes.find(route => route.role === role)?.lead).toEqual({
+            key: `${provider}.series${capability}`, thinking: effort,
+          });
+        }
         if (capability === 4) {
           expect(review.routes.find(route => route.role === "task")?.fallback.map(choice => choice.key))
             .toEqual([`${provider}.series3`, `${provider}.series2`]);
-          expect(review.routes.find(route => route.role === "scout")?.lead.key).toBe(`${provider}.series2`);
+          expect(review.routes.find(route => route.role === "smol")?.lead.key).toBe(`${provider}.series1`);
+          expect(review.routes.find(route => route.role === "memory")?.lead).toEqual({ key: `${provider}.series1`, thinking: "low" });
+          expect(review.routes.find(route => route.role === "widget")?.lead).toEqual({ key: `${provider}.series1`, thinking: "low" });
           expect(review.routes.find(route => route.role === "commit")?.lead.key).toBe(`${provider}.series1`);
         }
       }
@@ -195,6 +203,10 @@ describe("pure typed scaffolding", () => {
       .toEqual([[1, "adversary1"], [2, "adversary254"], [3, "adversary255"], [4, "adversary256"]]);
     expect(inventoryDraft(inv, "any").benchmark.candidates.map(model => model.id)).toEqual(inv.models.map(model => model.id).sort());
     expect(derived({ ...inv, models: [...inv.models].reverse() })).toEqual(result);
+    const planned = inventoryPlan(inv, "any");
+    expect(planned.models.map(model => [model.tier, model.id])).toEqual(result.document.models.map(model => [model.tier, model.id]));
+    expect(planned.models.every(model => model.tokensPerSecond === null && model.timeToFirstTokenMs === null)).toBe(true);
+    expect(() => inventoryPlan({ ...inv, models: [...inv.models, { ...base, id: "overflow" }] }, "any")).toThrow();
   });
   test("an unavailable fourth model preserves three-level selections and clamps cross-provider routes", () => {
     const inv = fourLevelInventory(), input = benchmarkCandidates(inv);
@@ -214,7 +226,7 @@ describe("pure typed scaffolding", () => {
         lane: { kind: "provider", family: primary, blend: "led" } }, 200);
       expect(review.available.capabilities).toEqual([1, 2, 3, 4]);
       expect(catalog.model(review.routes.find(route => route.role === "default")!.lead.key).tier).toBe(4);
-      expect(review.routes.find(route => route.role === "reviewer")?.lead.key).toBe(`${provider}.series3`);
+      for (const role of ["plan", "slow"]) expect(catalog.model(review.routes.find(route => route.role === role)!.lead.key).tier).toBe(4);
       expect(review.routes.find(route => route.role === "default")?.fallback.map(choice => choice.key))
         .toContain(`${provider}.series3`);
       const mixed = { ...selection, lane: { kind: "mixed" } as const };
@@ -228,9 +240,49 @@ describe("pure typed scaffolding", () => {
       ["anthropic", 1], ["anthropic", 2], ["anthropic", 3],
     ]);
     // Two rows of a family Code requires are a short ladder: laddered, said short, never refused.
+    // Its named rungs keep their own tiers; the missing fast tier routes to the nearest rung.
     const short = derived({ ...inv, models: inv.models.slice(1) }).document;
-    expect([tiers(short, "anthropic"), compileCatalog(short).short]).toEqual([[[1, "claude-sonnet-5"], [2, "claude-opus-5"]], ["anthropic"]]);
+    expect([tiers(short, "anthropic"), compileCatalog(short).short]).toEqual([[[2, "claude-sonnet-5"], [3, "claude-opus-5"]], ["anthropic"]]);
     expect(compileCatalog(derived(inv).document).short).toEqual([]);
+  });
+  test("Anthropic's named families keep their authored tiers when a lower or middle rung is missing", () => {
+    const inv = fullInventory();
+    inv.models = inv.models.filter(model => model.provider === "anthropic");
+    const measured = (blocked: readonly string[]) => tiers(catalogFromObservations(inv,
+      observed(inv, Object.fromEntries(blocked.map(id => [id, "client_blocked" as const])))).document, "anthropic");
+    expect(measured(["claude-haiku-5", "claude-sonnet-5"])).toEqual([[3, "claude-opus-5"]]);
+    expect(measured(["claude-haiku-5", "claude-opus-5"])).toEqual([[2, "claude-sonnet-5"]]);
+    expect(measured(["claude-sonnet-5"])).toEqual([[1, "claude-haiku-5"], [3, "claude-opus-5"]]);
+    for (const [ids, expected] of [
+      [["claude-haiku-5", "claude-opus-5"], [[1, "claude-haiku-5"], [3, "claude-opus-5"]]],
+      [["claude-opus-5"], [[3, "claude-opus-5"]]],
+    ] satisfies [string[], (string | number)[][]][]) {
+      const snapshot: ModelCatalogSnapshot = { schemaVersion: 1, source: "bundled", ompVersion: "18.1.14", revision: "a".repeat(64),
+        models: inv.models.filter(model => ids.includes(model.id)) };
+      expect(tiers(catalogFromMetadata(snapshot, "any"), "anthropic")).toEqual(expected);
+    }
+    // A listing none of whose ids carries a reviewed family name is still laddered by metadata: the cheapest is the bottom, the
+    // deepest thinker the top, and a middle is priced between them. Listed in neither price nor address order, the dearest row,
+    // thinking less than that top, takes no rung, so neither the price order nor the address order nor the listing is the ladder.
+    const unknown = [
+      listed("anthropic", "claude-moth", 5, 200_000, "low", "max"),
+      listed("anthropic", "claude-wren", 1, 200_000, "low", "low"),
+      listed("anthropic", "claude-kite", 8, 200_000, "low", "medium"),
+      listed("anthropic", "claude-atlas", 3, 200_000, "low", "high"),
+    ];
+    const ids = (rows: readonly Row[]) => rows.map(model => model.id);
+    expect([ids(unknown), ids([...unknown].sort((left, right) => left.inputCostPerMillion - right.inputCostPerMillion)), ids(unknown).sort()]).toEqual([
+      ["claude-moth", "claude-wren", "claude-kite", "claude-atlas"],
+      ["claude-wren", "claude-atlas", "claude-moth", "claude-kite"],
+      ["claude-atlas", "claude-kite", "claude-moth", "claude-wren"],
+    ]);
+    const fallback = derived(receiptOf(unknown));
+    expect([tiers(fallback.document, "anthropic"), fallback.exclusions]).toEqual([[[1, "claude-wren"], [2, "claude-atlas"], [3, "claude-moth"]], []]);
+    expect(derived(receiptOf([...unknown].reverse()))).toEqual(fallback);
+    // The profile's main choice is the everyday middle rung, not the cheapest, the dearest or the first listed.
+    const catalog = compileCatalog(fallback.document), selection = defaultSelection(catalog);
+    expect([selection.lane, selection.capability]).toEqual([{ kind: "provider", family: "anthropic", blend: "only" }, 2]);
+    expect(catalog.model(reviewCatalog(catalog, selection, 200).routes.find(route => route.role === "default")!.lead.key).id).toBe("claude-atlas");
   });
   test("missing, stale and wrong-API probes refuse promotion", () => {
     const inv = fullInventory(), input = benchmarkCandidates(inv), receipt = parseBenchmarkObservation(report(input), input, 101, 200);
@@ -356,6 +408,73 @@ describe("pure typed scaffolding", () => {
     expect(new Set(keys).size).toBe(keys.length);
     expect(keys).toContain("openrouter.alpha-1_3Afree");
     expect(keys).toContain("openrouter.alpha-1-free");
+  });
+});
+
+describe("unmeasured inventory intent planning", () => {
+  test("exact advertised identities retain their metadata and tiers without measurement or verification", () => {
+    const inv = fourLevelInventory(), planned = inventoryPlan(inv, "any");
+    expect(planned).toEqual({ schemaVersion: 1, models: expect.any(Array) });
+    expect(planned.models.map(model => [model.provider, model.tier, model.id])).toEqual(
+      ["openai-codex", "anthropic"].flatMap(provider => ([1, 2, 3, 4] as const).map(tier => [provider, tier, `series${tier}`])));
+    for (const model of planned.models) {
+      const source = inv.models.find(row => row.provider === model.provider && row.id === model.id)!;
+      expect(model).toMatchObject({
+        key: `${source.provider}.${source.id}`, api: source.api,
+        inputCostPerMillion: source.inputCostPerMillion, outputCostPerMillion: source.outputCostPerMillion,
+        contextWindow: source.contextWindow, thinkingLevels: source.thinkingLevels, images: source.images,
+        quotaBucket: source.provider === "openai-codex" ? "codex" : "claude",
+        tokensPerSecond: null, timeToFirstTokenMs: null,
+      });
+    }
+    expect(inventoryPlan({ ...inv, models: [...inv.models].reverse() }, "any")).toEqual(planned);
+  });
+
+  test("planning honors the candidate budget, fixed-model eligibility and separate quota classes", () => {
+    const free = listed("anthropic", "free-entry", 0, 100_000, "low", "max");
+    const inv = receiptOf([
+      free, { ...free, id: "paid-top", inputCostPerMillion: 2, outputCostPerMillion: 10 },
+      { ...free, id: "special-entry", quotaTier: "future-resource" },
+      { ...free, id: "rolling-latest" }, { ...free, id: "dated-20261114" },
+      { ...free, id: "missing-thinking", thinkingLevels: [] },
+    ]);
+    expect(inventoryPlan(inv, "any").models.map(model => [model.tier, model.id])).toEqual([[1, "free-entry"], [2, "paid-top"]]);
+    expect(inventoryPlan(inv, "free").models.map(model => [model.tier, model.id])).toEqual([[1, "free-entry"]]);
+    const generic = receiptOf([{ ...free, provider: "vendor-example", api: "vendor-chat", id: "free/model:variant",
+      reasoning: false, thinkingLevels: [] }]);
+    expect(inventoryPlan(generic, "free").models).toEqual([expect.objectContaining({
+      provider: "vendor-example", id: "free/model:variant", api: "vendor-chat", tier: 1,
+      thinkingLevels: ["minimal"], quotaBucket: null, tokensPerSecond: null, timeToFirstTokenMs: null,
+    })]);
+  });
+
+  test("an advertised newest model is only intent and cannot replace authoritative probe outcomes", () => {
+    const inv = fullInventory();
+    inv.models.push({ ...inv.models.find(model => model.id === "claude-opus-5")!, id: "claude-opus-6" });
+    const planned = inventoryPlan(inv, "any");
+    expect(tiers(planned, "anthropic")).toEqual([[1, "claude-haiku-5"], [2, "claude-sonnet-5"], [3, "claude-opus-6"]]);
+    expect(planned.models.every(model => model.tokensPerSecond === null && model.timeToFirstTokenMs === null)).toBe(true);
+    const benchmark = observed(inv, { "claude-opus-6": "client_blocked" });
+    const verified = catalogFromObservations(inv, benchmark);
+    expect(tiers(verified.document, "anthropic")).toEqual([[1, "claude-haiku-5"], [2, "claude-sonnet-5"], [3, "claude-opus-5"]]);
+    expect(verified.document.models.every(model => model.tokensPerSecond === 62 && model.timeToFirstTokenMs === 700)).toBe(true);
+    expect(() => catalogFromObservations(inv, { ...benchmark, results: benchmark.results.slice(1) })).toThrow("probe_missing_probe");
+  });
+
+  test("malformed inventories, ambiguous identities and invalid planning budgets refuse", () => {
+    expect(() => inventoryPlan({}, "any")).toThrow("probe_invalid_observation");
+    expect(() => inventoryPlan(fullInventory(), "paid" as Selection["budget"])).toThrow("probe_invalid_input");
+    expect(() => inventoryPlan(fullInventory(), undefined as unknown as Selection["budget"])).toThrow("probe_invalid_input");
+    for (const change of [{}, { id: "CLAUDE-HAIKU-5" }, { api: "other-api" }]) {
+      const inv = fullInventory();
+      inv.models.push({ ...inv.models[0]!, ...change, quotaTier: "spark" });
+      expect(() => inventoryPlan(inv, "any")).toThrow("probe_ambiguous_identity");
+    }
+    const base = fullInventory().models[0]!;
+    expect(() => inventoryPlan(receiptOf([
+      { ...base, provider: "vendor.part", id: "model" }, { ...base, provider: "vendor", id: "part.model" },
+    ]), "any")).toThrow();
+    expect(() => inventoryPlan(receiptOf([{ ...base, id: "rolling-latest" }]), "any")).toThrow();
   });
 });
 
@@ -622,7 +741,7 @@ describe("a family Code requires that the accounts reach only in part", () => {
     const review = (changes: Partial<Selection>) => reviewCatalog(catalog, { ...team, ...changes }, 200);
     const lead = (value: Review, role: string) => catalog.model(value.routes.find(route => route.role === role)!.lead.key).id;
     const gpt: Selection["lane"] = { kind: "provider", family: "openai", blend: "only" };
-    expect(team).toMatchObject({ lane: { kind: "mixed" }, capability: 3 });
+    expect(team).toMatchObject({ lane: { kind: "provider", family: "anthropic", blend: "only" }, capability: 2, thinking: "medium" });
     // GPT's smart tier is filled from its nearest rung: it routes to terra itself, and elite is not offered.
     expect(([1, 2, 3] as const).map(capability => lead(review({ lane: gpt, capability }), "default"))).toEqual(["gpt-6-luna", "gpt-5.6-terra", "gpt-5.6-terra"]);
     const smart = review({ lane: gpt, capability: 3 });
@@ -634,10 +753,14 @@ describe("a family Code requires that the accounts reach only in part", () => {
     // A filled lead crosses at its own tier: GPT-led smart leads on terra, a normal rung, so its crossing is Claude's normal.
     expect(review({ lane: { kind: "provider", family: "openai", blend: "led" }, capability: 3 }).routes.find(route => route.role === "default")!.fallback
       .map(choice => catalog.model(choice.key).id)).toEqual(["gpt-6-luna", "claude-sonnet-5-5", "claude-haiku-5-5"]);
-    // Claude keeps its four tiers, and Mixed crosses to them where its deliberative roles reach past GPT's top.
+    // Claude keeps its four explicit tiers; routine deliberation never silently promotes one.
     expect(([1, 2, 3, 4] as const).map(capability => lead(review({ lane: { kind: "provider", family: "anthropic", blend: "only" }, capability }), "default")))
       .toEqual(["claude-haiku-5-5", "claude-sonnet-5-5", "claude-opus-5-5", "claude-fable-5-1"]);
-    expect([lead(review({}), "default"), lead(review({}), "plan")]).toEqual(["gpt-5.6-terra", "claude-fable-5-1"]);
+    expect([lead(review({}), "default"), lead(review({}), "plan"), lead(review({}), "slow")])
+      .toEqual(["claude-sonnet-5-5", "claude-sonnet-5-5", "claude-sonnet-5-5"]);
+    const mixed = review({ lane: { kind: "mixed" }, capability: 3 });
+    expect([lead(mixed, "default"), lead(mixed, "plan"), lead(mixed, "slow")])
+      .toEqual(["gpt-5.6-terra", "claude-opus-5-5", "claude-opus-5-5"]);
     // No lane at any tier it offers routes, leads or falls back on, a model the receipts left out.
     const left = new Set(derived.exclusions.map(exclusion => exclusion.id));
     const routed = new Set(review({}).available.lanes.flatMap(lane => review({ lane, capability: 1 }).available.capabilities
@@ -663,14 +786,44 @@ describe("a family Code requires that the accounts reach only in part", () => {
     expect(() => catalogFromObservations(nothing.inventory, nothing.benchmark)).toThrow("probe_insufficient_ladder");
   });
 
-  test("a plan serving every GPT model ladders luna, terra, sol and astra, OpenAI's own order", () => {
+  test("a hypothetical pool serving every GPT model preserves its named rungs and balanced native routing", () => {
     // The receipts list terra at 1M beside sol's and astra's 922k: ranked by window, terra topped the
     // family, sol sat under it and astra was left out.
+    // Changed verdicts below are hypothetical coverage, not new provider-probe evidence.
     const reachable = Object.fromEntries(operatorRows.flatMap(([provider, id, , , , , , verdict]) =>
       provider === "openai-codex" && verdict !== null ? [[id, "reachable" as const]] : []));
     const { inventory, benchmark } = operatorReceipts(reachable);
-    expect(tiers(catalogFromObservations(inventory, benchmark).document, "openai-codex"))
+    const document = catalogFromObservations(inventory, benchmark).document, catalog = compileCatalog(document);
+    expect(tiers(document, "openai-codex"))
       .toEqual([[1, "gpt-6-luna"], [2, "gpt-5.6-terra"], [3, "gpt-6.1-sol"], [4, "gpt-6-astra"]]);
+    const onlyOpenai = (provider: string) => provider === "openai-codex";
+    const chosen = defaultSelection(catalog, onlyOpenai);
+    expect(chosen).toMatchObject({ lane: { kind: "provider", family: "openai", blend: "only" }, capability: 3, thinking: "medium" });
+    for (const [thinking, main, deliberative] of [
+      ["minimal", "low", "low"], ["low", "low", "medium"], ["medium", "medium", "high"],
+      ["high", "high", "xhigh"], ["xhigh", "xhigh", "xhigh"], ["max", "max", "max"],
+    ] as const) {
+      const review = reviewCatalog(catalog, { ...chosen, thinking }, 200);
+      const overlay = compileOmpOverlay(catalog, review.selection, review.routes, onlyOpenai);
+      for (const [role, effort] of [["default", main], ["task", main], ["plan", deliberative], ["slow", deliberative]] as const) {
+        const value = review.routes.find(route => route.role === role)!;
+        expect(catalog.model(value.lead.key).id).toBe("gpt-6.1-sol");
+        expect([value.lead, ...value.fallback].every(choice => choice.thinking === effort)).toBe(true);
+        expect(overlay.modelRoles?.[role]).toBe(`openai-codex/gpt-6.1-sol:${effort}`);
+      }
+      for (const [role, effort] of [
+        ["advisor", "low"], ["smol", "medium"], ["memory", "medium"], ["widget", "low"], ["tiny", "low"], ["commit", "low"],
+      ] as const) {
+        const value = review.routes.find(route => route.role === role)!;
+        expect(catalog.model(value.lead.key).id).toBe("gpt-6-luna");
+        expect(value.lead.thinking).toBe(effort);
+        expect(value.fallback).toEqual([]);
+      }
+      expect(review.routes.find(route => route.role === "vision")?.lead.thinking).toBe("low");
+      expect(review.routes.flatMap(route => [route.lead, ...route.fallback]).some(choice => catalog.model(choice.key).id === "gpt-6-astra")).toBe(false);
+    }
+    const elite = reviewCatalog(catalog, { ...chosen, capability: 4, thinking: "max" }, 200);
+    expect(compileOmpOverlay(catalog, elite.selection, elite.routes, onlyOpenai).modelRoles?.slow).toBe("openai-codex/gpt-6-astra:max");
   });
 
   test("a plan serving terra and astra alone ladders each at its own tier, the tiers between routing to terra", () => {
@@ -693,7 +846,7 @@ describe("passive starter metadata", () => {
     const compiled = compileCatalog(document), selection = defaultSelection(compiled);
     const review = reviewCatalog(compiled, selection, 1000);
     expect(review.routes.map(route => route.role)).toEqual([
-      "default", "task", "plan", "slow", "reviewer", "security-reviewer", "scout", "sonic", "advisor", "vision", "smol", "tiny", "commit",
+      "default", "task", "plan", "slow", "advisor", "vision", "smol", "memory", "widget", "tiny", "commit",
     ]);
     for (const model of document.models) {
       const source = snapshot.models.find(row => row.provider === model.provider && row.id === model.id)!;
@@ -718,11 +871,35 @@ describe("passive starter metadata", () => {
       .toEqual([[1, "gpt-6-luna"], [2, "gpt-5.6-terra"], [3, "gpt-6.1-sol"], [4, "gpt-6-astra"]]);
   });
 
+  test("a starter with Haiku but no Sonnet prefers the complete authored Sol profile", () => {
+    const snapshot = metadata();
+    snapshot.models = [
+      listed("anthropic", "claude-haiku-5-5", 0.1, 100_000, "low", "max"),
+      ...[
+        listed("openai-codex", "gpt-6-luna", 0.1, 272_000, "low", "max"),
+        listed("openai-codex", "gpt-6.1-sol", 2, 272_000, "low", "max"),
+      ].map(model => ({ ...model, quotaTier: "chat" })),
+    ];
+    const compiled = compileCatalog(catalogFromMetadata(snapshot, "any"));
+    expect(compiled.model(compiled.rung("anthropic", 2))).toMatchObject({ id: "claude-haiku-5-5", tier: 1 });
+    const selection = defaultSelection(compiled), review = reviewCatalog(compiled, selection, 1000);
+    expect(selection).toMatchObject({ lane: { kind: "provider", family: "openai", blend: "only" }, capability: 3 });
+    expect(compiled.model(review.routes.find(route => route.role === "default")!.lead.key))
+      .toMatchObject({ provider: "openai-codex", id: "gpt-6.1-sol", tier: 3 });
+    expect(compileOmpOverlay(compiled, selection, review.routes).modelRoles?.default).toBe("openai-codex/gpt-6.1-sol:medium");
+    const lower = defaultSelection(compiled, provider => provider === "anthropic");
+    expect(lower).toMatchObject({ lane: { kind: "provider", family: "anthropic", blend: "only" }, capability: 1 });
+    expect(compiled.model(reviewCatalog(compiled, lower, 1000).routes.find(route => route.role === "default")!.lead.key))
+      .toMatchObject({ provider: "anthropic", id: "claude-haiku-5-5", tier: 1 });
+  });
+
   test("a starter whose bundled list holds one GPT model ladders GPT short rather than leaving no starter", () => {
     const snapshot = metadata();
     snapshot.models = snapshot.models.filter(model => model.provider !== "openai-codex" || model.id === "gpt-mini-6");
-    const compiled = compileCatalog(catalogFromMetadata(snapshot, "any")), selection = defaultSelection(compiled);
+    const compiled = compileCatalog(catalogFromMetadata(snapshot, "any"));
+    const selection = defaultSelection(compiled, provider => provider === "openai-codex");
     expect([compiled.short, [1, 2, 3].map(tier => compiled.model(compiled.rung("openai", tier)).id)]).toEqual([["openai"], ["gpt-mini-6", "gpt-mini-6", "gpt-mini-6"]]);
+    expect(selection).toMatchObject({ lane: { kind: "provider", family: "openai", blend: "only" }, capability: 1 });
     expect(compiled.model(reviewCatalog(compiled, selection, 1000).routes.find(route => route.role === "default")!.lead.key).id).toBe("gpt-mini-6");
   });
 

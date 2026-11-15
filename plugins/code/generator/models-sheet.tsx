@@ -3,20 +3,23 @@ import type { HostServices } from "@manifold/plugin";
 import type { MachineSummary } from "@manifold/protocol";
 import { prefersReducedMotion } from "@manifold/ui";
 import { compileCatalog } from "../../domain/catalog.ts";
-import { CatalogDocumentSchema, type CatalogDocument } from "../../domain/contracts.ts";
+import { CatalogDocumentSchema, type CatalogDocument, type Selection } from "../../domain/contracts.ts";
 import type { Exclusion } from "../../domain/probe.ts";
 import { orderedFamilies, providerPolicy } from "../../domain/providers.ts";
+import { clampSelection, defaultSelection, newPremiumLead, selectionForLane } from "../../domain/routing.ts";
 import type { Configuration } from "../contract.ts";
 import { canWriteCodeWorkspace, codeOperationFailure, codeWorkflow } from "../machine-web.ts";
 import { accountWord, familyWord, hueOf, since, useMinuteTick } from "../ui.tsx";
 import { WorkflowError, type CodeCall } from "../workflow.ts";
 import { editHoldsCatalogWrite, type CatalogWrite, type GateRefusal } from "./launch-step.ts";
+import { DecisionDialog } from "./decision-dialog.tsx";
+import { previewSelection } from "./dial-space.ts";
 import { PanelDialog } from "../panel-layer.tsx";
 import { Blocks, pressesGo, SheetCue, SheetGo, SheetHead, SheetKeys, SheetReadout, sheetKeyFree, useReadout, useSheetMode,
   type GoAction, type GoFix, type GoHandle, type GoPress, type GoTone, type Said } from "./sheet-frame.tsx";
 import { contextWords, exclusionWords, followPress, listChanges, modelRows, modelsPhase, money, saveFailure, speedLevel, thinkingRange, TIERS,
   type ListChange, type ModelRow, type SavePress } from "./sheets-model.ts";
-import { sameTeam } from "./statement-model.ts";
+import { teamEdits, WORD_NAMES } from "./statement-model.ts";
 import { CHECKING_HOLD_MS } from "./verification.ts";
 import type { WorkbenchModel } from "./workbench-model.ts";
 
@@ -104,14 +107,15 @@ export function ModelsSheet({ host, model, machine, onBack, backRef, onPlace }: 
   const writeRefusal = !model.writable ? "Edit access needed." : !model.configurationCurrent ? "The workspace profile needs a fresh read."
     : running ? "A model check is running." : working ? "Wait for the change in progress." : !edits.open ? edits.refusal.text : null;
   // An unsaved edit made on the list a write would replace holds that write until it is saved or discarded (launch-step.ts
-  // `editHoldsCatalogWrite`), saying what the write does to that list and what each fix does with the edit. A list put in
-  // use starts from its own default team (state.ts `catalogReview`), so a saved edit stays with the list in use. Only an
-  // edit of the team in use saves, through the workbench's own save gate.
+  // `editHoldsCatalogWrite`), saying what the write does to that list and what each fix does with the edit.
+  // Compatible saved choices carry over unless a new main model exceeds the selected tier.
+  // That replacement, like a premium-only list without a balanced default, waits for explicit
+  // actual-tier confirmation. Only an edit of the team in use saves here.
   const savable = model.gate("save").open;
   const madeOn = model.localDraft?.source === "active" ? "the list in use" : model.localDraft?.source === "draft" ? "the staged list" : "the bundled starter";
   const editHold = (kind: CatalogWrite): string | null => {
     if (!editHoldsCatalogWrite(model.localDraft, model.edited, kind)) return null;
-    const effect = kind === "use" ? `using ${model.localDraft?.source === "draft" ? "it" : "the staged list"} resets the profile to the staged list's default`
+    const effect = kind === "use" ? `using ${model.localDraft?.source === "draft" ? "it" : "the staged list"} replaces the list this edit was made on`
       : kind === "discard" ? "discarding drops that list" : "an import replaces that list";
     return `Your unsaved edit is on ${madeOn}, and ${effect}. ${savable ? "Save keeps the edit on the list in use; discard edit drops it." : "Discard edit drops the edit."}`;
   };
@@ -119,11 +123,30 @@ export function ModelsSheet({ host, model, machine, onBack, backRef, onPlace }: 
   // draft the workbench makes of that edit and ends with it (`followPress`); a visited sheet stays mounted, so it sees them all.
   const [savePress, setSavePress] = useState<SavePress | null>(null);
   const localDraft = model.localDraft;
+  const saveQuestion = useRef<SavePress | null>(null);
+  useLayoutEffect(() => {
+    if (model.premiumSave && savePress) { saveQuestion.current = savePress; return; }
+    const asked = saveQuestion.current;
+    if (!asked || model.premiumSave) return;
+    saveQuestion.current = null;
+    // Confirmed saves enter perform's busy state; dismissing the question never attempted a save.
+    if (!model.busy) setSavePress(current => current === asked ? null : current);
+  }, [model.premiumSave, model.busy, savePress]);
   useLayoutEffect(() => { setSavePress(previous => followPress(previous, localDraft)); }, [localDraft]);
   const failedSave = saveFailure(savePress, localDraft, model.message);
   const editFixes: readonly GoFix[] = [
     ...savable && localDraft ? [{ label: "save", run: () => { setSavePress({ draft: localDraft, before: model.message }); void model.actions.save(); } }] : [],
     { label: "discard edit", run: () => model.actions.discardChanges() }];
+  // A profile the person must confirm before the staged list is put in use with it: the new model's actual premium tier, or,
+  // when the staged list cannot form the profile shown, the nearest profile it can, with every setting it moves named.
+  const [premium, setPremium] = useState<{
+    readonly host: HostServices; readonly scope: string; readonly selection: Selection; readonly model: string; readonly effort: string; readonly tier: string;
+    readonly premium: boolean; readonly moves: readonly string[];
+  } | null>(null);
+  const promotionScope = JSON.stringify([record?.revision, active?.digest, draft?.digest, record?.selection, model.configurationCurrent, model.writable, model.selection, model.edited]);
+  const currentPremium = premium && premium.scope === promotionScope && premium.host.client === host.client &&
+    premium.host.principal.id === host.principal.id && premium.host.containerId === host.containerId && writeRefusal === null && !editHold("use") ? premium : null;
+  useEffect(() => { if (premium && !currentPremium) setPremium(null); }, [premium, currentPremium]);
   /**
    * Runs one press's writes against the workspace this sheet was opened on, from the revision it was read at; anything that
    * moves it stops them. The main view follows each receipt as this panel's own change from the revision that write was made
@@ -148,17 +171,95 @@ export function ModelsSheet({ host, model, machine, onBack, backRef, onPlace }: 
       if (mounted.current) { setWorking(null); model.actions.refresh(); }
     }
   }
-  function useStaged() {
-    if (!record || !draft) return;
-    const { containerId, revision } = record, digest = draft.digest, verified = draft.provenance !== null, saved = record.selection;
+  function useStaged(confirmed?: Selection) {
+    if (!record || !draft || !compiled || writeRefusal || editHold("use")) return;
+    const { containerId, revision } = record, digest = draft.digest, verified = draft.provenance !== null;
+    // The profile the person sees, which this press chooses: the rows' profile, on the list in use or, with none in use,
+    // on this staged list. An edit of it holds this write until it is saved or discarded (`editHold`, launch-step.ts
+    // `editHoldsCatalogWrite`), so the rows show the saved profile, the saved profile chosen again, the profile a check
+    // kept this list for (workbench-model.ts `retainedChoice`) or, with nothing saved, the staged list's own profile as
+    // drawn. It goes along as chosen, its tier, effort, lane, budget and switches included; only a list that shows no
+    // profile at all asks for one.
+    const shown = model.profile;
+    const here = shown !== null && !model.stale && (shown.source === "active" ? active !== null && shown.catalogDigest === active.digest
+      : shown.source === "draft" && shown.draftDigest === digest);
+    if (shown !== null && !here) {
+      setFailure("The profile shown no longer rests on this workspace's lists. Read the workspace again first.");
+      return;
+    }
+    const visible = here ? model.selection : null;
+    if (confirmed === undefined && visible !== null && !previewSelection(compiled, visible)) {
+      // A staged list that cannot form the profile shown (another family, a tier it lacks) is never given another quietly:
+      // the nearest profile it can form, every other setting kept as far as it hosts it and at most the tier chosen, unless
+      // its main model's actual tier is higher, is asked about with each setting it moves, and only an approval uses it.
+      try {
+        const providers = draft.provenance?.providers;
+        let candidate = clampSelection(compiled, visible, providers ? provider => providers.includes(provider) : undefined);
+        const lead = newPremiumLead(compiled, candidate, model.previousProfile);
+        if (lead) candidate = { ...candidate, capability: lead.tier };
+        const review = previewSelection(compiled, candidate);
+        if (!review) throw new WorkflowError("code_invalid_selection");
+        const route = review.routes.find(entry => entry.role === "default")!.lead, main = compiled.model(route.key);
+        setPremium({ host, scope: promotionScope, selection: review.selection, model: `${main.provider}/${main.id}`, effort: route.thinking,
+          tier: TIERS[review.selection.capability - 1]!, premium: lead !== null,
+          moves: teamEdits(visible, review.selection, familyWord).map(edit => `${WORD_NAMES[edit.word].toLowerCase()} ${edit.from} → ${edit.to}`) });
+      } catch {
+        setFailure("The staged list cannot form your profile or any profile near it within its budget. Import another list or check the models.");
+      }
+      return;
+    }
+    const selection = confirmed ?? visible ?? undefined;
+    if (confirmed === undefined && selection !== undefined) {
+      try {
+        const lead = newPremiumLead(compiled, selection, model.previousProfile);
+        if (lead) {
+          const candidate: Selection = { ...selection, capability: lead.tier };
+          const review = previewSelection(compiled, candidate);
+          if (!review) { setFailure("The replacement cannot retain this profile at the new model's actual tier. Import another list or check the models."); return; }
+          const effort = review.routes.find(route => route.role === "default")!.lead.thinking;
+          setPremium({ host, scope: promotionScope, selection: review.selection, model: `${lead.provider}/${lead.id}`, effort,
+            tier: TIERS[lead.tier - 1]!, premium: true, moves: [] });
+          return;
+        }
+      } catch (reason) {
+        setFailure(codeOperationFailure(reason));
+        return;
+      }
+    }
+    if (selection === undefined) {
+      try {
+        const providers = draft.provenance?.providers;
+        defaultSelection(compiled, providers ? provider => providers.includes(provider) : undefined);
+      } catch {
+        // A sparse list may declare only smart or elite. Naming a candidate is not adoption:
+        // the deliberate dialog must accept its exact model, tier and configured effort first.
+        for (const capability of [3, 4] as const) {
+          for (const family of families) {
+            if (!compiled.models.some(model => compiled.family(model.key) === family && model.tier === capability)) continue;
+            const candidate: Selection = { ...selectionForLane({ kind: "provider", family, blend: "only" }, capability), budget: "any" };
+            const review = previewSelection(compiled, candidate);
+            if (!review) continue;
+            const lead = review.routes.find(route => route.role === "default")!.lead;
+            const model = compiled.model(lead.key);
+            if (model.tier !== capability) continue;
+            setPremium({ host, scope: promotionScope, selection: review.selection, model: `${model.provider}/${model.id}`,
+              effort: lead.thinking, tier: TIERS[capability - 1]!, premium: true, moves: [] });
+            return;
+          }
+        }
+        setFailure("This list has no complete profile within the current budget. Import another list or check the models.");
+        return;
+      }
+    }
+    const choice = selection === undefined ? {} : { selection };
     void write("use", async (code, wrote) => {
-      const review = await code("reviewCatalog", { containerId, expectedRevision: revision, source: "draft" });
+      const review = await code("reviewCatalog", { containerId, expectedRevision: revision, source: "draft", ...choice });
       if (review.catalogDigest !== digest) throw new WorkflowError("code_preview_changed");
-      const promoted = await code("promoteCatalog", { containerId, expectedRevision: revision, source: "draft", reviewDigest: review.reviewDigest });
+      const promoted = await code("promoteCatalog", { containerId, expectedRevision: revision, source: "draft", reviewDigest: review.reviewDigest, ...choice });
       wrote(revision, promoted);
-      // The staged list goes in use with its own default team; a saved team it does not repeat is said to be gone.
-      const reset = saved !== null && promoted.selection !== null && !sameTeam(promoted.selection, saved);
-      return { value: "in use", text: ["the staged list replaced the one in use", ...reset ? ["the profile is the new list's default now"] : [], ...verified ? [] : ["check it next"]].join("; ") };
+      // Promotion adopts exactly the reviewed selection, whether the chosen one, the list's default or explicitly confirmed.
+      return { value: "in use", text: ["the staged list replaced the one in use",
+        ...confirmed ? ["the profile was explicitly selected"] : [], ...verified ? [] : ["check it next"]].join("; ") };
     }, setFailure);
   }
   function discard() {
@@ -260,7 +361,7 @@ export function ModelsSheet({ host, model, machine, onBack, backRef, onPlace }: 
   function primary(): Primary {
     switch (phase) {
       case "inventory": return { label: "checking models…", busy: true, parts: [[`on ${where}`, null]], fixes: [cancel],
-        said: { value: "checking models", text: "OMP reads the models your accounts reach; nothing is spent" }, press: busy };
+        said: { value: "checking models", text: "OMP lists advertised models; account access and performance are not checked yet" }, press: busy };
       // A charge waits only on a check the person started, whose dialog is then open over this sheet (decision-dialog.tsx): here
       // it only waits behind that dialog, still rather than breathing, since nothing runs while the person decides.
       case "charge": return { label: "checking models…", disabled: true, parts: [[count(charged, "tiny request"), "strong"], ["waiting for your approval", null]], fixes: [],
@@ -281,10 +382,8 @@ export function ModelsSheet({ host, model, machine, onBack, backRef, onPlace }: 
           press: () => { if (writeRefusal) return writeRefusal; useStaged(); return null; } };
       }
       case "verified": {
-        // The head already says when the list was checked; beside the action, only its alternative: checking again, through
-        // the same gate as a first check, whose charge asks unless the person approved checks. A check again that stopped,
-        // the panel's own included, says so: what it would have changed (the list, or for a stop while saving the profile,
-        // the team) stays as it was, which the head alone cannot show.
+        // The head already says when the list was checked; beside the action, only its alternative:
+        // checking again through the same charge gate. A check that stopped is said here too.
         const stopped = verification.failure;
         const note: readonly Part[] = stopped ? [[stopped.cancelled ? "check cancelled" : "check stopped", stopped.cancelled ? null : "attention"]] : [];
         return { label: "back to code", parts: [...note, ...refused], fixes: verifyGate.open ? [{ label: "check again", run: () => model.actions.verify() }] : [],
@@ -532,5 +631,18 @@ export function ModelsSheet({ host, model, machine, onBack, backRef, onPlace }: 
         <button type="button" className={`${G}go-fix`} onClick={closeImport}>cancel</button>
       </div>
     </PanelDialog>
+    <DecisionDialog decision={currentPremium ? {
+      kind: "premium", title: currentPremium.moves.length > 0 ? "Use this profile with the staged list?" : "Use this premium profile?",
+      text: [currentPremium.moves.length > 0
+        ? `The staged list cannot form the profile shown. Using it would select the ${currentPremium.premium ? "premium " : ""}model, tier and configured effort below, with the settings it moves. Confirm this explicit profile before putting it in use.`
+        : "Using this list would select the premium model, actual tier and configured effort below. Confirm this explicit profile before putting it in use.",
+        "This puts the staged list and this profile in use; it does not check models or launch a session."],
+      items: [`${currentPremium.model} · ${currentPremium.tier} · configured ${currentPremium.effort}`, ...currentPremium.moves],
+      choices: [{ label: `Use ${currentPremium.tier} profile`, does: { kind: "approve" } }, { label: "Not now", does: { kind: "dismiss" } }],
+    } : null} onChoose={choice => {
+      const chosen = currentPremium;
+      setPremium(null);
+      if (chosen && choice.does.kind === "approve") useStaged(chosen.selection);
+    }} />
   </section>;
 }

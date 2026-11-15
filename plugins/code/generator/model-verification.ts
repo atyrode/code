@@ -1,6 +1,7 @@
 import { useEffect, useMemo, useRef, useState } from "react";
 import type { HostServices } from "@manifold/plugin";
 import { BENCHMARK_OPERATION_ID, INVENTORY_OPERATION_ID, type ActionResult as OmpResult } from "@atyrode/manifold-omp";
+import { compileCatalog, type CompiledCatalog } from "../../domain/catalog.ts";
 import type { Selection } from "../../domain/contracts.ts";
 import { unpublishedModels, type ModelAddress } from "../../domain/routing.ts";
 import type { Exclusion } from "../../domain/probe.ts";
@@ -9,8 +10,8 @@ import { VerificationError, WorkflowError, inventoryArtifact, type ChargeReview,
   type VerificationProgress, type VerificationStep, type VerifiedModels } from "../workflow.ts";
 import { canWriteCodeWorkspace, codeOperationFailure, codeWorkflow, useOmpQuery, useWorkflowQuery } from "../machine-web.ts";
 import { operationReady } from "../permission-plan.ts";
-import { adoptsOnly, backgroundCheckDue, CHECKING_HOLD_MS, confirmsCharge, ownInitialization, spendsWithoutAsking, verificationState, type ConfirmActivation,
-  type VerificationMode, type VerificationState, type VerificationStatus } from "./verification.ts";
+import { adoptsOnly, backgroundCheckDue, CHECKING_HOLD_MS, confirmsCharge, inventoryPremium, ownInitialization, spendsWithoutAsking, verificationState,
+  type ConfirmActivation, type PremiumProfile, type VerificationMode, type VerificationState, type VerificationStatus } from "./verification.ts";
 
 export type ModelVerificationInput = {
   host: HostServices;
@@ -44,9 +45,14 @@ export type ModelVerificationInput = {
    * stopped or was cancelled: the panel's own write, which the shown first-use profile may follow.
    */
   onInitialized: (from: number, to: number) => void;
+  /**
+   * A completed check retained a verified staged list without changing the active profile, measured for `checked`, the
+   * profile the run was for (null when it had none), which using the staged list then chooses.
+   */
+  onRetained: (configuration: Configuration, checked: Selection | null) => void;
 };
-/** `inventory`: OMP's inventory is running. `charge`: the charge awaits the person's approval; nothing has
- * been spent. `benchmark`: approved — probing, then deriving and saving (`progress.step` says which). */
+/** `inventory`: OMP's inventory is running. `charge`: advertised premium intent or its separate
+ * spending approval awaits the person; nothing has been spent. `benchmark`: probing, then deriving and saving. */
 export type VerificationPhase = "inventory" | "charge" | "benchmark";
 /** Why the last run stopped, and who started it. `reason` is for a person; `evidence` names the jobs and
  * the last revision it left behind, all still inspectable. */
@@ -60,6 +66,8 @@ export type ModelVerification = VerificationState & {
   progress: VerificationProgress | null;
   /** The charge under review or being spent; null outside a run. */
   charge: ChargeReview | null;
+  /** An advertised, unmeasured premium intention awaiting its own choice, never spending approval. */
+  premium: PremiumProfile | null;
   /** Who started the run in flight; null when none runs. */
   mode: VerificationMode | null;
   /** The run in flight is writing the workspace's choices or model list, which nothing else may touch meanwhile. */
@@ -77,9 +85,9 @@ export type ModelVerification = VerificationState & {
   keepsChecks: boolean | null;
   /**
    * Initialize if needed, then put the person's own newer check of this pool in use, or run OMP's
-   * inventory and answer the charge. A charge the standing approval covers is spent at once; any
-   * other waits for `confirm`. A background run never waits: it spends only a covered charge that
-   * renews a list which passed a check, and otherwise ends there with nothing spent.
+   * inventory and answer the charge. Known premium intent first needs its own actual-tier choice,
+   * then separate charge approval. Otherwise standing approval may cover the spend. A background run
+   * never asks: it renews a checked list only within that approval, with no new premium intent.
    */
   prepare: (mode: VerificationMode) => Promise<void>;
   /**
@@ -90,13 +98,15 @@ export type ModelVerification = VerificationState & {
    * hold (`confirmsCharge`).
    */
   confirm: (activation: ConfirmActivation, shown: ChargeReview) => Promise<void>;
+  /** Choose the advertised actual tier, then ask separately whether to spend the waiting charge. */
+  choosePremium: (shown: PremiumProfile) => void;
   /** Stop: a pending charge is discarded, and the probe job in flight is cancelled at its native owner. */
   cancel: () => void;
   /** Withdraw the standing approval, so every later check asks again. */
   withdraw: () => Promise<void>;
 };
 type ChargedVerification = Extract<PendingVerification, { kind: "charge" }>;
-type Run = { phase: VerificationPhase; progress: VerificationProgress | null; charge: ChargeReview | null; mode: VerificationMode };
+type Run = { phase: VerificationPhase; progress: VerificationProgress | null; charge: ChargeReview | null; mode: VerificationMode; premium: PremiumProfile | null };
 /**
  * The run in flight: who started it, how to stop it, whether it still holds, when its press started
  * it, its charge while unapproved, the revision it started from, whether the workspace had no choices
@@ -106,6 +116,7 @@ type Run = { phase: VerificationPhase; progress: VerificationProgress | null; ch
 type Session = {
   mode: VerificationMode; controller: AbortController; isCurrent: () => boolean; preparedAt: number; pending: ChargedVerification | null;
   from: number; absent: boolean; charged: number | null; approvedByPress: boolean; withdrawn: boolean;
+  wanted: Selection | null; previous: { catalog: CompiledCatalog; selection: Selection } | null; premium: PremiumProfile | null; charge: ChargeReview | null;
   /** The step the run last reported, as it happens rather than as last rendered. */
   step: VerificationStep | null;
   /** The list in use passed a check when the run started: only such a list may a background run spend to renew. */
@@ -113,7 +124,7 @@ type Session = {
 };
 
 /** The steps at which a check writes the workspace's choices or model list. */
-const WRITE_STEPS: ReadonlySet<VerificationStep> = new Set(["initialize", "adopt", "stage", "review", "promote", "select"]);
+const WRITE_STEPS: ReadonlySet<VerificationStep> = new Set(["initialize", "adopt", "stage", "review", "promote"]);
 /**
  * The model checks of `createCodeWorkflowClient().verifyModels`, for the workbench. Mounting
  * observes — OMP's account observation and Code's pool composition, the person's own checks and
@@ -186,14 +197,37 @@ export function useModelVerification(input: ModelVerificationInput): ModelVerifi
   }, [input.edited, run?.mode, writing]);
 
   const owns = (session: Session) => mounted.current && active.current === session;
+  // A background run keeps the saved profile, its budget, tier, effort and preferences, for a charge it may renew; it never
+  // declares it as a new choice, so its preparation asks the workspace's stored intent (`selection: null`).
   const selectionFor = (mode: VerificationMode) => mode === "background" ? latest.current.record?.selection ?? null : latest.current.selection;
-  function stopped(session: Session, reason: unknown) {
+  async function stopped(session: Session, reason: unknown) {
     if (!owns(session)) return;
+    // Read back only a completed check's own staged revision, never infer a check from model membership.
+    // Cancellation of the later Models question performs no read, write or benchmark.
+    if (reason instanceof VerificationError && /(?:^|code_)invalid_selection$/.test(reason.reason) &&
+      session.charged !== null && reason.evidence.revision !== null && reason.evidence.revision > session.charged && session.isCurrent()) {
+      try {
+        const observed = await codeWorkflow(host).code("readConfiguration", { containerId: host.containerId! });
+        const configuration = observed.configuration, charge = session.charge;
+        if (owns(session) && session.isCurrent() && configuration?.revision === reason.evidence.revision && configuration.draft?.provenance &&
+          charge && configuration.draft.provenance.poolIdentityDigest === charge.pool.poolIdentityDigest &&
+          configuration.draft.provenance.inventoryObservedAt === charge.inventory.observedAt &&
+          configuration.draft.provenance.inventoryArtifactSha256 === charge.inventoryArtifactSha256 &&
+          configuration.draft.provenance.catalogRevision === charge.catalogRevision && charge.budget === (session.wanted?.budget ?? "any")) {
+          latest.current.onRetained(configuration, session.wanted);
+          kept.refresh();
+        }
+      } catch { /* The retained record remains available to the next ordinary workspace read. */ }
+      if (!owns(session)) return;
+    }
     active.current = null;
     quiet.current = true;
     setRun(null);
     setFailure(reason instanceof VerificationError
-      ? { step: reason.step, reason: codeOperationFailure(new WorkflowError(reason.reason)), cancelled: reason.reason.startsWith("code_verification_cancelled"),
+      ? { step: reason.step, reason: (session.wanted === null || session.mode === "background") && reason.evidence.benchmarkJobIds.length === 0 &&
+          /(?:^|code_)invalid_selection$/.test(reason.reason)
+          ? "Choose a usable explicit profile in Models before checking again; no benchmark was started."
+          : codeOperationFailure(new WorkflowError(reason.reason)), cancelled: reason.reason.startsWith("code_verification_cancelled"),
         evidence: reason.evidence, mode: session.mode }
       : { step: "observe", reason: codeOperationFailure(reason), cancelled: false, evidence: null, mode: session.mode });
     const made = ownInitialization(session.absent, session.charged, reason instanceof VerificationError ? reason.evidence?.revision ?? null : null);
@@ -228,9 +262,9 @@ export function useModelVerification(input: ModelVerificationInput): ModelVerifi
     session.pending = null;
     setRun(previous => previous && { ...previous, phase: "benchmark", charge: pending.charge });
     try {
-      finished(session, await pending.confirm(selectionFor(session.mode), { signal: session.controller.signal, isCurrent: session.isCurrent,
+      finished(session, await pending.confirm(session.wanted, { signal: session.controller.signal, isCurrent: session.isCurrent,
         onProgress: progressTo(session), beforeWrite: holdFor(session), unasked: !session.approvedByPress }), false);
-    } catch (reason) { stopped(session, reason); }
+    } catch (reason) { await stopped(session, reason); }
   }
   /**
    * A background run holds its first write until nothing the person started is in flight, so it never
@@ -249,7 +283,9 @@ export function useModelVerification(input: ModelVerificationInput): ModelVerifi
     if (!canPrepare || !target) return;
     const started = { host, target }, controller = new AbortController();
     const session: Session = { mode, controller, pending: null, preparedAt: Date.now(), from: revision, absent: record === null, charged: null,
-      approvedByPress: false, withdrawn: false, step: null, renews: provenance !== null, isCurrent: () => {
+      approvedByPress: false, withdrawn: false, step: null, renews: provenance !== null, wanted: selectionFor(mode),
+      previous: record?.active && record.selection ? { catalog: compileCatalog(record.active.document), selection: record.selection } : null,
+      premium: null, charge: null, isCurrent: () => {
         const now = latest.current;
         return mounted.current && !controller.signal.aborted && now.host.client === started.host.client &&
           now.host.principal.id === started.host.principal.id && now.host.containerId === started.host.containerId &&
@@ -259,20 +295,27 @@ export function useModelVerification(input: ModelVerificationInput): ModelVerifi
     // A background run leaves on show what the last measured check left out, until it measures something itself.
     setFailure(null);
     if (mode !== "background") setExclusions(null);
-    setRun({ phase: "inventory", progress: null, charge: null, mode });
+    setRun({ phase: "inventory", progress: null, charge: null, mode, premium: null });
     try {
       // The client is ungated: a stop must still reach the native job owner to cancel the job. A background run that may not
-      // spend only adopts: it starts no inventory, and writes nothing, unless the person keeps a check.
-      const selection = selectionFor(mode);
-      const pending = await codeWorkflow(host).verifyModels(target, { expectedRevision: revision, budget: selection?.budget ?? "any", selection,
+      // spend only adopts: it starts no inventory, and writes nothing, unless the person keeps a check. A background run
+      // declares no new choice: adopting or preparing keeps the workspace's own stored intent, under the saved budget.
+      const selection = session.wanted;
+      const pending = await codeWorkflow(host).verifyModels(target, { expectedRevision: revision, budget: selection?.budget ?? "any",
+        selection: mode === "background" ? null : selection,
         adoptOnly: adoptsOnly(mode, session.renews, approvedRequests ?? 0) },
         { signal: controller.signal, isCurrent: session.isCurrent, onProgress: progressTo(session), beforeWrite: holdFor(session) });
       if (!owns(session)) return;
       if (pending.kind === "none") { unspent(session); return; }
       if (pending.kind === "adopted") { finished(session, pending.verified, true); return; }
       session.charged = pending.charge.revision;
+      session.charge = pending.charge;
+      session.pending = pending;
+      session.premium = pending.charge.requests > 0 ? inventoryPremium(pending.charge, session.wanted, session.previous) : null;
+      // Standing budget approval is not a premium profile choice. Background checks cannot ask it.
+      if (session.premium && mode === "background") { unspent(session); return; }
       // An approval withdrawn while the inventory ran is honoured here, and one withdrawn after by the workflow's own read.
-      if (!session.withdrawn && spendsWithoutAsking(mode, session.renews, pending.approvedRequests, pending.charge.requests)) {
+      if (!session.premium && !session.withdrawn && spendsWithoutAsking(mode, session.renews, pending.approvedRequests, pending.charge.requests)) {
         await spend(session, pending);
         return;
       }
@@ -289,12 +332,19 @@ export function useModelVerification(input: ModelVerificationInput): ModelVerifi
         await promise;
       }
       if (!owns(session) || controller.signal.aborted) return;
-      setRun(previous => ({ phase: "charge", progress: previous?.progress ?? null, charge: pending.charge, mode }));
-    } catch (reason) { stopped(session, reason); }
+      setRun(previous => ({ phase: "charge", progress: previous?.progress ?? null, charge: pending.charge, mode, premium: session.premium }));
+    } catch (reason) { await stopped(session, reason); }
+  }
+  function choosePremium(shown: PremiumProfile) {
+    const session = active.current;
+    if (!session?.pending || session.premium !== shown || run?.premium !== shown || !session.isCurrent()) return;
+    session.wanted = shown.selection;
+    session.premium = null;
+    setRun(previous => previous && { ...previous, premium: null });
   }
   async function confirm(activation: ConfirmActivation, shown: ChargeReview) {
     const session = active.current, pending = session?.pending;
-    if (!session || !pending || run?.phase !== "charge" ||
+    if (!session || !pending || session.premium !== null || run?.phase !== "charge" || !session.isCurrent() ||
       !confirmsCharge(activation, shown, { charge: pending.charge, preparedAt: session.preparedAt }, Date.now())) return;
     session.pending = null; session.approvedByPress = true;
     setRun(previous => previous && { ...previous, phase: "benchmark" });
@@ -338,7 +388,7 @@ export function useModelVerification(input: ModelVerificationInput): ModelVerifi
   }
   return {
     ...state, held: held.status, passed: provenance !== null, phase: run?.phase ?? null, progress: run?.progress ?? null, charge: run?.charge ?? null,
-    mode: run?.mode ?? null, writing, exclusions, provenance, failure, ready, canPrepare,
-    approvedRequests, keepsChecks: kept.data?.keeps ?? null, prepare, confirm, cancel, withdraw,
+    mode: run?.mode ?? null, premium: run?.premium ?? null, writing, exclusions, provenance, failure, ready, canPrepare,
+    approvedRequests, keepsChecks: kept.data?.keeps ?? null, prepare, confirm, choosePremium, cancel, withdraw,
   };
 }

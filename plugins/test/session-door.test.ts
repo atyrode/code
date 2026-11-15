@@ -54,10 +54,10 @@ function job(jobId = "job-a"): PublicJob {
   });
 }
 function receipt(): SessionReceipt {
-  return { sessionId: "01a0a008-88ed-7186-b28f-6356df68f8ed", model: "anthropic/native-model-3",
+  return { sessionId: "01a0a008-88ed-7186-b28f-6356df68f8ed", model: "anthropic/native-model-2",
     // What the overlay asked for, which OMP now reports beside what served (manifold-omp#50).
     // Equal here: a substitution is that repository's contract to refuse, not this one's to model.
-    configuredModel: "anthropic/native-model-3",
+    configuredModel: "anthropic/native-model-2",
     sessionPath: `${SESSION_GUEST_PATH}/2026-09-14T13-08-29-037Z_01a0a008-88ed-7186-b28f-6356df68f8ed.jsonl`,
     finalMessage: "The change is in place.", usage: { input: 91, output: 12, cacheRead: 0, cacheWrite: 0, cost: 0.004 },
     exitCode: 0, failure: null };
@@ -172,7 +172,7 @@ function fixture(): Fixture {
     if (door === `${OMP_PLUGIN_ID}.followSession`) {
       ompActionSchemas.followSession.input.parse(input);
       return { job: omp.job, inferenceUsage: { calls: 3, inputTokens: 100,
-        outputTokens: 20, cachedInputTokens: 0, costMicros: 900, lastModel: "anthropic/native-model-3" },
+        outputTokens: 20, cachedInputTokens: 0, costMicros: 900, lastModel: "anthropic/native-model-2" },
         progress: { stage: "at the model", at: now }, inferenceCalls: [],
         seq: 9, firstSeq: null, unavailable: { fromSeq: 1, toSeq: 9 } };
     }
@@ -239,7 +239,7 @@ describe("Code profiles a dependent plugin may offer", () => {
     f.access.readable.delete("container-b");
     const listed = await accepted(f, "listProfiles", {});
     expect(listed.profiles).toEqual([{ containerId: target.containerId, revision: record.revision, machineId: null,
-      selected: { model: "anthropic/native-model-3", thinking: record.selection!.thinking,
+      selected: { model: "anthropic/native-model-2", thinking: record.selection!.thinking,
         capability: record.selection!.capability, advisor: record.selection!.advisor },
       accounts: everyAccount, resolved: true }]);
     f.access.readable.add("container-b");
@@ -297,7 +297,7 @@ describe("Code profiles a dependent plugin may offer", () => {
     f.ctx.storage.compareAndSet = unavailable;
     expect((await accepted(f, "listProfiles", {})).profiles).toEqual([
       { containerId: target.containerId, revision: record.revision, machineId: "machine-b",
-        selected: { model: "anthropic/native-model-3", thinking: record.selection!.thinking,
+        selected: { model: "anthropic/native-model-2", thinking: record.selection!.thinking,
           capability: record.selection!.capability, advisor: record.selection!.advisor },
         accounts: everyAccount, resolved: true },
     ]);
@@ -669,8 +669,8 @@ describe("the session a dependent plugin posts through Code", () => {
     const record = await configured(f);
     const input = { ...target, expectedRevision: record.revision, prompt: "Implement the change" };
     const listed = f.omp.published;
-    f.omp.published = { ...listed, models: listed.models.filter(model => model.id !== "native-model-3") };
-    expect(await invoke(f, "runSession", input)).toEqual({ refused: "code_model_unpublished: anthropic/native-model-3" });
+    f.omp.published = { ...listed, models: listed.models.filter(model => model.id !== "native-model-2") };
+    expect(await invoke(f, "runSession", input)).toEqual({ refused: "code_model_unpublished: anthropic/native-model-2" });
     expect(f.calls).not.toContain(actionDoor("reviewSession"));
     // A pin bump between review and post publishes another list: the composition is not the one reviewed.
     f.omp.published = listed;

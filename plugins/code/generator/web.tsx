@@ -12,6 +12,8 @@ import { displayAliases } from "./aliases.ts";
 import { modelListFailure } from "./board-model.ts";
 import { AccountsPane } from "./accounts-pane.tsx";
 import { ModelsSheet } from "./models-sheet.tsx";
+import { DecisionDialog } from "./decision-dialog.tsx";
+import { TIERS } from "./sheets-model.ts";
 import { EarlierStatements, usePinnedRecents } from "./earlier.tsx";
 import type { StatementWords } from "./earlier-model.ts";
 import { GeneratorPane, PANEL_VOCABULARY, type GeneratorControls, type GeneratorPlace, type LaunchState } from "./generator-pane.tsx";
@@ -271,6 +273,7 @@ function Workbench({ host, target, machine, machines, rosterError, available, se
   const model = useWorkbench({ host, target, machine, rosterError, available });
   const { queries: { metadata, skillCatalog }, record, starterError, compiled, selection,
     launchReview, busy, writable, usage, actions } = model;
+  const premiumSave = model.premiumSave;
   const recents = usePinnedRecents(model.recentTeams);
   const { region, announce } = useAnnouncer();
   const app = useRef<HTMLDivElement>(null);
@@ -540,7 +543,9 @@ function Workbench({ host, target, machine, machines, rosterError, available, se
       inView: sheet === null && target !== null && (onRoot || app.current?.contains(target) === true),
       inField: target?.matches("textarea, input, select, [contenteditable]") ?? false,
       inDialog: target?.closest("[role=dialog], dialog, [data-popover]") != null,
-      onControl: target?.closest("button, a, [role=listbox], [role=option]") != null,
+      // A focused chosen word that chooses again (`data-reselect`) answers a plain ↵ itself in its row's own handler, which
+      // keeps every guard of a choice; this listener runs first, so it must leave that ↵ alone rather than launch.
+      onControl: target?.closest("button, a, [role=listbox], [role=option], [data-row][data-reselect] [role=radio][aria-checked=true]") != null,
       onRoot, view, tabbed, recents: recents.length,
     });
     if (action && run(action)) { event.preventDefault(); event.stopPropagation(); }
@@ -735,6 +740,17 @@ function Workbench({ host, target, machine, machines, rosterError, available, se
     {panelRoot && createPortal(region, panelRoot)}
     {tui}
     <ShortcutsDialog open={shortcuts} narrow={narrow} onClose={() => setShortcuts(false)} />
+    <DecisionDialog decision={premiumSave ? {
+      kind: "premium", title: "Save this premium profile?",
+      text: ["This choice would select the premium model, actual tier and configured effort below. Confirm this explicit profile before saving it.",
+        premiumSave.launchAfterSave ? "Your Save & launch press continues after this profile is saved." : "This saves the profile without checking models or launching a session."],
+      items: [`${premiumSave.model} · ${TIERS[premiumSave.tier - 1]!} · configured ${premiumSave.effort}`],
+      choices: [{ label: `${premiumSave.launchAfterSave ? "Save & launch" : "Save"} ${TIERS[premiumSave.tier - 1]!} profile`, does: { kind: "approve" } },
+        { label: "Not now", does: { kind: "dismiss" } }],
+    } : null} onChoose={choice => {
+      if (choice.does.kind === "approve" && premiumSave) void actions.save(premiumSave.selection);
+      else actions.dismissPremiumSave();
+    }} />
     <TutorialLayer phase={tour} step={walk?.step ?? 0} shown={walk?.shown ?? []}
       onTake={() => { tutorial.see(); startWalk(); }} onSkip={tutorial.see}
       onNext={() => stepWalk(true)} onBack={() => stepWalk(false)} onEnd={endWalk} />

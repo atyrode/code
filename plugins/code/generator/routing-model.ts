@@ -28,7 +28,6 @@ export type RouteToken = {
 };
 export type LedgerRow = {
   readonly role: string;
-  readonly agentBacked: boolean;
   /** The advisor's row while the advisor is off, kept so turning it on adds a value rather than a line. */
   readonly off: boolean;
   readonly lead: RouteToken | null;
@@ -46,7 +45,7 @@ function token(catalog: CompiledCatalog, aliases: ReadonlyMap<string, string>, c
 }
 
 /**
- * Every role of the review in its order, with the advisor's row held after sonic while it is off.
+ * Every shared role of the review in its order, with the advisor's row held after slow while it is off.
  * A lead is struck while its pool is blocked, maxed or served by no included account, as the
  * terminal did; that changes neither availability nor the gate, which reads its own facts.
  */
@@ -59,19 +58,19 @@ export function routeLedger(catalog: CompiledCatalog, review: Review, aliases: R
     const fate = outcome?.kind === "falls-back" ? `falls back to ${token(catalog, aliases, outcome.model).alias}:${outcome.model.thinking}`
       : outcome?.kind === "no-route" ? "no route" : null;
     return {
-      role: route.role, agentBacked: route.agentBacked, off: false, lead: token(catalog, aliases, route.lead),
+      role: route.role, off: false, lead: token(catalog, aliases, route.lead),
       down: out && (fate ? `${out} · ${fate}` : out), fallback: route.fallback.map(choice => token(catalog, aliases, choice)),
     };
   });
   if (!rows.some(row => row.role === "advisor")) {
-    const sonic = rows.findIndex(row => row.role === "sonic");
-    rows.splice(sonic >= 0 ? sonic + 1 : rows.length, 0, { role: "advisor", agentBacked: false, off: true, lead: null, down: null, fallback: [] });
+    const slow = rows.findIndex(row => row.role === "slow");
+    rows.splice(slow >= 0 ? slow + 1 : rows.length, 0, { role: "advisor", off: true, lead: null, down: null, fallback: [] });
   }
   return rows;
 }
 
 /** One group of the grouped profile: a lead and thinking, and the roles that run it in routing order. */
-export type ProfileGroup = { readonly key: string; readonly lead: RouteToken; readonly down: boolean; readonly roles: readonly { readonly role: string; readonly agentBacked: boolean }[] };
+export type ProfileGroup = { readonly key: string; readonly lead: RouteToken; readonly down: boolean; readonly roles: readonly { readonly role: string }[] };
 
 /**
  * The profile grouped by what it runs (`model:thinking`), read by provider and then by level: the
@@ -81,12 +80,12 @@ export type ProfileGroup = { readonly key: string; readonly lead: RouteToken; re
  * runs nothing.
  */
 export function profileGroups(ledger: readonly LedgerRow[]): ProfileGroup[] {
-  const groups = new Map<string, { key: string; lead: RouteToken; down: boolean; roles: { role: string; agentBacked: boolean }[] }>();
+  const groups = new Map<string, { key: string; lead: RouteToken; down: boolean; roles: { role: string }[] }>();
   for (const row of ledger) {
     if (!row.lead) continue;
     const key = `${row.lead.key}:${row.lead.thinking}`;
     const group = groups.get(key) ?? groups.set(key, { key, lead: row.lead, down: row.down !== null, roles: [] }).get(key)!;
-    group.roles.push({ role: row.role, agentBacked: row.agentBacked });
+    group.roles.push({ role: row.role });
   }
   const first = ledger.find(row => row.role === "default")?.lead?.family;
   const families = orderedFamilies([...groups.values()].map(group => group.lead.family));
