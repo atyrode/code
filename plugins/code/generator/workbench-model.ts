@@ -6,9 +6,10 @@ import { initialAccountChoices, servedProviders } from "../../domain/accounts.ts
 import { defaultSelection, newPremiumLead, routeService, routedModels, type Review, type ServiceGap } from "../../domain/routing.ts";
 import { catalogFromMetadata } from "../../domain/probe.ts";
 import type { AccountChoiceChange, CatalogDocument, Selection } from "../../domain/contracts.ts";
-import type { ActionResult, Configuration, Target } from "../contract.ts";
+import { CODE_PLUGIN_ID, type ActionResult, type Configuration, type Target } from "../contract.ts";
 import { LAUNCH_OPERATION_ID, OMP_PLUGIN_ID, type ActionResult as OmpResult, type ModelCatalogSnapshot } from "@atyrode/manifold-omp";
-import { agentLaunchBlocker, runsRefused, sponsorRefused, WorkflowError, type AgentLaunchBlocker, type ChargeReview, type CodeRuns, type SessionReview } from "../workflow.ts";
+import { agentLaunchBlocker, refusalToken, runsRefused, sponsorRefused, WorkflowError, type AgentLaunchBlocker, type ChargeReview, type CodeRuns,
+  type SessionReview } from "../workflow.ts";
 import { ACCOUNT_REFRESH_MS, callCodeAction, codeWorkflow, canWriteCodeWorkspace, codeOperationFailure, useCodeAgentRuns, useCodeQuery, useOmpQuery, useWorkflowQuery } from "../machine-web.ts";
 import { HARNESS_OPERATION_ID, operationReady } from "../permission-plan.ts";
 import { useMinuteTick } from "../ui.tsx";
@@ -145,6 +146,17 @@ export type WorkbenchModel = {
   held: HeldReview | null;
   /** A save waiting for an explicit actual-tier choice, bound to the unchanged press and policy scope. */
   premiumSave: { readonly selection: Selection; readonly model: string; readonly tier: Selection["capability"]; readonly effort: string; readonly launchAfterSave: boolean } | null;
+  /**
+   * The saved profile reads, at the tiers the list in use now gives its models, a model other than the one it was saved
+   * for, and Code's own review of it at this exact revision refused it (`invalid_selection`), while the profile itself
+   * forms here. Choosing it again, its same word included, is the person's explicit choice, which Save records.
+   */
+  savedChoiceNeeded: boolean;
+  /**
+   * The saved profile a new model's actual tier is judged against (routing.ts `newPremiumLead`), with the model Code's
+   * own review admitted it as, when it did at this exact revision; null with no saved profile on a list in use.
+   */
+  previousProfile: Parameters<typeof newPremiumLead>[2];
   configurationCurrent: boolean;
   unsaved: boolean;
   /** The rows hold a real edit not yet saved or discarded (draft-store.ts `editedDraft`); the panel's reads on their own wait for it. */
@@ -352,6 +364,40 @@ export function useWorkbench({ host, target, machine, rosterError, available }: 
     if (!compiled || !selection) return null;
     return previewSelection(compiled, selection);
   }, [compiled, selection]);
+  // THE SAVED PROFILE AS CODE ADMITS IT. A list in use that reads some model at a tier its document does not store
+  // (catalog.ts `isReclassified`) is the only list where a saved tier can name another model now than the one it was saved
+  // for, and only Code knows whether this workspace chose the one it reads now. Its own review of the saved profile there,
+  // read-only, at this exact revision and list and with no override, answers: refused (`invalid_selection`) until the person
+  // chooses it again, admitted once they have or when it never changed. A new revision asks again; nothing else does. An
+  // outstanding or failed answer, or one for another revision, is no answer: it neither asks for a choice nor admits one.
+  const activeCompiled = useMemo(() => {
+    if (!record?.active) return null;
+    try { return compileCatalog(record.active.document); } catch { return null; }
+  }, [record?.active?.digest]);
+  const savedScope = record?.active && record.selection && activeCompiled !== null && activeCompiled.models.some(model => activeCompiled.isReclassified(model.key))
+    ? JSON.stringify([host.containerId, record.revision, record.active.digest]) : null;
+  const savedReview = useWorkflowQuery(host, `${CODE_PLUGIN_ID}.reviewCatalog:${savedScope}`, savedScope !== null, async () => {
+    const scope = savedScope!, [containerId, revision, digest] = JSON.parse(scope) as [string, number, string];
+    try {
+      const review = await callCodeAction(host, "reviewCatalog", { containerId, expectedRevision: revision, source: "active" });
+      return { scope, admitted: review.revision === revision && review.catalogDigest === digest };
+    } catch (reason) {
+      if (reason instanceof WorkflowError && refusalToken(reason.message) === "code_invalid_selection") return { scope, admitted: false };
+      throw reason;
+    }
+  });
+  const admitted = savedScope !== null && savedReview.data?.scope === savedScope ? savedReview.data.admitted : null;
+  const savedChoiceNeeded = admitted === false && activeCompiled !== null && record?.selection != null &&
+    previewSelection(activeCompiled, record.selection) !== null;
+  const previousProfile = useMemo(() => {
+    if (!activeCompiled || !record?.selection) return null;
+    const selection = record.selection;
+    if (admitted !== true) return { catalog: activeCompiled, selection };
+    try {
+      const model = activeCompiled.model(activeCompiled.rung(selection.lane.kind === "mixed" ? "openai" : selection.lane.family, selection.capability));
+      return { catalog: activeCompiled, selection, resolved: { provider: model.provider, id: model.id } };
+    } catch { return { catalog: activeCompiled, selection }; }
+  }, [activeCompiled, record?.selection, admitted]);
   // The models the shown team's routes name, which the session door requires OMP to still publish. The door first prunes
   // fallbacks no included account serves; these are not pruned, because a provider of a verified list that no account
   // serves now has changed the pool, which asks to verify again whatever OMP publishes.
@@ -388,8 +434,9 @@ export function useWorkbench({ host, target, machine, rosterError, available }: 
   const launchReady = operationReady(setup.data, LAUNCH_OPERATION_ID);
   const harnessReady = operationReady(setup.data, HARNESS_OPERATION_ID);
   // A check the person starts is itself the save of the shown selection: the bundled preview's dials, or the active
-  // profile's, narrowed to what the verified catalog hosts. A background check saves the saved selection, and only
-  // starts while the rows hold no edit and nothing else is in flight.
+  // profile's, narrowed to what the verified catalog hosts. A background check declares no new choice: it adopts or prepares
+  // under the workspace's stored intent, keeps the saved selection for a renewal it may pay for, and only starts while the
+  // rows hold no edit and nothing else is in flight.
   const verification = useModelVerification({ host, target, record, revision: profile?.revision ?? observed?.revision ?? 0,
     configurationCurrent, selection, routed, setup: setup.data, catalogRevision: metadata.data?.revision ?? null, writable, available,
     edited, idle: !busy && !chaining && !writingCatalog,
@@ -524,8 +571,7 @@ export function useWorkbench({ host, target, machine, rosterError, available }: 
       launchAfterSave = premiumSave.launchAfterSave;
       setPendingPremiumSave(null);
     } else {
-      const previous = record?.active && record.selection ? { catalog: compileCatalog(record.active.document), selection: record.selection } : null;
-      const lead = newPremiumLead(compiled, selected, previous);
+      const lead = newPremiumLead(compiled, selected, previousProfile);
       if (lead) {
         const candidate: Selection = { ...selected, capability: lead.tier };
         const review = previewSelection(compiled, candidate);
@@ -753,6 +799,7 @@ export function useWorkbench({ host, target, machine, rosterError, available }: 
     queries: { configuration, metadata, setup, defaults, skillCatalog, accounts },
     observed, record, machineId, rosterError, document, starterError: starter.error, compiled, selection,
     profile, localDraft: dials, review: shownReview, localReview, controlsReview, launchReview: standing?.review ?? null, held: standing, premiumSave,
+    savedChoiceNeeded, previousProfile,
     configurationCurrent, unsaved, edited, stale, writable, placeable, available, accounts: accountState, accountsProblem,
     configurationFailed: configuration.error !== null, ompMissing: setup.code === "omp_operation_unavailable", launchReady, busy, inFlight, chaining,
     profileState, stateLabel, launchStatus: launchStatusText(facts), message,

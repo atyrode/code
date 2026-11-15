@@ -19,7 +19,6 @@ import { Blocks, pressesGo, SheetCue, SheetGo, SheetHead, SheetKeys, SheetReadou
   type GoAction, type GoFix, type GoHandle, type GoPress, type GoTone, type Said } from "./sheet-frame.tsx";
 import { contextWords, exclusionWords, followPress, listChanges, modelRows, modelsPhase, money, saveFailure, speedLevel, thinkingRange, TIERS,
   type ListChange, type ModelRow, type SavePress } from "./sheets-model.ts";
-import { sameTeam } from "./statement-model.ts";
 import { CHECKING_HOLD_MS } from "./verification.ts";
 import type { WorkbenchModel } from "./workbench-model.ts";
 
@@ -171,12 +170,27 @@ export function ModelsSheet({ host, model, machine, onBack, backRef, onPlace }: 
   function useStaged(confirmed?: Selection) {
     if (!record || !draft || !compiled || writeRefusal || editHold("use")) return;
     const { containerId, revision } = record, digest = draft.digest, verified = draft.provenance !== null;
-    const saved = verification.stagedSelection ?? record.selection;
-    let selection = confirmed ?? (saved && previewSelection(compiled, saved) ? saved : undefined);
+    // The profile the person sees, which this press chooses: the rows' profile, on the list in use or, with none in use,
+    // on this staged list. An edit of it holds this write until it is saved or discarded (`editHold`, launch-step.ts
+    // `editHoldsCatalogWrite`), so the rows show the saved profile, the saved profile chosen again, or, with nothing saved,
+    // the staged list's own profile as drawn. It goes along as chosen, its tier, effort, lane, budget and switches included;
+    // a staged list that cannot form it is never quietly given another, and only a list that shows no profile at all asks.
+    const shown = model.profile;
+    const here = shown !== null && !model.stale && (shown.source === "active" ? active !== null && shown.catalogDigest === active.digest
+      : shown.source === "draft" && shown.draftDigest === digest);
+    if (shown !== null && !here) {
+      setFailure("The profile shown no longer rests on this workspace's lists. Read the workspace again first.");
+      return;
+    }
+    const visible = here ? model.selection : null;
+    if (confirmed === undefined && visible !== null && !previewSelection(compiled, visible)) {
+      setFailure("The staged list cannot form your profile. Choose a profile it can form and save it, or import another list.");
+      return;
+    }
+    const selection = confirmed ?? visible ?? undefined;
     if (confirmed === undefined && selection !== undefined) {
       try {
-        const previous = active && record.selection ? { catalog: compileCatalog(active.document), selection: record.selection } : null;
-        const lead = newPremiumLead(compiled, selection, previous);
+        const lead = newPremiumLead(compiled, selection, model.previousProfile);
         if (lead) {
           const candidate: Selection = { ...selection, capability: lead.tier };
           const review = previewSelection(compiled, candidate);
@@ -194,18 +208,14 @@ export function ModelsSheet({ host, model, machine, onBack, backRef, onPlace }: 
     if (selection === undefined) {
       try {
         const providers = draft.provenance?.providers;
-        const balanced = defaultSelection(compiled, providers ? provider => providers.includes(provider) : undefined);
-        if (saved?.budget === "free") {
-          selection = { ...balanced, budget: "free" };
-          if (!previewSelection(compiled, selection)) throw new Error("code_budget_unsatisfiable");
-        }
+        defaultSelection(compiled, providers ? provider => providers.includes(provider) : undefined);
       } catch {
         // A sparse list may declare only smart or elite. Naming a candidate is not adoption:
         // the deliberate dialog must accept its exact model, tier and configured effort first.
         for (const capability of [3, 4] as const) {
           for (const family of families) {
             if (!compiled.models.some(model => compiled.family(model.key) === family && model.tier === capability)) continue;
-            const candidate: Selection = { ...selectionForLane({ kind: "provider", family, blend: "only" }, capability), budget: saved?.budget ?? "any" };
+            const candidate: Selection = { ...selectionForLane({ kind: "provider", family, blend: "only" }, capability), budget: "any" };
             const review = previewSelection(compiled, candidate);
             if (!review) continue;
             const lead = review.routes.find(route => route.role === "default")!.lead;
@@ -226,9 +236,8 @@ export function ModelsSheet({ host, model, machine, onBack, backRef, onPlace }: 
       if (review.catalogDigest !== digest) throw new WorkflowError("code_preview_changed");
       const promoted = await code("promoteCatalog", { containerId, expectedRevision: revision, source: "draft", reviewDigest: review.reviewDigest, ...choice });
       wrote(revision, promoted);
-      // Promotion adopts exactly the reviewed selection, whether kept, balanced or explicitly confirmed.
-      const reset = confirmed === undefined && saved !== null && promoted.selection !== null && !sameTeam(promoted.selection, saved);
-      return { value: "in use", text: ["the staged list replaced the one in use", ...reset ? ["the profile is the new list's default now"] : [],
+      // Promotion adopts exactly the reviewed selection, whether the chosen one, the list's default or explicitly confirmed.
+      return { value: "in use", text: ["the staged list replaced the one in use",
         ...confirmed ? ["the premium profile was explicitly selected"] : [], ...verified ? [] : ["check it next"]].join("; ") };
     }, setFailure);
   }

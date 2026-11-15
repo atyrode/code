@@ -107,8 +107,11 @@ budget in use: Code recomputes the pool from the observation and the saved choic
 refuses `code_accounts_changed` unless it is the one named, refuses `code_check_missing`
 when the caller keeps no such check, `code_invalid_provenance` when the kept list names a
 provider the pool does not include, and `code_check_current` when the workspace already
-holds a list of that pool whose benchmark completed no earlier. It saves `selection`
-(else the saved one) narrowed to the check's list, and leaves a staged list as it is.
+holds a list of that pool whose benchmark completed no earlier. A non-null `selection` is
+the caller's choice of profile, narrowed to the check's list and admitted as an explicit
+choice (below); `selection: null` keeps the saved profile as the workspace's stored intent,
+admitted only as stored, and otherwise refused `code_invalid_selection` with nothing
+written. It leaves a staged list as it is.
 
 Whether a person has seen the panel's tutorial is their own record too, kept the same
 way at `tutorial/<person>`. `readTutorial({})` answers `{ keeps, seenAt }`: whether the
@@ -200,10 +203,29 @@ kept check stay exactly as they are: nothing migrates, rewrites or checks it aga
 whose id names no tier keeps its stored tier. Two stored rungs read at one tier both stay
 listed; the ladder routes the one whose tier did not move, else the higher stored rung. A
 saved capability whose main model that reading would change (Opus stored at normal over
-Haiku at fast: normal now means Haiku) is refused `code_invalid_selection` wherever it is
-reviewed, selected, adopted or composed, choosing neither model and writing nothing, while
-reads still answer the list and the check; the tier a model now holds still selects it, and
-adopting the kept check at that tier spends nothing.
+Haiku at fast: normal now means Haiku; Sonnet stored at elite over Opus at smart: normal
+now means Sonnet) is never given the model it now reads on its own. Every automatic use —
+the saved profile reviewed with no `selection`, listed, composed, or adopted by a check
+that declares no choice (`selection: null`) — refuses `code_invalid_selection`, choosing
+neither model and writing nothing, while reads still answer the list, the check and the
+record exactly as stored (`listProfiles` keeps the workspace with `selected: null`).
+
+Choosing a profile is the repair. An explicit `select`, `reviewCatalog`/`promoteCatalog`
+with `selection`, or `adoptCheck` with a non-null `selection`, after the same review,
+actual-tier, budget, pool and capability checks as any choice, is the person's choice of
+the model the compiled catalog reads now, its same numeric tier included. Code then keeps,
+privately and in the same compare-and-set write as the saved record, which model that
+choice resolved to, bound to the digest of the list in use and the exact saved selection.
+It is Code's own storage, not a field: no public read, result, listing or input carries it,
+no caller can supply it, `Configuration` and its schema version are unchanged, and nothing
+is migrated or rewritten to add it. While it still matches, the saved profile is admitted
+as chosen wherever it is used, and writes that leave the list in use and the selection as
+they were (an account edit, a list staged or discarded) keep it; a later explicit choice
+replaces it. One that no longer matches, or cannot be read, counts as none: never consent,
+and never a reason to refuse or erase the read. Nothing is checked or paid for again: the
+stored document, its digest and provenance, and the kept check stay exactly as they are.
+The tier a model now holds still selects it, and a choice below a premium model's actual
+tier still asks for that tier, whatever was chosen before.
 
 Only a successful canonical configuration read establishes an absent revision 0
 or an initialized-empty positive revision. Loading and failure are not absence.
@@ -222,7 +244,8 @@ the workspace at `expectedRevision` (initializing an
 absent one). When the caller keeps a check of the workspace's present pool, derived under
 `budget`, whose benchmark completed later than that of the list the workspace holds for
 that pool, or the workspace holds none for it, preparing puts that check in use
-(`adoptCheck`, with `selection` narrowed to it) and ends there, spending nothing:
+(`adoptCheck`, with `selection` narrowed to it; a null `selection` asks the workspace's
+stored intent, under the given `budget`) and ends there, spending nothing:
 `{ kind: "adopted", verified }`, whose excluded models are unknown. Otherwise it runs
 OMP's inventory with the pool Code composes from the saved account choices and returns
 `{ kind: "charge", charge, approvedRequests, confirm }`: the charge, the number of tiny
@@ -321,8 +344,11 @@ stage refused after it leaves the draft resting on that initialization, as a sto
 first verification does. A write that replaces the list a draft was made on (using the
 staged list replaces the list in use and the staged one, discarding or importing
 replaces the staged one, and an import replaces the bundled list a workspace without
-one previews) never drops an unsaved edit. A staged list keeps a compatible saved
-profile; otherwise it uses its balanced default. Models holds a write that would
+one previews) never drops an unsaved edit. A staged list is put in use with the profile
+the rows show, as the person's explicit choice: the saved profile on the list in use, or,
+with none in use, the profile drawn on the staged list itself, with its tier, effort, lane,
+budget and switches; a list that cannot form it is refused rather than given another.
+Models holds a write that would
 replace the list an unsaved edit rests on and says which list the edit is on and what
 each fix does: **save**, for an edit of the team in use, keeps the edit on that list;
 **discard edit**, offered by the import dialog too, drops it. If only a premium profile
@@ -793,7 +819,13 @@ its first Launch press, which adopts a kept check of its pool without asking or
 spending. A background check never asks, and spends only to renew a list that passed a
 check, within the approval as read again just before spending: any other charge ends it
 with nothing spent, and for a list that never passed a check it only adopts, starting no
-inventory, so a first check that spends is always the person's own press. It holds its
+inventory, so a first check that spends is always the person's own press. It declares no
+choice: it adopts or prepares with `selection: null` under the saved budget, so a saved
+profile Code admits only as an explicit choice (above) ends it before any inventory with
+nothing adopted, written or spent ("Choose a usable explicit profile in Models before
+checking again; no benchmark was started."), while a renewal it may pay for keeps the saved
+profile, its budget, tier, effort and switches. A check the person starts declares the
+profile they see. It holds its
 first write until nothing the person started is in flight. It never takes the verb or
 the line beside a launch the list in use can serve, and a stop is said in Models only.
 After any check stops, is cancelled or ends unspent, nothing starts on its own again
@@ -803,6 +835,18 @@ holds edits as a step in progress. **ask first** in Setup withdraws the approval
 the person did not approve with a press then spends nothing more, asking instead (or, in
 the background, ending unspent) if it is still listing models, and stopping if it is
 measuring them; one already past measuring keeps what it paid for.
+
+**A saved tier that reads another model.** When the list in use reads some model at a
+tier its document does not store, the panel asks Code's own read-only review of the saved
+profile (`reviewCatalog`, `source: "active"`, at the record's exact revision, with no
+`selection`), once per revision; it calls no OMP or provider. While that review refuses
+`code_invalid_selection` and the saved profile forms on the list as it reads now, the rows
+show that profile and a chosen word chooses again: a press on it (or Enter, or Space on a
+level row) keeps the very saved profile as a local choice, which offers **save & launch**
+and **Revert** like any edit. It changes no setting, so nothing is kept for a reload and no
+Models write waits for it. Save is the ordinary `select` of that profile; once Code admits
+it at the new revision, a press on a chosen word does nothing again. A review not yet
+answered, failed or of another revision neither asks for the choice nor counts as it.
 
 One gate decides every action: the launch, saving, checking models, approving a charge,
 resuming with or without the profile, opening a running session, and every edit of the
@@ -1102,9 +1146,10 @@ reason in the readout; until atomic promotion succeeds, the list in use and save
 profile stay as they were. An adopted check measured nothing here,
 so nothing reads as left out after it.
 A staged list offers **use staged list**, which reviews at its revision and atomically
-promotes that exact catalog and selected profile, and **discard**. A compatible saved
-selection is retained; otherwise adoption uses a balanced default, or asks explicitly
-before choosing a premium-only profile. An unsaved edit made on a list the write
+promotes that exact catalog and selected profile, and **discard**. The profile the rows
+show (the saved one, or with no list in use the one drawn on the staged list) goes along
+as chosen; a list that cannot form it says so and changes nothing, and a list that draws no
+profile asks explicitly before a premium-only one. An unsaved edit made on a list the write
 would replace holds it, with **save** (an edit of the team in use, kept on that list)
 and **discard edit** beside it. Review and promotion bind the same selection and digest;
 there is no temporary default profile or later extra selection write.

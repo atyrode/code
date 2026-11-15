@@ -189,6 +189,17 @@ describe("a local edit of the saved team and later writes to the record", () => 
       expect(followRecord(edit, foreign)).toBe(edit);
     }
   });
+
+  test("the saved team chosen again, the explicit choice a saved profile Code refused waits for, offers Save and holds nothing", () => {
+    // The rows keep the very saved team as a local choice (workbench-model.ts `applySelection`): unsaved, so Save is the step.
+    const chosen: ProfileDraft = { ...edit, selection, document: { schemaVersion: 1, models: [] }, metadata: null };
+    expect(nextLaunchStep(facts({ unsaved: true, localDraft: { source: "active" } })).step).toBe("save");
+    // It changes no setting: nothing is kept for a reload, and no write of the model list waits for it.
+    expect(editedDraft(chosen, null)).toBe(false);
+    for (const write of ["use", "discard", "stage"] as const) expect(editHoldsCatalogWrite(chosen, editedDraft(chosen, null), write)).toBe(false);
+    // An account write beneath it is no conflict: its save's CAS names the newer revision.
+    expect(followRecord(chosen, { ...record, revision: 8 })).toEqual({ ...chosen, revision: 8 });
+  });
 });
 
 describe("this panel's own writes of the model list in Models", () => {

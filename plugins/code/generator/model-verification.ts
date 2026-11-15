@@ -65,8 +65,6 @@ export type ModelVerification = VerificationState & {
   charge: ChargeReview | null;
   /** An advertised, unmeasured premium intention awaiting its own choice, never spending approval. */
   premium: PremiumProfile | null;
-  /** The wanted profile for this run's exact retained staged record; null once that record changes. */
-  stagedSelection: Selection | null;
   /** Who started the run in flight; null when none runs. */
   mode: VerificationMode | null;
   /** The run in flight is writing the workspace's choices or model list, which nothing else may touch meanwhile. */
@@ -150,7 +148,6 @@ export function useModelVerification(input: ModelVerificationInput): ModelVerifi
   const [failure, setFailure] = useState<VerificationFailure | null>(null);
   const [exclusions, setExclusions] = useState<Exclusion[] | null>(null);
   const active = useRef<Session | null>(null);
-  const [retained, setRetained] = useState<{ host: HostServices; target: Target; configuration: Configuration; selection: Selection | null } | null>(null);
   const mounted = useRef(false);
   // After any check stops, is cancelled or ends unspent, nothing starts on its own again until the person starts a check
   // that completes: a retry behind their back could spend again, its own writes can change what it would renew, and the
@@ -177,10 +174,6 @@ export function useModelVerification(input: ModelVerificationInput): ModelVerifi
   const state: VerificationState = run === null ? held : { status: "verifying", changes: held.changes };
   const ready = operationReady(setup, INVENTORY_OPERATION_ID) && operationReady(setup, BENCHMARK_OPERATION_ID);
   const canPrepare = run === null && writable && available && configurationCurrent && ready && target !== null && host.containerId !== null;
-  const stagedSelection = retained && retained.host.client === host.client && retained.host.principal.id === host.principal.id &&
-    retained.host.containerId === host.containerId && retained.target.machineId === target?.machineId &&
-    record?.revision === retained.configuration.revision && record.draft?.digest === retained.configuration.draft?.digest &&
-    record.active?.digest === retained.configuration.active?.digest ? retained.selection : null;
 
   // The person's kept check of this pool and budget, newer than the list in use, which the workspace could adopt without spending.
   const poolDigest = pool.data?.pool?.poolIdentityDigest ?? null, budget = record?.selection?.budget ?? "any";
@@ -201,6 +194,8 @@ export function useModelVerification(input: ModelVerificationInput): ModelVerifi
   }, [input.edited, run?.mode, writing]);
 
   const owns = (session: Session) => mounted.current && active.current === session;
+  // A background run keeps the saved profile, its budget, tier, effort and preferences, for a charge it may renew; it never
+  // declares it as a new choice, so its preparation asks the workspace's stored intent (`selection: null`).
   const selectionFor = (mode: VerificationMode) => mode === "background" ? latest.current.record?.selection ?? null : latest.current.selection;
   async function stopped(session: Session, reason: unknown) {
     if (!owns(session)) return;
@@ -216,7 +211,6 @@ export function useModelVerification(input: ModelVerificationInput): ModelVerifi
           configuration.draft.provenance.inventoryObservedAt === charge.inventory.observedAt &&
           configuration.draft.provenance.inventoryArtifactSha256 === charge.inventoryArtifactSha256 &&
           configuration.draft.provenance.catalogRevision === charge.catalogRevision && charge.budget === (session.wanted?.budget ?? "any")) {
-          setRetained({ host, target: charge.target, configuration, selection: session.wanted });
           latest.current.onRetained(configuration);
           kept.refresh();
         }
@@ -227,7 +221,8 @@ export function useModelVerification(input: ModelVerificationInput): ModelVerifi
     quiet.current = true;
     setRun(null);
     setFailure(reason instanceof VerificationError
-      ? { step: reason.step, reason: session.wanted === null && reason.evidence.benchmarkJobIds.length === 0 && /(?:^|code_)invalid_selection$/.test(reason.reason)
+      ? { step: reason.step, reason: (session.wanted === null || session.mode === "background") && reason.evidence.benchmarkJobIds.length === 0 &&
+          /(?:^|code_)invalid_selection$/.test(reason.reason)
           ? "Choose a usable explicit profile in Models before checking again; no benchmark was started."
           : codeOperationFailure(new WorkflowError(reason.reason)), cancelled: reason.reason.startsWith("code_verification_cancelled"),
         evidence: reason.evidence, mode: session.mode }
@@ -300,9 +295,11 @@ export function useModelVerification(input: ModelVerificationInput): ModelVerifi
     setRun({ phase: "inventory", progress: null, charge: null, mode, premium: null });
     try {
       // The client is ungated: a stop must still reach the native job owner to cancel the job. A background run that may not
-      // spend only adopts: it starts no inventory, and writes nothing, unless the person keeps a check.
+      // spend only adopts: it starts no inventory, and writes nothing, unless the person keeps a check. A background run
+      // declares no new choice: adopting or preparing keeps the workspace's own stored intent, under the saved budget.
       const selection = session.wanted;
-      const pending = await codeWorkflow(host).verifyModels(target, { expectedRevision: revision, budget: selection?.budget ?? "any", selection,
+      const pending = await codeWorkflow(host).verifyModels(target, { expectedRevision: revision, budget: selection?.budget ?? "any",
+        selection: mode === "background" ? null : selection,
         adoptOnly: adoptsOnly(mode, session.renews, approvedRequests ?? 0) },
         { signal: controller.signal, isCurrent: session.isCurrent, onProgress: progressTo(session), beforeWrite: holdFor(session) });
       if (!owns(session)) return;
@@ -388,7 +385,7 @@ export function useModelVerification(input: ModelVerificationInput): ModelVerifi
   }
   return {
     ...state, held: held.status, passed: provenance !== null, phase: run?.phase ?? null, progress: run?.progress ?? null, charge: run?.charge ?? null,
-    mode: run?.mode ?? null, premium: run?.premium ?? null, stagedSelection, writing, exclusions, provenance, failure, ready, canPrepare,
+    mode: run?.mode ?? null, premium: run?.premium ?? null, writing, exclusions, provenance, failure, ready, canPrepare,
     approvedRequests, keepsChecks: kept.data?.keeps ?? null, prepare, confirm, choosePremium, cancel, withdraw,
   };
 }

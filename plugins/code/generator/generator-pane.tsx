@@ -328,8 +328,12 @@ export function GeneratorPane(props: GeneratorPaneProps) {
     if (!selection) return false;
     if (!teamGate.open) { refuse(teamGate.refusal.text, value); return false; }
     const kind = commitKind(next, selection, model.record?.selection ?? null, model.localDraft?.source ?? null);
-    if (kind === "none") return false;
-    if (kind === "discard") model.actions.discardChanges();
+    // The saved profile Code refused as it reads now is chosen again here, its same word included: an explicit choice the
+    // rows keep for Save, never "nothing changed" or a return to the saved profile that would keep the refusal.
+    const chosenAgain = model.savedChoiceNeeded && model.record?.selection != null && sameTeam(next, model.record.selection) &&
+      model.localDraft?.source !== "draft" && !(model.localDraft !== null && sameTeam(model.localDraft.selection, next));
+    if (kind === "none" && !chosenAgain) return false;
+    if (kind === "discard" && !chosenAgain) model.actions.discardChanges();
     else model.actions.updateSelection(next);
     announce(say);
     return true;
@@ -572,6 +576,7 @@ export function GeneratorPane(props: GeneratorPaneProps) {
     </header>
     <div className={`${G}dials`} role="group" aria-label="profile">
       {rows ? rows.map((row, index) => <DialRow key={row.id} row={row} cursor={row.id === cursorRow} locked={!teamGate.open}
+        reselect={model.savedChoiceNeeded && model.localDraft === null}
         onCursor={() => setCursor(row.id)} onChoose={(word, via) => choose(row, word, via)} onRefuse={(word, via) => refuseWord(row, word, via)}
         onHover={word => setHovered(current => word ? { kind: "word", row: row.id, key: word.key } : current?.kind === "word" && current.row === row.id ? null : current)}
         onFocusChange={on => { setFocused(current => on ? row.id : current === row.id ? null : current); if (on) setCursor(row.id); }}

@@ -44,6 +44,9 @@ ordinary unauthenticated HTTPS downloads of all six assets, strict publisher sum
 and full native verification with a fresh normal owner and no prepared archive map.
 The release is versioned and SHA-verified, not GitHub-immutable or Sigstore-attested.
 That upstream release proof does not establish Code's own gate or live activation.
+The pinned native runtime is OMP 18.20.1 inside that family; a standalone OMP 18.20.2
+found on a workstation is ambient, not a substitute for this pin, and nothing here
+admits, tests or launches it.
 
 Separately pinned callers intentionally remain on their old caller/root pair until
 their owner upgrades and repacks them; nothing shims the old pair. Before activating
@@ -132,7 +135,13 @@ files, service state, credentials or backups.
   as the person's check of that pool and budget, reviewed, promoted and saved with the
   selection), or the person's kept check of that pool, adopted without spending. Stored active policy
   wins and unrecorded historical provenance
-  stays unknown. Read-only native panels remain locally explorable, not writable.
+  stays unknown. A saved tier that a list read at its models' named tiers would give
+  another model is never given it on its own: reads answer the record as stored, listings
+  name no selected model, and compositions and background adoptions refuse it with nothing written; the raw list, digest,
+  provenance and kept check stay as stored, and the panel's rows let the person choose
+  that profile again, its same word included, and Save it; Code then keeps privately
+  which model that choice resolved to (no public field, input or migration), and no
+  check is run or paid for again. Read-only native panels remain locally explorable, not writable.
   Disposable presentation/CAS proof is not native consent, configured accounts,
   provider execution, a release or authenticated preview acceptance.
 - Agent launch through Code reaches Manifold's real doors only up to `launchRun`. The
