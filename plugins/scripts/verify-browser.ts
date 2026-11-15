@@ -4676,6 +4676,15 @@ async function legacyTierRepairScenario(browser: BrowserInstance, server: TestSe
   };
   const writes = (from: number) => trace.requests.slice(from)
     .filter(request => /^atyrode\.code\.(initializeConfiguration|stageCatalog|promoteCatalog|discardCatalog|adoptCheck|select|changeAccounts)$/.test(request.name));
+  const screenshot = async (name: string) => {
+    if (screenshotDirectory === undefined) return;
+    assert(isAbsolute(screenshotDirectory), "CODE_VERIFY_SCREENSHOTS must name an absolute artifact directory");
+    mkdirSync(screenshotDirectory, { recursive: true });
+    const { result } = await browser.send("Page.captureScreenshot", { format: "png", fromSurface: true, captureBeyondViewport: false });
+    const data = result?.data;
+    assert(typeof data === "string", "Chromium returns the mounted legacy tier screenshot");
+    writeFileSync(join(screenshotDirectory, `legacy-tier-${name}.png`), Buffer.from(data, "base64"));
+  };
   try {
     // The workspace adopting later passed its check first, of other accounts; the one choosing again holds the newer kept check.
     const movedSeed = await legacyInUse(moved.id, earlier, Date.now() - 6_000);
@@ -4704,6 +4713,7 @@ async function legacyTierRepairScenario(browser: BrowserInstance, server: TestSe
     await until(browser, "choosing the same normal word again offers Save & launch",
       `${launchIs("save & launch", "ready")} && ${chosenKey("tier")} === ${JSON.stringify(normalWord)} && ${row("tier")}?.dataset.reselect === undefined`);
     assert.equal(await browser.evaluate(`sessionStorage.getItem(${JSON.stringify(draftKey)})`), null, "The choice changes no setting, so nothing is kept for a reload");
+    await screenshot("same-normal-chosen");
     // Revert leaves the choice unmade and writes nothing; the word waits to be chosen again.
     await click(browser, element(`${generator} [data-revert]`));
     await until(browser, "Revert leaves the choice unmade", `${launchIs("launch", "refused")} && ${row("tier")}?.dataset.reselect !== undefined`);
@@ -4726,6 +4736,7 @@ async function legacyTierRepairScenario(browser: BrowserInstance, server: TestSe
     await Bun.sleep(1_000);
     await until(browser, "the chosen profile is saved, its same word an ordinary chosen word",
       `${launchIs("launch", "refused")} && ${row("tier")}?.dataset.reselect === undefined`);
+    await screenshot("saved-admitted");
     await click(browser, word("tier", normalWord));
     await Bun.sleep(500);
     assert(await browser.evaluate<boolean>(launchIs("launch", "refused")), "A press on the admitted profile's own word is no edit");
@@ -4784,6 +4795,7 @@ async function legacyTierRepairScenario(browser: BrowserInstance, server: TestSe
     await until(browser, "the staged list draws its normal Sonnet in the rows", `${chosenKey("tier")} === ${JSON.stringify(normalWord)}`);
     await openSheet(browser, "models");
     await until(browser, "the staged list waits in Models", goIs(modelsSheet, "use staged list"));
+    await screenshot("staged-normal");
     await click(browser, element(`${modelsSheet} [data-go]`));
     await waitFor(async () => (await readConfiguration(server, person, { containerId: firstUse.id })).revision === stagedRecord.revision + 1, timeout, 50);
     const used = await typedRead(firstUse.id);

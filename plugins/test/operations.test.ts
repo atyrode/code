@@ -795,7 +795,7 @@ describe("pure client-supplied policy composition", () => {
       expect(envelope(f)).toEqual({ ...chosen, resolvedSelection: witness });
     });
 
-    test("a witness keeps a model id as long as a catalog admits, beyond Code's own identifier bound, through reads, listing and unrelated writes", async () => {
+    test("a witness keeps a model id as long as a catalog admits, beyond Code's own identifier bound, through reads, listing, unrelated writes and composition", async () => {
       const f = fixture(), sonnet = `claude-${"long".repeat(50)}-sonnet-5`;
       expect(sonnet.length).toBeGreaterThan(128);
       const catalog: CatalogDocument = { ...compressed, models: compressed.models.map(model => model.key === "sonnet" ? { ...model, id: sonnet } : model) };
@@ -814,6 +814,14 @@ describe("pure client-supplied policy composition", () => {
       expect(envelope(f)).toEqual({ ...changed, resolvedSelection: witness });
       expect(await profile(f)).toMatchObject({ revision: changed.revision, selected: { model: `anthropic/${sonnet}` } });
       expect([changed.active, changed.active!.digest]).toEqual([legacy.active, digestOf(catalog)]);
+      // OMP publishes that very id, so composition reads it once and routes the default role to it.
+      expect(f.published.models.map(model => model.id)).toContain(sonnet);
+      const composed = await accepted(f, "composeSession", { ...workspace, expectedRevision: changed.revision, accounts: accounts(), prompt: "" });
+      expect(leadOf(composed)).toBe("sonnet");
+      expect(composed.overlay.modelRoles?.default).toBe(`anthropic/${sonnet}:medium`);
+      expect(f.publishedReads).toBe(1);
+      expect(envelope(f)).toEqual({ ...changed, resolvedSelection: witness });
+      expect(await configuration(f)).toEqual(changed);
     });
   });
 
