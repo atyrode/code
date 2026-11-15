@@ -261,14 +261,28 @@ describe("pure typed scaffolding", () => {
         models: inv.models.filter(model => ids.includes(model.id)) };
       expect(tiers(catalogFromMetadata(snapshot, "any"), "anthropic")).toEqual(expected);
     }
-    // A listing none of whose ids carries a reviewed family name is still laddered by metadata. The receipt lists its rows by
-    // address, so the anonymous names follow price, not that order: entry1 is Sonnet's cheaper, shallower row and entry2 Opus's dearer, deeper one.
-    const unnamed = { ...inv, models: inv.models.filter(model => model.id !== "claude-haiku-5")
-      .sort((left, right) => left.inputCostPerMillion - right.inputCostPerMillion)
-      .map((model, index) => ({ ...model, id: `entry${index + 1}` })) };
-    expect(unnamed.models.map(model => [model.id, model.inputCostPerMillion, model.thinkingLevels]))
-      .toEqual([["entry1", 3, ["high"]], ["entry2", 5, ["max"]]]);
-    expect(tiers(derived(unnamed).document, "anthropic")).toEqual([[1, "entry1"], [2, "entry2"]]);
+    // A listing none of whose ids carries a reviewed family name is still laddered by metadata: the cheapest is the bottom, the
+    // deepest thinker the top, and a middle is priced between them. Listed in neither price nor address order, the dearest row,
+    // thinking less than that top, takes no rung, so neither the price order nor the address order nor the listing is the ladder.
+    const unknown = [
+      listed("anthropic", "claude-moth", 5, 200_000, "low", "max"),
+      listed("anthropic", "claude-wren", 1, 200_000, "low", "low"),
+      listed("anthropic", "claude-kite", 8, 200_000, "low", "medium"),
+      listed("anthropic", "claude-atlas", 3, 200_000, "low", "high"),
+    ];
+    const ids = (rows: readonly Row[]) => rows.map(model => model.id);
+    expect([ids(unknown), ids([...unknown].sort((left, right) => left.inputCostPerMillion - right.inputCostPerMillion)), ids(unknown).sort()]).toEqual([
+      ["claude-moth", "claude-wren", "claude-kite", "claude-atlas"],
+      ["claude-wren", "claude-atlas", "claude-moth", "claude-kite"],
+      ["claude-atlas", "claude-kite", "claude-moth", "claude-wren"],
+    ]);
+    const fallback = derived(receiptOf(unknown));
+    expect([tiers(fallback.document, "anthropic"), fallback.exclusions]).toEqual([[[1, "claude-wren"], [2, "claude-atlas"], [3, "claude-moth"]], []]);
+    expect(derived(receiptOf([...unknown].reverse()))).toEqual(fallback);
+    // The profile's main choice is the everyday middle rung, not the cheapest, the dearest or the first listed.
+    const catalog = compileCatalog(fallback.document), selection = defaultSelection(catalog);
+    expect([selection.lane, selection.capability]).toEqual([{ kind: "provider", family: "anthropic", blend: "only" }, 2]);
+    expect(catalog.model(reviewCatalog(catalog, selection, 200).routes.find(route => route.role === "default")!.lead.key).id).toBe("claude-atlas");
   });
   test("missing, stale and wrong-API probes refuse promotion", () => {
     const inv = fullInventory(), input = benchmarkCandidates(inv), receipt = parseBenchmarkObservation(report(input), input, 101, 200);

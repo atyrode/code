@@ -518,7 +518,8 @@ const setupSheet = `${generator} [data-sheet="setup"]`;
 /** Models' import, a dialog of the panel's layer by its title (models-sheet.tsx), never in the sheet. */
 const importDialog = `${layers} dialog[aria-labelledby="${G}import-title"]`;
 const routeRows = `${generator} [data-pane="routing"] .${G}route`;
-const starterProviders = ["anthropic", "deepseek", "openai-codex"];
+/** Exactly what workflow.ts `readStarterCatalog` reads: OpenAI's API rows beside Codex's, each at its own address. */
+const starterProviders = ["anthropic", "deepseek", "openai", "openai-codex"];
 const profileRoles = ["default", "task", "plan", "slow", "advisor", "vision", "smol", "memory", "widget", "tiny", "commit"];
 /** The generator's rows, top to bottom: the dials, then fallbacks as an on/off row; the other profile switches live in the session options. */
 type RowId = "lane" | "tier" | "thinking" | "advisor" | "fallbacks";
@@ -2534,29 +2535,33 @@ async function starterWorkbenchScenario(browser: BrowserInstance, server: TestSe
   const metadata = ModelCatalogSnapshotSchema.parse(catalogRead.result);
   assert.equal(metadata.source, "bundled");
   assert.deepEqual([...new Set(metadata.models.map(model => model.provider))].sort(), [...starterProviders].sort(),
-    "The starter uses exact sanctioned providers, never an OpenAI alias for Codex");
-  const latest: Readonly<Record<string, readonly (readonly [id: string, input: number, output: number])[]>> = {
+    "The starter reads exactly its sanctioned providers, OpenAI's API and Codex each at its own address, never one for the other");
+  // The pinned OMP's bundled facts, by family, at the address each rung comes from: Codex where it bundles the model, the
+  // OpenAI API where only it does. OMP 18.20.1 bundles GPT-6.1 Terra for the API alone; Codex discovers it at runtime.
+  const latest: Readonly<Record<string, readonly (readonly [provider: string, id: string, input: number, output: number, quotaBucket: string | null])[]>> = {
     anthropic: [
-      ["claude-haiku-5-5", 0.1, 0.5], ["claude-sonnet-5-5", 2, 10],
-      ["claude-opus-5-5", 4, 20], ["claude-fable-5-2", 8, 40],
+      ["anthropic", "claude-haiku-5-5", 0.1, 0.5, "claude"], ["anthropic", "claude-sonnet-5-5", 2, 10, "claude"],
+      ["anthropic", "claude-opus-5-5", 4, 20, "claude"], ["anthropic", "claude-fable-5-2", 8, 40, "claude"],
     ],
-    "openai-codex": [
-      ["gpt-6-luna", 0.1, 0.5], ["gpt-6.1-terra", 1, 5],
-      ["gpt-6.1-sol", 2, 10], ["gpt-6-astra", 10, 50],
+    openai: [
+      ["openai-codex", "gpt-6-luna", 0.1, 0.5, "codex"], ["openai", "gpt-6.1-terra", 1, 5, null],
+      ["openai-codex", "gpt-6.1-sol", 2, 10, "codex"], ["openai-codex", "gpt-6-astra", 10, 50, "codex"],
     ],
   };
+  assert(!metadata.models.some(model => model.provider === "openai-codex" && model.id === "gpt-6.1-terra"),
+    "The pinned OMP bundles no Codex GPT-6.1 Terra, and the starter fabricates none");
   const bundledStarter = catalogFromMetadata(metadata, "any");
-  for (const [provider, models] of Object.entries(latest)) {
-    for (const [id, input, output] of models) {
+  for (const [family, models] of Object.entries(latest)) {
+    for (const [provider, id, input, output] of models) {
       const source = metadata.models.find(model => model.provider === provider && model.id === id);
       assert(source, `The real pinned OMP metadata publishes ${provider}/${id}`);
       assert.deepEqual([source.inputCostPerMillion, source.outputCostPerMillion], [input, output],
         `${provider}/${id} retains authoritative API list pricing, never an OAuth bill`);
     }
-    const rungs = bundledStarter.models.filter(model => model.provider === provider).sort((left, right) => left.tier - right.tier);
-    assert.deepEqual(rungs.map(model => [model.tier, model.id, model.inputCostPerMillion, model.outputCostPerMillion]),
-      models.map(([id, input, output], index) => [index + 1, id, input, output]),
-      `The passive metadata-to-starter consumer retains all four latest ${provider} series in their named rungs and at their source prices`);
+    const rungs = bundledStarter.models.filter(model => providerPolicy(model.provider).family === family).sort((left, right) => left.tier - right.tier);
+    assert.deepEqual(rungs.map(model => [model.tier, model.provider, model.id, model.inputCostPerMillion, model.outputCostPerMillion, model.quotaBucket]),
+      models.map((fact, index) => [index + 1, ...fact]),
+      `The passive metadata-to-starter consumer retains all four latest ${family} series at their exact addresses, in their named rungs, at their source prices, the API row in no Codex quota`);
     assert(rungs.every(model => model.tokensPerSecond === null && model.timeToFirstTokenMs === null),
       "Passive bundled pricing and series selection never fabricate measured throughput or latency");
   }
@@ -2912,7 +2917,12 @@ async function premiumReplacementScenario(browser: BrowserInstance, server: Test
 /** Premium dial saves use the real select CAS on a recorded, synthetic check; no probe or native launch runs. */
 async function premiumDialSaveScenario(browser: BrowserInstance, server: TestServer, writer: TokenGrant,
   metadata: OmpResult<"readModelCatalog">, destination: Target): Promise<void> {
-  const source = catalogFromMetadata(metadata, "any");
+  // The check is recorded for a Claude and Codex pool, so its GPT rungs are Codex's own bundled rows: the starter's OpenAI API
+  // rows, GPT-6.1 Terra among them, are an address this pool does not serve and never stand in for a Codex rung.
+  const source = catalogFromMetadata({ ...metadata, models: metadata.models.filter(model => model.provider !== "openai") }, "any");
+  assert.deepEqual(source.models.filter(model => providerPolicy(model.provider).family === "openai").map(model => [model.tier, model.provider]),
+    [[1, "openai-codex"], [2, "openai-codex"], [3, "openai-codex"], [4, "openai-codex"]],
+    "Without the OpenAI API's rows Codex's bundled rows ladder GPT whole, at Codex addresses only");
   const codex = { reference: { kind: "credential" as const, scope: fixtureScope, provider: "openai-codex", credentialId: 3 }, credentialId: 3,
     type: "api_key" as const, identityKey: null, email: null, disabled: false, blocks: [] };
   const observation = (): OmpResult<"accounts"> => {
@@ -3952,6 +3962,13 @@ async function modelsSheetScenario(browser: BrowserInstance, server: TestServer,
     const checked = derivedFrom(firstInventory);
     const afterFirst = await readConfiguration(server, writer, target);
     assert.deepEqual(afterFirst.configuration?.active?.document, checked.document, "The list in use is exactly the derivation of what was measured");
+    // The starter previewed OpenAI's API Terra beside the Codex rungs. A Claude and Codex pool has no OpenAI API account, so the
+    // check neither probed that address nor saved it in use: a bundled preview is never a served model.
+    assert(starter.models.some(model => model.provider === "openai" && model.id === "gpt-6.1-terra"), "The starter previews the API's GPT-6.1 Terra");
+    assert.deepEqual([started.flatMap(request => Object.keys(request.accountPool)).filter(provider => provider === "openai"),
+      charge.benchmark.candidates.filter(candidate => candidate.provider === "openai"),
+      afterFirst.configuration?.active?.document.models.filter(model => model.provider === "openai")], [[], [], []],
+      "A Codex-only GPT pool never probes or saves the OpenAI API's address the starter previewed");
     assert.equal(afterFirst.configuration?.active?.provenance?.benchmarkCompletedAt, checked.benchmark.completedAt, "The check records when it was measured");
     assert.equal(afterFirst.configuration?.draft, null);
     assert.deepEqual(await browser.evaluate(`({ state: ${sheetState(modelsSheet)}, fixes: ${goFixes(modelsSheet)}, list: ${modelList},

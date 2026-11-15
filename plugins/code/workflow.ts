@@ -531,8 +531,10 @@ export function createCodeWorkflowClient(transport: Dispatch) {
   async function native<K extends keyof typeof nativeActions>(name: K, input: z.infer<(typeof nativeActions)[K]["input"]>): Promise<z.infer<(typeof nativeActions)[K]["result"]>> {
     return nativeActions[name].result.parse(await dispatch(`engine.jobs.${name}`, nativeActions[name].input.parse(input))) as z.infer<(typeof nativeActions)[K]["result"]>;
   }
-  // The bundled list the render-only preview is drawn from. Never a source of a saved profile.
-  const readStarterCatalog = () => omp("readModelCatalog", { providers: ["anthropic", "deepseek", "openai-codex"] });
+  // The bundled list the render-only preview is drawn from. Never a source of a saved profile. OpenAI's API rows sit beside
+  // Codex's: where both bundle a model the Codex row is the one previewed, and a model only the API bundles (GPT-6.1 Terra in
+  // 18.20.1) is previewed at its API address, never as a Codex row or a served model.
+  const readStarterCatalog = () => omp("readModelCatalog", { providers: ["anthropic", "deepseek", "openai", "openai-codex"] });
   async function readJob(node: JobNode) {
     if (!node.operationId.startsWith(`${OMP_PLUGIN_ID}.`)) throw new WorkflowError("omp_result_unavailable");
     const job = PublicJobSchema.parse(await dispatch("engine.jobs.status", { node }));

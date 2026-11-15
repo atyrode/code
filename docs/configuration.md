@@ -174,11 +174,23 @@ remain for callers.
 OMP's passive `readModelCatalog({ providers })` returns a versioned bundled SDK
 snapshot with `revision`, `ompVersion`, complete model identities and `quotaTier`.
 It reads no credentials, provider endpoint, machine inventory or runtime resource.
-Code's `readStarterCatalog()` workflow requests the exact `anthropic`, `deepseek`
-and `openai-codex` providers. Ordinary eligible models retain their declared costs,
+Code's `readStarterCatalog()` workflow requests the exact `anthropic`, `deepseek`,
+`openai` and `openai-codex` providers. Ordinary eligible models retain their declared costs,
 context, image support and thinking levels; any quota class other than chat (Spark's,
 for one) is excluded, since Code spends no quota of its own. Unmeasured performance stays null. Derivation admits at
 most 256 budget-eligible candidates before constructing ladders; it never truncates.
+
+The OpenAI API (`openai`) and Codex (`openai-codex`) rows are one GPT family, each kept at
+its own address. The newest version of a model name is previewed whichever of them bundles
+it; where both bundle that version, the Codex row is. The starter reports what the pinned
+SDK bundles, not what a provider discovers at runtime: OMP 18.20.1 bundles GPT-6.1 Terra
+(`openai/gpt-6.1-terra`, $1/$5) for the OpenAI API only, while Codex lists `gpt-6.1-terra`
+only by runtime discovery, so the starter's GPT terra rung is the API row, superseding
+Codex's bundled `gpt-5.6-terra`, outside the Codex quota bucket, and no Codex Terra 6.1 row
+is invented. A previewed address is never a served one: an `openai` row is probed and put
+in use only through an OpenAI API account in the pool, and a Codex-only pool's check
+ladders its own Codex inventory. The preview changes no native pin, account pool,
+admission or runtime behavior.
 
 Each family is laddered fast, normal, smart, elite (tiers 1–4) after keeping only the
 newest version of each model name. OpenAI and Anthropic name their tiers, so their ladders
