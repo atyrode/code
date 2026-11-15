@@ -14,11 +14,14 @@ sole progress record; source descriptions here do not imply deployment.
 Code packs four bundles. The three visible parts require the root, and the root
 declares the OMP root, accounts and gateway plugins as required dependencies.
 
-The native shared-role generation is a clean contract pair: typed Code caller
-0.2.0 and root plugin 0.5.0 require qualified OMP 0.4.0 and matching pinned
-core/owner capabilities. A separately pinned dependent caller stays on its old
-caller/root pair until its owner upgrades and repacks it. New-root activation
-must wait for the matching callers actually deployed there; see the
+The native shared-role generation is one clean pair with exact authored labels:
+typed Code caller 0.2.0, root plugin 0.5.0 and generator 0.4.0 with OMP family 0.4.0
+at the pinned OMP commit and its matching core/owner capabilities. The labels are not
+manifest minimums or range checks. The gate's exact source pins and the hub's runtime
+dependency-ID, strict-schema and capability admission do the enforcing; recorded
+`ompVersion` is provenance only. A separately pinned dependent caller stays on its old
+caller/root pair until its owner upgrades and repacks it. New-root activation must
+wait until every dependent caller installed there is paired; see the
 [owned rollout boundary](../docs/status.md#native-shared-role-cutover). No
 compatibility shim or installed-caller roster is implied.
 
@@ -266,6 +269,9 @@ user manager. The system declaration lists reviewed individual runtime files,
 not ambient directories. Every full-gate CI and release workflow installs Linux containment
 fixtures and runs the exact pinned OMP preparation before verification.
 Missing prerequisites fail the gate rather than skip this proof.
+Both verifiers are source proof against the locally prepared OMP commit. They are not
+OMP release proof, which separately installs OMP's real published family from its
+canonical publisher over HTTPS with no local source mapping.
 
 Broker shutdown/reconnect, secret redaction, concrete-slot fallback and gateway
 boundaries remain with their OMP owner. No real provider, persistent instance,
@@ -309,10 +315,11 @@ children. Machine installations, service policies and consent remain separate
 explicit native actions. Source verification performs no tag or delivery.
 
 `bun run dev -- --hub <development-hub-url> --deliver <delivery-target>` builds
-and watches Code's four bundles. Install the exact pinned OMP release first;
-dependency order does not grant authority or auto-install an absent external
-plugin. The native loop orders Code parent before parts and reinstalls only
-changed bytes. Use only an explicitly authorized development target. Reload the
+and watches Code's four bundles. Install a qualified OMP release matching the pinned
+commit first; a locally prepared source pin is not one. Dependency order does not
+grant authority or auto-install an absent external plugin. The native loop orders
+Code parent before parts and reinstalls only changed bytes. Use only an explicitly
+authorized development target. Reload the
 browser after a successful cycle; plugin Update checks published bundles, not
 working source. Restart the command after changing the development driver or
 build scripts; ordinary Code source edits are picked up by the running loop.

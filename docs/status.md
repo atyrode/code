@@ -14,14 +14,44 @@ transition ledger. This page records constraints, not another roadmap.
 [#286](https://github.com/atyrode/code/issues/286) owns the native routing refresh.
 The typed caller package is 0.2.0 and the root action plugin is 0.5.0 because the
 strict public route result no longer contains `agentBacked`; the generator is 0.4.0.
-The clean cutover pairs Code caller 0.2.0-or-newer with root plugin 0.5.0-or-newer,
-qualified OMP 0.4.0-or-newer and their exact matching core/owner capabilities. These
-numbers are minimum contract generations, not a substitute for the immutable pins.
+These are exact authored labels for one clean generation: Code caller 0.2.0, root
+plugin 0.5.0 and generator 0.4.0 pair with OMP family 0.4.0. They are not manifest
+minimums: no manifest declares a version range, nothing compares these numbers and
+a higher label is not admitted for being higher. Admission is separate and exact:
+
+- The source gate uses Bun 1.4.4 and the exact
+  [Manifold revision](../plugins/MANIFOLD_REV). Both Code package manifests and their
+  resolved locks pin the same immutable OMP commit; its paired SDK revision and Code's
+  workflow SDK source must match that file. Protocol and hardened-contract admission
+  come from that exact SDK, not an older installed hub. The gate prepares the pinned
+  source rather than installed CLI or branch bytes.
+- At runtime the hub admits Code's required OMP dependencies by plugin ID, the typed
+  caller holds OMP inputs and results to strict schemas, and installation admits
+  bundles only against the hub's actual core protocol, owner RPC and hardened-contract
+  capabilities.
+- A catalog's `ompVersion` is recorded provenance, never compared or admitted.
+
+This source preparation pins merged OMP
+[`a538300`](https://github.com/atyrode/manifold-omp/commit/a538300d2832dc4a8a006a72a5fd348e829d8f08)
+(family 0.4.0 on OMP 18.20.1) and Manifold
+[`5693107`](https://github.com/atyrode/manifold/commit/5693107cfb8b135f4753477d2d25e82b66925476)
+(v0.37.0: protocol 60, owner RPC 46, hardened contract 14), which is also OMP's own
+`MANIFOLD_REV`. The Code gate is source proof against that locally prepared OMP
+commit. Release proof is separate: it installs OMP's real published family from its
+canonical publisher over HTTPS with no local source mapping. No public OMP 0.4.0
+release is published or qualified for this preparation, so neither is claimed.
+
 Separately pinned callers intentionally remain on their old caller/root pair until
-their owner migrates and repacks them. Before activating the new root, the operator
-must confirm every dependent caller in that deployment is paired; independently
-owned Babel adoption is a prerequisite only if Babel is present there. This page does
-not assert an installed roster or cross-version compatibility.
+their owner upgrades and repacks them; nothing shims the old pair. Before activating
+the new root, the operator must confirm every installed dependent caller in that
+deployment is paired. An authorized read-only inventory of the selected development
+deployment found Babel installed with native execution enabled beside a
+native-disabled Code bundle, so Babel's owner-upgraded, repacked compatible caller is
+required there before any later Code activation. Babel's local source pin does not
+establish the installed bundle's provenance, and this records a pairing prerequisite,
+not an observed failure. This page does not publish an installed roster or assert
+cross-version compatibility.
+
 There is no compatibility alias. Code configures only shared native roles and does
 not replace bundled agents or emit `task.agentModelOverrides`. The
 [routing contract](configuration.md#routing-cost-and-speed) distinguishes configured
@@ -30,12 +60,6 @@ tiers unless explicitly selected. Widget and memory stay on the cheap first rung
 their own empty retry chains, including while ordinary fallbacks are off. Shared
 memory routing does not change its enabled/backend/retention/autolearn preferences.
 
-The source gate uses Bun 1.4.4 and the exact
-[Manifold revision](../plugins/MANIFOLD_REV). Both Code package manifests and their
-resolved locks pin the same immutable OMP source; its paired SDK revision and Code's
-workflow SDK source must match that file. Protocol and hardened-contract admission
-come from that exact SDK, not an older installed hub. The gate prepares the pinned
-source rather than installed CLI or branch bytes.
 Disposable browser and synthetic native proof do not establish live activation,
 native owner binding, credential migration, provider availability or production
 acceptance. Operational follow-through stays open at the owning issue until the
