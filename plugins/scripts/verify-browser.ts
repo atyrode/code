@@ -2987,7 +2987,7 @@ async function premiumDialSaveScenario(browser: BrowserInstance, server: TestSer
       assert.deepEqual(keptEdit(draft).selection, proposed, "A lane edit previews the sparse model without reinterpreting its selected tier or preferences");
       const save = async () => {
         if (via === "models") {
-          if (!await browser.evaluate<boolean>(sheetOpen("Models"))) await openSheet(browser, "models");
+          if (!await browser.evaluate<boolean>(`${element(stage)}?.hidden === true && ${visibleSheet}?.querySelector('[data-sheet], .plugin-atyrode_code__sheet')?.getAttribute('aria-label') === 'Models'`)) await openSheet(browser, "models");
           await click(browser, goFix(modelsSheet, "save"));
         } else {
           await until(browser, "the edited profile offers Save & launch", launchIs("save & launch", "ready"));
