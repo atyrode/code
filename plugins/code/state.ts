@@ -3,10 +3,10 @@ import type { GuestStorage, ServerMigration } from "@manifold/plugin-kit/server"
 import type { RuntimeAccountPool } from "@atyrode/manifold-omp";
 import { initialAccountChoices, selectedAccountPool } from "../domain/accounts.ts";
 import { compileCatalog, type CompiledCatalog } from "../domain/catalog.ts";
-import { DomainError, type CatalogDocument, type Selection } from "../domain/contracts.ts";
+import { CatalogModelSchema, DomainError, type CatalogDocument, type Selection } from "../domain/contracts.ts";
 import { defaultSelection, newPremiumLead, reviewCatalog, type ModelAddress } from "../domain/routing.ts";
 import { CODE_PREFERENCES_EVENT, CatalogRevisionSchema, ConfigurationSchema, VerificationProvenanceSchema,
-  ConfigurationLookupSchema, TargetSchema, digest, id, type Configuration, type Workspace, type CatalogReview,
+  ConfigurationLookupSchema, TargetSchema, digest, type Configuration, type Workspace, type CatalogReview,
   type ActionInput, type VerificationProvenance } from "./contract.ts";
 import { CodeRefusal, digestOf, type CodeContext } from "./context.ts";
 
@@ -29,7 +29,8 @@ export async function authorizeTarget(ctx: CodeContext, target: Workspace, write
  * longer binds the record's active catalog, selection and canonical model, is no witness at all:
  * the saved selection then answers to the strict stored-identity guard.
  */
-const ResolvedSelectionSchema = z.strictObject({ catalogDigest: digest, selectionDigest: digest, provider: id, id });
+const ResolvedSelectionSchema = z.strictObject({ catalogDigest: digest, selectionDigest: digest,
+  provider: CatalogModelSchema.shape.provider, id: CatalogModelSchema.shape.id });
 export type ResolvedSelection = z.infer<typeof ResolvedSelectionSchema>;
 export interface StoredConfiguration {
   key: string;

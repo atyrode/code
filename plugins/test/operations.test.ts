@@ -794,6 +794,27 @@ describe("pure client-supplied policy composition", () => {
       const chosen = await accepted(f, "promoteCatalog", { ...input, reviewDigest: explicit.reviewDigest });
       expect(envelope(f)).toEqual({ ...chosen, resolvedSelection: witness });
     });
+
+    test("a witness keeps a model id as long as a catalog admits, beyond Code's own identifier bound, through reads, listing and unrelated writes", async () => {
+      const f = fixture(), sonnet = `claude-${"long".repeat(50)}-sonnet-5`;
+      expect(sonnet.length).toBeGreaterThan(128);
+      const catalog: CatalogDocument = { ...compressed, models: compressed.models.map(model => model.key === "sonnet" ? { ...model, id: sonnet } : model) };
+      f.published = published(catalog.models);
+      const legacy = await storedChoice(f, catalog, anthropicSmart, normal);
+      expect(await invoke(f, "reviewCatalog", { ...workspace, expectedRevision: legacy.revision, source: "active" })).toEqual({ refused: "code_invalid_selection" });
+      const saved = await accepted(f, "select", { ...workspace, expectedRevision: legacy.revision, selection: normal });
+      const witness = { catalogDigest: legacy.active!.digest, selectionDigest: digestOf(normal), provider: "anthropic", id: sonnet };
+      expect(envelope(f)).toEqual({ ...saved, resolvedSelection: witness });
+      expect(await configuration(f)).toEqual(saved);
+      const reviewed = await accepted(f, "reviewCatalog", { ...workspace, expectedRevision: saved.revision, source: "active" });
+      expect(reviewed.review.routes.find(route => route.role === "default")?.lead.key).toBe("sonnet");
+      expect(await profile(f)).toMatchObject({ selected: { model: `anthropic/${sonnet}`, capability: 2 } });
+      const changed = await accepted(f, "changeAccounts", { ...workspace, expectedRevision: saved.revision,
+        change: { kind: "set-account", reference: accounts().accounts[2]!.reference, enabled: false } });
+      expect(envelope(f)).toEqual({ ...changed, resolvedSelection: witness });
+      expect(await profile(f)).toMatchObject({ revision: changed.revision, selected: { model: `anthropic/${sonnet}` } });
+      expect([changed.active, changed.active!.digest]).toEqual([legacy.active, digestOf(catalog)]);
+    });
   });
 
   test("freshness and complete route-provider coverage cannot be supplied by stale or empty pools", async () => {
